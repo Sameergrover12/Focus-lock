@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer focus target ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#52B788"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.6"
+        android:pathData="M54,54m-28,0a28,28 0 1,0 56,0a28,28 0 1,0 -56,0" />
+    <!-- Shield base -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M54,32 C64,32 72,35 74,38 C74,54 66,68 54,74 C42,68 34,54 34,38 C36,35 44,32 54,32 Z" />
+    <!-- Inner Lock body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,50 L62,50 C63.1,50 64,50.9 64,52 L64,63 C64,64.1 63.1,65 62,65 L46,65 C44.9,65 44,64.1 44,63 L44,52 C44,50.9 44.9,50 46,50 Z" />
+    <!-- Lock shackle -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.6"
+        android:pathData="M48,50 L48,45 C48,41.7 50.7,39 54,39 C57.3,39 60,41.7 60,45 L60,50" />
+    <!-- Keyhole -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M54,55 C53.2,55 52.5,55.7 52.5,56.5 C52.5,57.1 52.9,57.6 53.4,57.8 L53.1,61 L54.9,61 L54.6,57.8 C55.1,57.6 55.5,57.1 55.5,56.5 C55.5,55.7 54.8,55 54,55 Z" />
+</vector>

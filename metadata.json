@@ -1,0 +1,6 @@
+{
+  "name": "Focus Lock",
+  "description": "Distraction blocking app with app blocking, daily screen time limits, group schedules and budgets, plus website and keyword blocking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

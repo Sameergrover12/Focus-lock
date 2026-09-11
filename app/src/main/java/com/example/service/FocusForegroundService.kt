@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -124,8 +125,15 @@ class FocusForegroundService : Service() {
             while (isActive) {
                 delay(5000) // Poll every 5 seconds
                 checkMidnightReset()
+
+                // Check screen interactive state (do not log usage when screen is off)
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                if (powerManager != null && !powerManager.isInteractive) {
+                    continue
+                }
+
                 val currentPkg = detectCurrentForegroundPackage()
-                if (currentPkg != null && currentPkg != packageName) {
+                if (currentPkg != null && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
                     accumulateForegroundUsage(currentPkg, 5)
                 }
             }
@@ -133,10 +141,17 @@ class FocusForegroundService : Service() {
     }
 
     private fun detectCurrentForegroundPackage(): String? {
-        // First check accessibility service cached foreground package
-        val fromAccessibility = activeForegroundPackage ?: FocusAccessibilityService.currentForegroundPackage
-        if (!fromAccessibility.isNullOrEmpty()) {
-            return fromAccessibility
+        // If accessibility service is running, it is the primary live source
+        if (FocusAccessibilityService.isServiceRunning.value) {
+            val fromAccessibility = FocusAccessibilityService.currentForegroundPackage ?: activeForegroundPackage
+            if (!fromAccessibility.isNullOrEmpty()) {
+                return fromAccessibility
+            }
+        } else {
+            // Also check activeForegroundPackage if set
+            if (!activeForegroundPackage.isNullOrEmpty()) {
+                return activeForegroundPackage
+            }
         }
 
         // Fallback to UsageStatsManager if granted
@@ -213,8 +228,15 @@ class FocusForegroundService : Service() {
         return bitmap
     }
 
+    private fun isSystemOverlay(pkg: String): Boolean {
+        return pkg == "com.android.systemui" ||
+               pkg.contains("inputmethod") ||
+               pkg.contains(".ime") ||
+               pkg == "android"
+    }
+
     private suspend fun accumulateForegroundUsage(pkgName: String, secondsToAdd: Int) {
-        if (pkgName == packageName || pkgName == applicationContext.packageName) return
+        if (pkgName == packageName || pkgName == applicationContext.packageName || isSystemOverlay(pkgName)) return
         val totalSec = (packageActiveSeconds[pkgName] ?: 0) + secondsToAdd
         if (totalSec >= 60) {
             val minutesToAdd = totalSec / 60

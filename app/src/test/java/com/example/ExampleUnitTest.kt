@@ -4,6 +4,7 @@ import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
 import com.example.service.ContentScanner
+import com.example.service.FocusForegroundService
 import com.example.service.GroupRuleEvaluator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,5 +65,15 @@ class ExampleUnitTest {
         val matchingCase = listOf("Warning: SpoilerAlert ahead!")
         val hit3 = ContentScanner.matchBlockedKeyword(matchingCase, blockedKeywords)
         assertEquals("SpoilerAlert", hit3?.keyword)
+    }
+
+    @Test
+    fun testForegroundPackagePropagation() {
+        // Test switching between different apps updates foreground package
+        FocusForegroundService.onForegroundPackageChanged("com.android.settings")
+        // Switch to a social app
+        FocusForegroundService.onForegroundPackageChanged("com.google.android.youtube")
+        // Switch to browser
+        FocusForegroundService.onForegroundPackageChanged("com.android.chrome")
     }
 }

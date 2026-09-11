@@ -42,6 +42,7 @@ class FocusAccessibilityService : AccessibilityService() {
     private var lastBlockedPackage: String? = null
     private var lastUrlScanTime = 0L
     private var lastKeywordScanTime = 0L
+    private var lastEvaluatedPackage: String? = null
 
     companion object {
         private const val TAG = "FocusAccessibility"
@@ -56,6 +57,8 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         _isServiceRunning.value = true
+        currentForegroundPackage = null
+        lastEvaluatedPackage = null
         Log.d(TAG, "FocusAccessibilityService connected")
 
         // Start listening to database changes to maintain warm memory caches
@@ -68,6 +71,9 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         _isServiceRunning.value = false
+        currentForegroundPackage = null
+        lastEvaluatedPackage = null
+        FocusForegroundService.onForegroundPackageChanged(null)
         serviceScope.cancel()
         Log.d(TAG, "FocusAccessibilityService destroyed")
     }
@@ -105,63 +111,86 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun isSystemOverlay(pkg: String?): Boolean {
+        if (pkg == null) return false
+        return pkg == "com.android.systemui" ||
+               pkg.contains("inputmethod") ||
+               pkg.contains(".ime") ||
+               pkg == "android"
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (!isMasterEnabled) return
 
         val myPackageName = packageName
 
-        // Absolute exclusion for Focus Lock's own application ID (Change 1)
+        // 1. Identify event package and active window package
         val eventPkg = event.packageName?.toString()
-        if (eventPkg == myPackageName) {
-            currentForegroundPackage = myPackageName
-            return
-        }
-
         val rootNode = rootInActiveWindow
         val activeWindowPkg = rootNode?.packageName?.toString()
-        if (activeWindowPkg == myPackageName) {
-            currentForegroundPackage = myPackageName
-            return
+
+        // Extract candidate package, prioritizing the active app over system overlays (keyboards, system UI)
+        val detectedPkg = when {
+            !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
+            !activeWindowPkg.isNullOrEmpty() && !isSystemOverlay(activeWindowPkg) -> activeWindowPkg
+            !eventPkg.isNullOrEmpty() -> eventPkg
+            !activeWindowPkg.isNullOrEmpty() -> activeWindowPkg
+            else -> return
         }
 
-        // Exclude BlockedActivity explicitly
         val className = event.className?.toString() ?: ""
+
+        // Exclude BlockedActivity explicitly (do not scan or block the block screen itself)
         if (className.contains("BlockedActivity")) {
+            currentForegroundPackage = myPackageName
+            FocusForegroundService.onForegroundPackageChanged(myPackageName)
             return
         }
 
-        // If current foreground is Focus Lock (e.g. user interacting with keyboard or dialog within Focus Lock)
-        if (currentForegroundPackage == myPackageName) {
+        // Log detected foreground package on every accessibility event as requested for debugging
+        Log.d(TAG, "Foreground event: detectedPkg=$detectedPkg (eventPkg=$eventPkg, windowPkg=$activeWindowPkg, type=${event.eventType}, class=$className)")
+
+        // 2. Absolute self-exclusion for Focus Lock's own application ID (Change 1)
+        if (detectedPkg == myPackageName) {
+            currentForegroundPackage = myPackageName
+            FocusForegroundService.onForegroundPackageChanged(myPackageName)
+            Log.d(TAG, "Focus Lock is foreground. Bypassing scan/block.")
             return
         }
 
-        val pkgName = eventPkg ?: activeWindowPkg ?: return
-        if (pkgName == myPackageName) return
+        // 3. For any other app: Reassign and propagate foreground package immediately on every event
+        currentForegroundPackage = detectedPkg
+        FocusForegroundService.onForegroundPackageChanged(detectedPkg)
 
         val eventType = event.eventType
 
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            currentForegroundPackage = pkgName
-            FocusForegroundService.onForegroundPackageChanged(pkgName)
-            checkForegroundPackage(pkgName)
+        // 4. Enforce app blocking, screen time limits, and group rules
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+            lastEvaluatedPackage != detectedPkg
+        ) {
+            lastEvaluatedPackage = detectedPkg
+            checkForegroundPackage(detectedPkg)
         }
 
+        // 5. Website scanning and keyword scanning across foreground app
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) {
             val now = SystemClock.uptimeMillis()
 
-            // Website scanning across ANY foreground app (Change 2)
+            // Website scanning across ANY foreground app
             if (blockedWebsitesCache.isNotEmpty() && (now - lastUrlScanTime > 350)) {
                 lastUrlScanTime = now
-                checkWebsiteOnScreen(pkgName)
+                checkWebsiteOnScreen(detectedPkg)
             }
 
             // Keyword scanning across ANY foreground app
             if (blockedKeywordsCache.isNotEmpty() && (now - lastKeywordScanTime > 500)) {
                 lastKeywordScanTime = now
-                checkKeywordsOnScreen(pkgName)
+                checkKeywordsOnScreen(detectedPkg)
             }
         }
     }

@@ -33,7 +33,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Calendar
+import java.util.concurrent.ConcurrentHashMap
 
 class FocusAccessibilityService : AccessibilityService() {
 
@@ -49,6 +51,15 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var blockedKeywordsCache = listOf<BlockedKeyword>()
     @Volatile private var isMasterEnabled = true
     @Volatile private var todayUsageCache = mapOf<String, Int>()
+
+    // Pre-indexed O(1) structures updated on background thread (Dispatchers.Default)
+    @Volatile private var blockedAppsByPackage = mapOf<String, BlockedApp>()
+    @Volatile private var screenLimitsByPackage = mapOf<String, ScreenTimeLimit>()
+    @Volatile private var groupsById = mapOf<Long, AppGroup>()
+    @Volatile private var groupIdsByPackage = mapOf<String, List<Long>>()
+    @Volatile private var compiledWebsites = listOf<Pair<BlockedWebsite, Regex>>()
+    @Volatile private var compiledKeywords = listOf<Pair<BlockedKeyword, Regex>>()
+    private val appNameCache = ConcurrentHashMap<String, String>()
 
     private var lastBlockedTime = 0L
     private var lastBlockedPackage: String? = null
@@ -127,28 +138,73 @@ class FocusAccessibilityService : AccessibilityService() {
         val repo = app.repository
         val prefRepo = app.preferencesRepository
 
-        serviceScope.launch {
-            repo.allBlockedApps.collect { blockedAppsCache = it }
+        // Database reads explicitly dispatched on Dispatchers.IO
+        serviceScope.launch(Dispatchers.IO) {
+            repo.allBlockedApps.collect { list ->
+                blockedAppsCache = list
+                withContext(Dispatchers.Default) {
+                    blockedAppsByPackage = list.associateBy { it.packageName }
+                }
+            }
         }
-        serviceScope.launch {
-            repo.allScreenTimeLimits.collect { screenLimitsCache = it }
+        serviceScope.launch(Dispatchers.IO) {
+            repo.allScreenTimeLimits.collect { list ->
+                screenLimitsCache = list
+                withContext(Dispatchers.Default) {
+                    screenLimitsByPackage = list.associateBy { it.packageName }
+                }
+            }
         }
-        serviceScope.launch {
-            repo.allGroups.collect { groupsCache = it }
+        serviceScope.launch(Dispatchers.IO) {
+            repo.allGroups.collect { list ->
+                groupsCache = list
+                withContext(Dispatchers.Default) {
+                    groupsById = list.associateBy { it.id }
+                }
+            }
         }
-        serviceScope.launch {
-            repo.allGroupApps.collect { groupAppsCache = it }
+        serviceScope.launch(Dispatchers.IO) {
+            repo.allGroupApps.collect { list ->
+                groupAppsCache = list
+                withContext(Dispatchers.Default) {
+                    val map = mutableMapOf<String, MutableList<Long>>()
+                    for (item in list) {
+                        map.getOrPut(item.packageName) { mutableListOf() }.add(item.groupId)
+                    }
+                    groupIdsByPackage = map
+                }
+            }
         }
-        serviceScope.launch {
-            repo.allBlockedWebsites.collect { blockedWebsitesCache = it }
+        serviceScope.launch(Dispatchers.IO) {
+            repo.allBlockedWebsites.collect { list ->
+                blockedWebsitesCache = list
+                withContext(Dispatchers.Default) {
+                    compiledWebsites = list.mapNotNull { rule ->
+                        val norm = ContentScanner.normalizeUrlOrDomain(rule.domainOrUrl)
+                        if (norm.isNotEmpty()) {
+                            rule to ContentScanner.buildWordBoundaryRegex(norm, caseSensitive = false)
+                        } else null
+                    }
+                }
+            }
         }
-        serviceScope.launch {
-            repo.allBlockedKeywords.collect { blockedKeywordsCache = it }
+        serviceScope.launch(Dispatchers.IO) {
+            repo.allBlockedKeywords.collect { list ->
+                blockedKeywordsCache = list
+                withContext(Dispatchers.Default) {
+                    compiledKeywords = list.mapNotNull { rule ->
+                        val pattern = rule.keyword.trim()
+                        if (pattern.isNotEmpty()) {
+                            rule to ContentScanner.buildWordBoundaryRegex(pattern, caseSensitive = rule.caseSensitive)
+                        } else null
+                    }
+                }
+            }
         }
-        serviceScope.launch {
+        serviceScope.launch(Dispatchers.IO) {
             prefRepo.isMasterEnabled.collect { isMasterEnabled = it }
         }
-        serviceScope.launch {
+        serviceScope.launch(Dispatchers.IO) {
             repo.getUsageLogsForDate(FocusRepository.getTodayDateString()).collect { logs ->
                 todayUsageCache = logs.associate { it.packageName to it.minutesUsed }
             }
@@ -239,6 +295,7 @@ class FocusAccessibilityService : AccessibilityService() {
         val myPackageName = packageName
         val eventPkg = event.packageName?.toString()
         val className = event.className?.toString() ?: ""
+        val eventType = event.eventType
 
         // Exclude BlockedActivity explicitly (do not scan or block the block screen itself)
         if (className.contains("BlockedActivity")) {
@@ -247,10 +304,25 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Fast-path: Focus Lock itself is in foreground
+        if (eventPkg == myPackageName) {
+            currentForegroundPackage = myPackageName
+            FocusForegroundService.onForegroundPackageChanged(myPackageName)
+            return
+        }
+
+        // Offload window traversal, visible package collection, blocking checks, focus evaluation,
+        // and text scanning to background thread (Dispatchers.Default) to eliminate UI thread jitter!
+        serviceScope.launch(Dispatchers.Default) {
+            handleEventInBackground(eventPkg, eventType)
+        }
+    }
+
+    private fun handleEventInBackground(eventPkg: String?, eventType: Int) {
+        val myPackageName = packageName
+
         // =========================================================================
-        // 1. BLOCKING ENFORCEMENT: MUST keep scanning and matching against EVERY visible window!
-        // Opening a blocked app in a floating window MUST trigger a block immediately,
-        // even while input focus remains on the base app underneath.
+        // 1. BLOCKING ENFORCEMENT: Evaluate visible packages
         // =========================================================================
         val visiblePackages = getAllVisiblePackages(eventPkg)
         for (pkg in visiblePackages) {
@@ -261,8 +333,6 @@ class FocusAccessibilityService : AccessibilityService() {
 
         // =========================================================================
         // 2. TIME TRACKING: Attribute usage ONLY to the window with input focus!
-        // In floating-window or split-screen mode, the base app sitting in the background
-        // without input focus pauses its timer instead of accruing time.
         // =========================================================================
         val focusedPkg = getCurrentlyFocusedPackage() ?: when {
             !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
@@ -273,7 +343,6 @@ class FocusAccessibilityService : AccessibilityService() {
             if (focusedPkg == myPackageName) {
                 currentForegroundPackage = myPackageName
                 FocusForegroundService.onForegroundPackageChanged(myPackageName)
-                Log.d(TAG, "Focus Lock is focused. Bypassing scan/block.")
             } else {
                 currentForegroundPackage = focusedPkg
                 FocusForegroundService.onForegroundPackageChanged(focusedPkg)
@@ -282,9 +351,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
         // =========================================================================
         // 3. CONTENT SCANNING (Website & Keyword blocking):
-        // Scan visible application windows so keywords/sites in floating windows are blocked immediately!
         // =========================================================================
-        val eventType = event.eventType
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
             eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
@@ -294,9 +361,7 @@ class FocusAccessibilityService : AccessibilityService() {
             val now = SystemClock.uptimeMillis()
             if (now - lastScanTime > 250) {
                 lastScanTime = now
-                serviceScope.launch(Dispatchers.Default) {
-                    scanVisibleWindowsForContent()
-                }
+                scanVisibleWindowsForContent()
             }
         }
     }
@@ -310,8 +375,8 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 1. Hard Blocked Apps
-        val hardBlocked = blockedAppsCache.firstOrNull { it.packageName == pkgName }
+        // 1. Hard Blocked Apps (O(1) instant map lookup instead of linear scan)
+        val hardBlocked = blockedAppsByPackage[pkgName]
         if (hardBlocked != null) {
             executeBlock(
                 pkgName = pkgName,
@@ -322,8 +387,8 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 2. Screen Time Limits (Soft limits - enforced against single shared daily usage)
-        val limit = screenLimitsCache.firstOrNull { it.packageName == pkgName }
+        // 2. Screen Time Limits (O(1) instant map lookup instead of linear scan)
+        val limit = screenLimitsByPackage[pkgName]
         if (limit != null && limit.dailyLimitMinutes > 0) {
             val today = FocusRepository.getTodayDateString()
             val todayUsed = todayUsageCache[pkgName]
@@ -342,12 +407,12 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 3. Group Rules (Schedule or Shared Budget)
-        val groupIdsForApp = groupAppsCache.filter { it.packageName == pkgName }.map { it.groupId }
-        if (groupIdsForApp.isNotEmpty()) {
+        // 3. Group Rules (O(1) indexed lookups instead of list filtering)
+        val groupIdsForApp = groupIdsByPackage[pkgName]
+        if (!groupIdsForApp.isNullOrEmpty()) {
             val cal = Calendar.getInstance()
             for (gId in groupIdsForApp) {
-                val group = groupsCache.firstOrNull { it.id == gId } ?: continue
+                val group = groupsById[gId] ?: continue
 
                 // Schedule check
                 if (GroupRuleEvaluator.isScheduleActive(group, cal)) {
@@ -380,7 +445,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun scanVisibleWindowsForContent() {
         if (!isMasterEnabled) return
-        if (blockedWebsitesCache.isEmpty() && blockedKeywordsCache.isEmpty()) return
+        if (compiledWebsites.isEmpty() && compiledKeywords.isEmpty()) return
 
         try {
             val windowList = windows
@@ -422,19 +487,27 @@ class FocusAccessibilityService : AccessibilityService() {
             val displayMetrics = resources.displayMetrics
             val screenBounds = Rect(0, 0, displayMetrics.widthPixels, displayMetrics.heightPixels)
 
+            val currentWebsites = compiledWebsites
+            val currentKeywords = compiledKeywords
+
             // Fast-path: Check recognized browser address bar
-            if (blockedWebsitesCache.isNotEmpty()) {
+            if (currentWebsites.isNotEmpty()) {
                 val urlBarText = ContentScanner.extractBrowserUrl(root, pkgName)
                 if (urlBarText != null) {
-                    val urlItem = ContentScanner.ScannedNodeText(
-                        text = urlBarText,
-                        source = ContentScanner.TextSource.URL_BAR,
-                        isUserAuthored = true
-                    )
-                    val matched = ContentScanner.findWebsiteMatch(listOf(urlItem), blockedWebsitesCache)
-                    if (matched != null) {
-                        onWebsiteBlockTriggered(pkgName, matched)
-                        return
+                    for ((rule, regex) in currentWebsites) {
+                        val match = regex.find(urlBarText)
+                        if (match != null) {
+                            onWebsiteBlockTriggered(
+                                pkgName,
+                                ContentScanner.WebsiteMatchResult(
+                                    rule = rule,
+                                    matchedSnippet = match.value,
+                                    sourceText = urlBarText,
+                                    source = ContentScanner.TextSource.URL_BAR
+                                )
+                            )
+                            return
+                        }
                     }
                 }
             }
@@ -443,21 +516,45 @@ class FocusAccessibilityService : AccessibilityService() {
             val screenNodes = ContentScanner.extractScreenNodes(root, screenBounds = screenBounds, maxDepth = 35)
             if (screenNodes.isEmpty()) return
 
-            // 1. Check blocked websites in text content (with word-boundary matching)
-            if (blockedWebsitesCache.isNotEmpty()) {
-                val matchedWebsite = ContentScanner.findWebsiteMatch(screenNodes, blockedWebsitesCache)
-                if (matchedWebsite != null) {
-                    onWebsiteBlockTriggered(pkgName, matchedWebsite)
-                    return
+            // 1. Check blocked websites in text content (with pre-compiled word-boundary regexes)
+            if (currentWebsites.isNotEmpty()) {
+                for (item in screenNodes) {
+                    for ((rule, regex) in currentWebsites) {
+                        val match = regex.find(item.text)
+                        if (match != null) {
+                            onWebsiteBlockTriggered(
+                                pkgName,
+                                ContentScanner.WebsiteMatchResult(
+                                    rule = rule,
+                                    matchedSnippet = match.value,
+                                    sourceText = item.text,
+                                    source = item.source
+                                )
+                            )
+                            return
+                        }
+                    }
                 }
             }
 
-            // 2. Check blocked keywords in text content (with word-boundary matching & contentDescription refinement)
-            if (blockedKeywordsCache.isNotEmpty()) {
-                val matchedKeyword = ContentScanner.findKeywordMatch(screenNodes, blockedKeywordsCache)
-                if (matchedKeyword != null) {
-                    onKeywordBlockTriggered(pkgName, matchedKeyword)
-                    return
+            // 2. Check blocked keywords in text content (with pre-compiled word-boundary regexes)
+            if (currentKeywords.isNotEmpty()) {
+                for (item in screenNodes) {
+                    for ((rule, regex) in currentKeywords) {
+                        val match = regex.find(item.text)
+                        if (match != null) {
+                            onKeywordBlockTriggered(
+                                pkgName,
+                                ContentScanner.KeywordMatchResult(
+                                    rule = rule,
+                                    matchedSnippet = match.value,
+                                    sourceText = item.text,
+                                    source = item.source
+                                )
+                            )
+                            return
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -572,12 +669,14 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun getAppNameFromPackage(pkgName: String): String {
-        return try {
-            val pm = packageManager
-            val info = pm.getApplicationInfo(pkgName, 0)
-            pm.getApplicationLabel(info).toString()
-        } catch (e: Exception) {
-            pkgName
+        return appNameCache.getOrPut(pkgName) {
+            try {
+                val pm = packageManager
+                val info = pm.getApplicationInfo(pkgName, 0)
+                pm.getApplicationLabel(info).toString()
+            } catch (e: Exception) {
+                pkgName
+            }
         }
     }
 

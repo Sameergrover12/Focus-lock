@@ -33,6 +33,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -111,13 +112,15 @@ fun MainFocusApp(viewModel: FocusViewModel) {
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
     val isMasterEnabled by viewModel.isMasterEnabled.collectAsStateWithLifecycle()
 
-    val tabs = listOf(
-        NavigationTab.Dashboard,
-        NavigationTab.Apps,
-        NavigationTab.Groups,
-        NavigationTab.WebWords,
-        NavigationTab.SettingsTab
-    )
+    val tabs = remember {
+        listOf(
+            NavigationTab.Dashboard,
+            NavigationTab.Apps,
+            NavigationTab.Groups,
+            NavigationTab.WebWords,
+            NavigationTab.SettingsTab
+        )
+    }
 
     Scaffold(
         modifier = Modifier

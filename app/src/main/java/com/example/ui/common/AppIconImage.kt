@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -21,13 +22,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 
+private val iconBitmapCache = LruCache<Drawable, Bitmap>(200)
+
 @Composable
 fun AppIconImage(
     icon: Drawable?,
     modifier: Modifier = Modifier
 ) {
     val bitmap = remember(icon) {
-        icon?.let { drawableToBitmap(it) }
+        icon?.let { d ->
+            iconBitmapCache.get(d) ?: drawableToBitmap(d).also { iconBitmapCache.put(d, it) }
+        }
     }
 
     if (bitmap != null) {

@@ -230,8 +230,12 @@ private fun GroupCard(
     onDelete: () -> Unit
 ) {
     val group = groupDetail.group
-    val isScheduleActive = GroupRuleEvaluator.isScheduleActive(group)
-    val isBudgetExhausted = GroupRuleEvaluator.isBudgetExhausted(group)
+    val isScheduleActive = remember(group.scheduleEnabled, group.scheduleStart, group.scheduleEnd, group.daysOfWeek) {
+        GroupRuleEvaluator.isScheduleActive(group)
+    }
+    val isBudgetExhausted = remember(group.budgetEnabled, group.dailyBudgetMinutes, group.usedMinutesToday) {
+        GroupRuleEvaluator.isBudgetExhausted(group)
+    }
     val isCurrentlyBlocked = isScheduleActive || isBudgetExhausted
 
     Card(
@@ -296,7 +300,7 @@ private fun GroupCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(groupDetail.memberApps) { app ->
+                    items(groupDetail.memberApps, key = { it.packageName }) { app ->
                         AppIconImage(icon = app.icon, modifier = Modifier.size(32.dp))
                     }
                     item {
@@ -338,7 +342,11 @@ private fun GroupCard(
             if (group.budgetEnabled) {
                 val budget = group.dailyBudgetMinutes
                 val used = group.usedMinutesToday
-                val progress = (used.toFloat() / budget.toFloat()).coerceIn(0f, 1f)
+                val progress = remember(used, budget) {
+                    if (budget > 0) {
+                        (used.toFloat() / budget.toFloat()).coerceIn(0f, 1f)
+                    } else 0f
+                }
 
                 Column(modifier = Modifier.padding(vertical = 4.dp)) {
                     Row(

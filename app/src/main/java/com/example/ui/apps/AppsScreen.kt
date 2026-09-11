@@ -90,6 +90,18 @@ fun AppsScreen(
         }
     }
 
+    // Memoize lookup structures to avoid O(N) linear scans during LazyColumn item rendering
+    val blockedSet = remember(blockedApps) {
+        blockedApps.map { it.packageName }.toSet()
+    }
+    val limitsMap = remember(screenLimits) {
+        screenLimits.associateBy { it.packageName }
+    }
+    val usageLogsMap = remember(todayUsageLogs) {
+        todayUsageLogs.associateBy { it.packageName }
+    }
+    val todayDateStr = remember { FocusRepository.getTodayDateString() }
+
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(
             action = action,
@@ -175,7 +187,7 @@ fun AppsScreen(
             items(filteredApps, key = { it.packageName }) { app ->
                 if (selectedSubTab == 0) {
                     // Feature 1: Hard Block Toggle
-                    val isBlocked = blockedApps.any { it.packageName == app.packageName }
+                    val isBlocked = blockedSet.contains(app.packageName)
                     AppBlockRow(
                         app = app,
                         isBlocked = isBlocked,
@@ -193,10 +205,10 @@ fun AppsScreen(
                     )
                 } else {
                     // Feature 2: Screen Time Limit Row
-                    val limitEntity = screenLimits.firstOrNull { it.packageName == app.packageName }
-                    val usageLog = todayUsageLogs.firstOrNull { it.packageName == app.packageName }
+                    val limitEntity = limitsMap[app.packageName]
+                    val usageLog = usageLogsMap[app.packageName]
                     val actualUsedMinutes = usageLog?.minutesUsed
-                        ?: (if (limitEntity?.lastResetDate == FocusRepository.getTodayDateString()) limitEntity.usedMinutesToday else 0)
+                        ?: (if (limitEntity?.lastResetDate == todayDateStr) limitEntity.usedMinutesToday else 0)
                     AppScreenLimitRow(
                         app = app,
                         limitMinutes = limitEntity?.dailyLimitMinutes ?: 0,
@@ -313,21 +325,25 @@ private fun AppScreenLimitRow(
     onConfigure: () -> Unit
 ) {
     val hasLimit = limitMinutes > 0
-    val progress = if (hasLimit) {
-        (usedMinutes.toFloat() / limitMinutes.toFloat()).coerceIn(0f, 1f)
-    } else 0f
+    val (progress, limitStr, usedStr) = remember(limitMinutes, usedMinutes) {
+        val p = if (hasLimit) {
+            (usedMinutes.toFloat() / limitMinutes.toFloat()).coerceIn(0f, 1f)
+        } else 0f
 
-    val limitStr = if (hasLimit) {
-        val h = limitMinutes / 60
-        val m = limitMinutes % 60
-        if (h > 0) "${h}h ${m}m" else "${m}m"
-    } else "No limit"
+        val lStr = if (hasLimit) {
+            val h = limitMinutes / 60
+            val m = limitMinutes % 60
+            if (h > 0) "${h}h ${m}m" else "${m}m"
+        } else "No limit"
 
-    val usedStr = if (hasLimit) {
-        val h = usedMinutes / 60
-        val m = usedMinutes % 60
-        if (h > 0) "${h}h ${m}m" else "${m}m"
-    } else ""
+        val uStr = if (hasLimit) {
+            val h = usedMinutes / 60
+            val m = usedMinutes % 60
+            if (h > 0) "${h}h ${m}m" else "${m}m"
+        } else ""
+
+        Triple(p, lStr, uStr)
+    }
 
     Card(
         modifier = Modifier

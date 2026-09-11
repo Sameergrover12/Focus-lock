@@ -502,11 +502,17 @@ private fun AppUsageHistoryItem(
     log: DailyUsageLog,
     totalMinutesToday: Int
 ) {
-    val proportion = (log.minutesUsed.toFloat() / totalMinutesToday.toFloat()).coerceIn(0f, 1f)
-    val percentage = (proportion * 100).toInt()
-    val hours = log.minutesUsed / 60
-    val mins = log.minutesUsed % 60
-    val durationText = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
+    val (proportion, percentage, durationText) = remember(log.minutesUsed, totalMinutesToday) {
+        val prop = if (totalMinutesToday > 0) {
+            (log.minutesUsed.toFloat() / totalMinutesToday.toFloat()).coerceIn(0f, 1f)
+        } else 0f
+        val pct = (prop * 100).toInt()
+        val hours = log.minutesUsed / 60
+        val mins = log.minutesUsed % 60
+        val durText = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
+        Triple(prop, pct, durText)
+    }
+
     val cachedBitmap = remember(log.iconBase64) {
         decodeBase64ToImageBitmap(log.iconBase64)
     }
@@ -603,12 +609,20 @@ private fun AppUsageHistoryItem(
     }
 }
 
+private val base64BitmapCache = android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(100)
+
 private fun decodeBase64ToImageBitmap(base64: String?): androidx.compose.ui.graphics.ImageBitmap? {
     if (base64.isNullOrBlank()) return null
+    val cached = base64BitmapCache.get(base64)
+    if (cached != null) return cached
     return try {
         val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
         val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        bitmap?.asImageBitmap()
+        val imageBitmap = bitmap?.asImageBitmap()
+        if (imageBitmap != null) {
+            base64BitmapCache.put(base64, imageBitmap)
+        }
+        imageBitmap
     } catch (e: Exception) {
         null
     }

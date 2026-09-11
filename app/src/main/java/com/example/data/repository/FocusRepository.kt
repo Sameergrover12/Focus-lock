@@ -35,17 +35,13 @@ class FocusRepository(private val focusDao: FocusDao) {
     suspend fun getAllScreenTimeLimitsSync(): List<ScreenTimeLimit> = focusDao.getAllScreenTimeLimitsSync()
     suspend fun setScreenTimeLimit(packageName: String, dailyLimitMinutes: Int) {
         val today = getTodayDateString()
-        val existing = focusDao.getScreenTimeLimit(packageName)
-        val usedMinutes = if (existing != null && existing.lastResetDate == today) {
-            existing.usedMinutesToday
-        } else {
-            0
-        }
+        // Single source of truth: enforce against the app's total daily usage counter
+        val todayUsage = focusDao.getUsageLog(packageName, today)?.minutesUsed ?: 0
         focusDao.insertOrUpdateScreenTimeLimit(
             ScreenTimeLimit(
                 packageName = packageName,
                 dailyLimitMinutes = dailyLimitMinutes,
-                usedMinutesToday = usedMinutes,
+                usedMinutesToday = todayUsage,
                 lastResetDate = today
             )
         )
@@ -53,6 +49,23 @@ class FocusRepository(private val focusDao: FocusDao) {
     suspend fun removeScreenTimeLimit(packageName: String) = focusDao.deleteScreenTimeLimit(packageName)
     suspend fun updateScreenTimeUsage(packageName: String, usedMinutes: Int, date: String) =
         focusDao.updateScreenTimeUsage(packageName, usedMinutes, date)
+
+    suspend fun resetDailyLimitsIfNeeded() {
+        val today = getTodayDateString()
+        val allLimits = focusDao.getAllScreenTimeLimitsSync()
+        for (limit in allLimits) {
+            if (limit.lastResetDate != today) {
+                val todayUsage = focusDao.getUsageLog(limit.packageName, today)?.minutesUsed ?: 0
+                focusDao.updateScreenTimeUsage(limit.packageName, todayUsage, today)
+            }
+        }
+        val allGroups = focusDao.getAllGroupsSync()
+        for (group in allGroups) {
+            if (group.lastResetDate != today) {
+                focusDao.updateGroupUsage(group.id, 0, today)
+            }
+        }
+    }
 
     // Groups
     val allGroups: Flow<List<AppGroup>> = focusDao.getAllGroups()
@@ -100,6 +113,29 @@ class FocusRepository(private val focusDao: FocusDao) {
     // Daily Usage Logs
     fun getUsageLogsForDate(date: String): Flow<List<DailyUsageLog>> = focusDao.getUsageLogsForDate(date)
     fun getTotalMinutesUsedToday(): Flow<Int?> = focusDao.getTotalMinutesUsedForDate(getTodayDateString())
-    suspend fun logAppUsage(packageName: String, minutesUsed: Int, date: String = getTodayDateString()) =
-        focusDao.insertOrUpdateDailyUsageLog(DailyUsageLog(packageName = packageName, date = date, minutesUsed = minutesUsed))
+
+    suspend fun logAppUsage(
+        packageName: String,
+        minutesToAdd: Int,
+        appName: String = "",
+        iconBase64: String? = null,
+        date: String = getTodayDateString()
+    ): Int {
+        val existing = focusDao.getUsageLog(packageName, date)
+        val newTotal = (existing?.minutesUsed ?: 0) + minutesToAdd
+        val name = if (appName.isNotBlank()) appName else existing?.appName ?: packageName
+        val icon = iconBase64 ?: existing?.iconBase64
+        focusDao.insertOrUpdateDailyUsageLog(
+            DailyUsageLog(
+                packageName = packageName,
+                date = date,
+                minutesUsed = newTotal,
+                appName = name,
+                iconBase64 = icon
+            )
+        )
+        // Keep ScreenTimeLimit's usedMinutesToday in sync with daily usage log
+        focusDao.updateScreenTimeUsage(packageName, newTotal, date)
+        return newTotal
+    }
 }

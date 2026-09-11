@@ -57,27 +57,45 @@ object ContentScanner {
     }
 
     /**
-     * Checks if a URL or text string matches any blocked website rule.
+     * Normalizes a URL or domain by stripping protocol, www, trailing slash, and converting to lowercase.
+     */
+    fun normalizeUrlOrDomain(input: String): String {
+        return input.trim().lowercase(Locale.ROOT)
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .removePrefix("www.")
+            .trimEnd('/')
+    }
+
+    /**
+     * Checks if a single URL or text string matches any blocked website rule.
      */
     fun matchBlockedWebsite(urlOrText: String, blockedWebsites: List<BlockedWebsite>): BlockedWebsite? {
-        if (urlOrText.isBlank()) return null
-        val cleanInput = urlOrText.lowercase(Locale.ROOT)
-            .removePrefix("http://")
-            .removePrefix("https://")
-            .removePrefix("www.")
+        return matchBlockedWebsiteInTexts(listOf(urlOrText), blockedWebsites)
+    }
 
-        return blockedWebsites.firstOrNull { blocked ->
-            val cleanRule = blocked.domainOrUrl.lowercase(Locale.ROOT)
-                .removePrefix("http://")
-                .removePrefix("https://")
-                .removePrefix("www.")
-                .trim()
-            if (cleanRule.isNotEmpty()) {
-                cleanInput.contains(cleanRule) || cleanRule.contains(cleanInput)
-            } else {
-                false
+    /**
+     * Scans visible text strings across the screen for any blocked website or domain substring.
+     * Browser-agnostic: works across all browsers, in-app webviews, and any apps showing URLs.
+     */
+    fun matchBlockedWebsiteInTexts(screenTexts: List<String>, blockedWebsites: List<BlockedWebsite>): BlockedWebsite? {
+        if (screenTexts.isEmpty() || blockedWebsites.isEmpty()) return null
+
+        val normalizedRules = blockedWebsites.mapNotNull { rule ->
+            val norm = normalizeUrlOrDomain(rule.domainOrUrl)
+            if (norm.isNotBlank()) rule to norm else null
+        }
+        if (normalizedRules.isEmpty()) return null
+
+        for (text in screenTexts) {
+            val lowerText = text.lowercase(Locale.ROOT)
+            for ((rule, norm) in normalizedRules) {
+                if (lowerText.contains(norm)) {
+                    return rule
+                }
             }
         }
+        return null
     }
 
     /**

@@ -63,5 +63,7 @@ data class BlockedKeyword(
 data class DailyUsageLog(
     val packageName: String,
     val date: String, // YYYY-MM-DD
-    val minutesUsed: Int
+    val minutesUsed: Int,
+    val appName: String = "",
+    val iconBase64: String? = null
 )

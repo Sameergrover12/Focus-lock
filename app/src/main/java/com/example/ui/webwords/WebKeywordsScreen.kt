@@ -47,6 +47,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
 
 @Composable
@@ -57,10 +59,20 @@ fun WebKeywordsScreen(
 
     val websites by viewModel.blockedWebsites.collectAsStateWithLifecycle()
     val keywords by viewModel.blockedKeywords.collectAsStateWithLifecycle()
+    val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
 
     var newWebsiteInput by remember { mutableStateOf("") }
     var newKeywordInput by remember { mutableStateOf("") }
     var isCaseSensitive by remember { mutableStateOf(false) }
+    var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
+
+    pendingCheatAction?.let { action ->
+        CheatProtectionAuthDialog(
+            action = action,
+            onVerify = { viewModel.verifyCheatPassphrase(it) },
+            onDismiss = { pendingCheatAction = null }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -245,7 +257,17 @@ fun WebKeywordsScreen(
                         icon = Icons.Default.Language,
                         primaryText = site.domainOrUrl,
                         secondaryText = "Any matching URL in browser triggers exit",
-                        onDelete = { viewModel.removeBlockedWebsite(site.id) },
+                        onDelete = {
+                            if (isCheatProtectionEnabled) {
+                                pendingCheatAction = PendingLooseningAction(
+                                    title = "Unblock Website '${site.domainOrUrl}'",
+                                    description = "Deleting this rule will allow uninhibited browsing to '${site.domainOrUrl}'.",
+                                    onAuthorized = { viewModel.removeBlockedWebsite(site.id) }
+                                )
+                            } else {
+                                viewModel.removeBlockedWebsite(site.id)
+                            }
+                        },
                         testTag = "website_item_${site.id}"
                     )
                 }
@@ -260,7 +282,17 @@ fun WebKeywordsScreen(
                         icon = Icons.Default.TextFields,
                         primaryText = word.keyword,
                         secondaryText = if (word.caseSensitive) "Case sensitive match" else "Case insensitive match",
-                        onDelete = { viewModel.removeBlockedKeyword(word.id) },
+                        onDelete = {
+                            if (isCheatProtectionEnabled) {
+                                pendingCheatAction = PendingLooseningAction(
+                                    title = "Remove Blocked Keyword '${word.keyword}'",
+                                    description = "Deleting this rule removes keyword shielding for '${word.keyword}'.",
+                                    onAuthorized = { viewModel.removeBlockedKeyword(word.id) }
+                                )
+                            } else {
+                                viewModel.removeBlockedKeyword(word.id)
+                            }
+                        },
                         testTag = "keyword_item_${word.id}"
                     )
                 }

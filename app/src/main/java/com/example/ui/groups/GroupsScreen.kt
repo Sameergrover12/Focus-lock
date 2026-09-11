@@ -62,6 +62,8 @@ import com.example.data.local.entity.AppGroup
 import com.example.service.GroupRuleEvaluator
 import com.example.ui.common.AppIconImage
 import com.example.ui.common.AppPickerDialog
+import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.ui.viewmodel.GroupWithAppDetails
 
@@ -71,9 +73,19 @@ fun GroupsScreen(
 ) {
     val groupsWithDetails by viewModel.groupsWithDetails.collectAsStateWithLifecycle()
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
+    val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
 
     var groupToEdit by remember { mutableStateOf<GroupWithAppDetails?>(null) }
     var isCreatingNew by remember { mutableStateOf(false) }
+    var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
+
+    pendingCheatAction?.let { action ->
+        CheatProtectionAuthDialog(
+            action = action,
+            onVerify = { viewModel.verifyCheatPassphrase(it) },
+            onDismiss = { pendingCheatAction = null }
+        )
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize().testTag("groups_screen"),
@@ -156,7 +168,17 @@ fun GroupsScreen(
                 GroupCard(
                     groupDetail = groupDetail,
                     onEdit = { groupToEdit = groupDetail },
-                    onDelete = { viewModel.deleteGroup(groupDetail.group.id) }
+                    onDelete = {
+                        if (isCheatProtectionEnabled) {
+                            pendingCheatAction = PendingLooseningAction(
+                                title = "Delete Group '${groupDetail.group.name}'",
+                                description = "Deleting this group removes all schedules, time budgets, and protections for its member apps.",
+                                onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                            )
+                        } else {
+                            viewModel.deleteGroup(groupDetail.group.id)
+                        }
+                    }
                 )
             }
         }
@@ -165,6 +187,7 @@ fun GroupsScreen(
     if (isCreatingNew || groupToEdit != null) {
         val initialGroup = groupToEdit?.group ?: AppGroup(name = "")
         val initialPkgs = groupToEdit?.memberPackages?.toSet() ?: emptySet()
+        val currentEdit = groupToEdit
 
         EditGroupDialog(
             initialGroup = initialGroup,
@@ -175,7 +198,24 @@ fun GroupsScreen(
                 groupToEdit = null
             },
             onSave = { updatedGroup, selectedPkgs ->
-                viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
+                val isLoosening = currentEdit != null && (
+                    (currentEdit.group.scheduleEnabled && !updatedGroup.scheduleEnabled) ||
+                    (currentEdit.group.budgetEnabled && !updatedGroup.budgetEnabled) ||
+                    (updatedGroup.dailyBudgetMinutes > currentEdit.group.dailyBudgetMinutes) ||
+                    currentEdit.memberPackages.any { it !in selectedPkgs }
+                )
+
+                if (isLoosening && isCheatProtectionEnabled) {
+                    pendingCheatAction = PendingLooseningAction(
+                        title = "Modify Group '${updatedGroup.name}'",
+                        description = "Changes will loosen restrictions, increase budget, disable the group, or remove protected member apps.",
+                        onAuthorized = {
+                            viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
+                        }
+                    )
+                } else {
+                    viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
+                }
                 isCreatingNew = false
                 groupToEdit = null
             }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HourglassBottom
@@ -49,12 +50,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.AppInfo
+import com.example.data.repository.FocusRepository
 import com.example.ui.common.AppIconImage
+import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
 
 @Composable
@@ -66,9 +72,12 @@ fun AppsScreen(
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val blockedApps by viewModel.blockedApps.collectAsStateWithLifecycle()
     val screenLimits by viewModel.screenTimeLimits.collectAsStateWithLifecycle()
+    val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
+    val todayUsageLogs by viewModel.todayUsageLogs.collectAsStateWithLifecycle()
 
     var searchQuery by remember { mutableStateOf("") }
     var appToSetLimit by remember { mutableStateOf<AppInfo?>(null) }
+    var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     val filteredApps = remember(searchQuery, installedApps) {
         if (searchQuery.isBlank()) {
@@ -79,6 +88,14 @@ fun AppsScreen(
                         it.packageName.contains(searchQuery, ignoreCase = true)
             }
         }
+    }
+
+    pendingCheatAction?.let { action ->
+        CheatProtectionAuthDialog(
+            action = action,
+            onVerify = { viewModel.verifyCheatPassphrase(it) },
+            onDismiss = { pendingCheatAction = null }
+        )
     }
 
     Column(
@@ -163,16 +180,27 @@ fun AppsScreen(
                         app = app,
                         isBlocked = isBlocked,
                         onToggle = { shouldBlock ->
-                            viewModel.toggleAppBlock(app, shouldBlock)
+                            if (!shouldBlock && isCheatProtectionEnabled) {
+                                pendingCheatAction = PendingLooseningAction(
+                                    title = "Unblock ${app.appName}",
+                                    description = "Removing the block will restore unrestricted access to ${app.appName}.",
+                                    onAuthorized = { viewModel.toggleAppBlock(app, false) }
+                                )
+                            } else {
+                                viewModel.toggleAppBlock(app, shouldBlock)
+                            }
                         }
                     )
                 } else {
                     // Feature 2: Screen Time Limit Row
                     val limitEntity = screenLimits.firstOrNull { it.packageName == app.packageName }
+                    val usageLog = todayUsageLogs.firstOrNull { it.packageName == app.packageName }
+                    val actualUsedMinutes = usageLog?.minutesUsed
+                        ?: (if (limitEntity?.lastResetDate == FocusRepository.getTodayDateString()) limitEntity.usedMinutesToday else 0)
                     AppScreenLimitRow(
                         app = app,
                         limitMinutes = limitEntity?.dailyLimitMinutes ?: 0,
-                        usedMinutes = limitEntity?.usedMinutesToday ?: 0,
+                        usedMinutes = actualUsedMinutes,
                         onConfigure = {
                             appToSetLimit = app
                         }
@@ -186,16 +214,38 @@ fun AppsScreen(
     if (appToSetLimit != null) {
         val targetApp = appToSetLimit!!
         val currentLimit = screenLimits.firstOrNull { it.packageName == targetApp.packageName }
+        val targetUsageLog = todayUsageLogs.firstOrNull { it.packageName == targetApp.packageName }
+        val usedToday = targetUsageLog?.minutesUsed
+            ?: (if (currentLimit?.lastResetDate == FocusRepository.getTodayDateString()) currentLimit.usedMinutesToday else 0)
+
         TimeLimitDialog(
             app = targetApp,
-            currentMinutes = currentLimit?.dailyLimitMinutes ?: 60,
+            currentMinutes = currentLimit?.dailyLimitMinutes ?: 0,
+            alreadyUsedTodayMinutes = usedToday,
             onDismiss = { appToSetLimit = null },
             onSave = { minutes ->
-                viewModel.setAppScreenLimit(targetApp.packageName, minutes)
+                val prevMinutes = currentLimit?.dailyLimitMinutes
+                if (prevMinutes != null && minutes > prevMinutes && isCheatProtectionEnabled) {
+                    pendingCheatAction = PendingLooseningAction(
+                        title = "Increase Limit for ${targetApp.appName}",
+                        description = "Increasing daily limit from ${prevMinutes}m to ${minutes}m grants more daily screen time.",
+                        onAuthorized = { viewModel.setAppScreenLimit(targetApp.packageName, minutes) }
+                    )
+                } else {
+                    viewModel.setAppScreenLimit(targetApp.packageName, minutes)
+                }
                 appToSetLimit = null
             },
             onRemove = {
-                viewModel.removeAppScreenLimit(targetApp.packageName)
+                if (isCheatProtectionEnabled) {
+                    pendingCheatAction = PendingLooseningAction(
+                        title = "Remove Limit for ${targetApp.appName}",
+                        description = "Removing daily screen time limit allows unlimited usage of ${targetApp.appName}.",
+                        onAuthorized = { viewModel.removeAppScreenLimit(targetApp.packageName) }
+                    )
+                } else {
+                    viewModel.removeAppScreenLimit(targetApp.packageName)
+                }
                 appToSetLimit = null
             }
         )
@@ -345,12 +395,41 @@ private fun AppScreenLimitRow(
 private fun TimeLimitDialog(
     app: AppInfo,
     currentMinutes: Int,
+    alreadyUsedTodayMinutes: Int,
     onDismiss: () -> Unit,
     onSave: (Int) -> Unit,
     onRemove: () -> Unit
 ) {
-    var selectedMinutes by remember { mutableIntStateOf(if (currentMinutes > 0) currentMinutes else 60) }
-    val quickOptions = listOf(15, 30, 45, 60, 90, 120, 180)
+    var inputMinutesText by remember {
+        mutableStateOf(if (currentMinutes > 0) currentMinutes.toString() else "60")
+    }
+
+    val parsedMinutes = inputMinutesText.toIntOrNull() ?: 0
+    val isValid = parsedMinutes >= 1
+
+    val liveReadout = remember(parsedMinutes) {
+        if (parsedMinutes >= 1) {
+            val h = parsedMinutes / 60
+            val m = parsedMinutes % 60
+            when {
+                h > 0 && m > 0 -> "= ${h}h ${m}m"
+                h > 0 -> "= ${h}h"
+                else -> "= ${m}m"
+            }
+        } else {
+            ""
+        }
+    }
+
+    val displayStr = remember(parsedMinutes) {
+        if (parsedMinutes >= 1) {
+            val h = parsedMinutes / 60
+            val m = parsedMinutes % 60
+            if (h > 0 && m > 0) "${h}h ${m}m" else if (h > 0) "${h}h" else "${m}m"
+        } else {
+            "0m"
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -376,67 +455,122 @@ private fun TimeLimitDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                val h = selectedMinutes / 60
-                val m = selectedMinutes % 60
-                val displayStr = if (h > 0) "${h}h ${m}m" else "${m}m"
+                // Prior usage today breakdown
+                if (alreadyUsedTodayMinutes > 0) {
+                    val usedH = alreadyUsedTodayMinutes / 60
+                    val usedM = alreadyUsedTodayMinutes % 60
+                    val usedDisplay = if (usedH > 0 && usedM > 0) "${usedH}h ${usedM}m" else if (usedH > 0) "${usedH}h" else "${usedM}m"
+                    val isExceeded = isValid && alreadyUsedTodayMinutes >= parsedMinutes
 
-                Text(
-                    text = displayStr,
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Quick selector chips
-                Text(
-                    text = "Quick Presets",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    quickOptions.take(4).forEach { min ->
-                        FilterChip(
-                            selected = selectedMinutes == min,
-                            onClick = { selectedMinutes = min },
-                            label = { Text(if (min >= 60) "${min / 60}h" else "${min}m") },
-                            modifier = Modifier.padding(horizontal = 3.dp)
-                        )
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isExceeded) {
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            Text(
+                                text = "Already used today: $usedDisplay",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isExceeded) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (isValid) {
+                                val remaining = parsedMinutes - alreadyUsedTodayMinutes
+                                if (remaining > 0) {
+                                    val remH = remaining / 60
+                                    val remM = remaining % 60
+                                    val remDisplay = if (remH > 0 && remM > 0) "${remH}h ${remM}m" else if (remH > 0) "${remH}h" else "${remM}m"
+                                    Text(
+                                        text = "Remaining today: $remDisplay",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Exceeds new limit! App will block immediately upon opening.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
                     }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    quickOptions.drop(4).forEach { min ->
-                        val label = if (min % 60 == 0) "${min / 60}h" else "${min / 60}h ${min % 60}m"
-                        FilterChip(
-                            selected = selectedMinutes == min,
-                            onClick = { selectedMinutes = min },
-                            label = { Text(label) },
-                            modifier = Modifier.padding(horizontal = 3.dp)
-                        )
-                    }
-                }
+
+                // Numeric input field with live readout
+                OutlinedTextField(
+                    value = inputMinutesText,
+                    onValueChange = { newText ->
+                        if (newText.isEmpty() || (newText.all { it.isDigit() } && newText.length <= 5)) {
+                            inputMinutesText = newText
+                        }
+                    },
+                    label = { Text("Daily Limit (Minutes)") },
+                    placeholder = { Text("e.g. 45 or 120") },
+                    suffix = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("min", fontWeight = FontWeight.SemiBold)
+                            if (liveReadout.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = liveReadout,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    isError = inputMinutesText.isNotEmpty() && !isValid,
+                    supportingText = {
+                        if (inputMinutesText.isNotEmpty() && !isValid) {
+                            Text("Limit must be at least 1 minute", color = MaterialTheme.colorScheme.error)
+                        } else if (inputMinutesText.isEmpty()) {
+                            Text("Enter any whole number of minutes (minimum 1)")
+                        } else if (liveReadout.isNotEmpty()) {
+                            Text("$parsedMinutes minutes $liveReadout", color = MaterialTheme.colorScheme.primary)
+                        } else {
+                            Text("Enter duration in minutes")
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Done
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("custom_minute_input"),
+                    shape = RoundedCornerShape(12.dp)
+                )
 
                 Spacer(modifier = Modifier.height(20.dp))
 
                 Button(
-                    onClick = { onSave(selectedMinutes) },
+                    onClick = { onSave(parsedMinutes) },
+                    enabled = isValid,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
                         .testTag("save_limit_button"),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Save Limit ($displayStr)")
+                    Text(if (isValid) "Save Limit ($displayStr)" else "Save Limit")
                 }
 
                 if (currentMinutes > 0) {

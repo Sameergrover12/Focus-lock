@@ -145,11 +145,14 @@ interface FocusDao {
 
 
     // --- Daily Usage Logs ---
-    @Query("SELECT * FROM daily_usage_logs WHERE date = :date")
+    @Query("SELECT * FROM daily_usage_logs WHERE date = :date ORDER BY minutesUsed DESC")
     fun getUsageLogsForDate(date: String): Flow<List<DailyUsageLog>>
 
-    @Query("SELECT * FROM daily_usage_logs WHERE date = :date")
+    @Query("SELECT * FROM daily_usage_logs WHERE date = :date ORDER BY minutesUsed DESC")
     suspend fun getUsageLogsForDateSync(date: String): List<DailyUsageLog>
+
+    @Query("SELECT * FROM daily_usage_logs WHERE packageName = :packageName AND date = :date")
+    suspend fun getUsageLog(packageName: String, date: String): DailyUsageLog?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateDailyUsageLog(log: DailyUsageLog)

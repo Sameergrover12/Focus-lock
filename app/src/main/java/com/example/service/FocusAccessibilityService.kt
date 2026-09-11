@@ -12,6 +12,7 @@ import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
+import com.example.data.repository.FocusRepository
 import com.example.ui.blocked.BlockedActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,7 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var blockedWebsitesCache = listOf<BlockedWebsite>()
     @Volatile private var blockedKeywordsCache = listOf<BlockedKeyword>()
     @Volatile private var isMasterEnabled = true
+    @Volatile private var todayUsageCache = mapOf<String, Int>()
 
     private var lastBlockedTime = 0L
     private var lastBlockedPackage: String? = null
@@ -96,16 +98,46 @@ class FocusAccessibilityService : AccessibilityService() {
         serviceScope.launch {
             prefRepo.isMasterEnabled.collect { isMasterEnabled = it }
         }
+        serviceScope.launch {
+            repo.getUsageLogsForDate(FocusRepository.getTodayDateString()).collect { logs ->
+                todayUsageCache = logs.associate { it.packageName to it.minutesUsed }
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (!isMasterEnabled) return
 
-        val pkgName = event.packageName?.toString() ?: return
+        val myPackageName = packageName
 
-        // NEVER block or scan Focus Lock itself
-        if (pkgName == packageName) return
+        // Absolute exclusion for Focus Lock's own application ID (Change 1)
+        val eventPkg = event.packageName?.toString()
+        if (eventPkg == myPackageName) {
+            currentForegroundPackage = myPackageName
+            return
+        }
+
+        val rootNode = rootInActiveWindow
+        val activeWindowPkg = rootNode?.packageName?.toString()
+        if (activeWindowPkg == myPackageName) {
+            currentForegroundPackage = myPackageName
+            return
+        }
+
+        // Exclude BlockedActivity explicitly
+        val className = event.className?.toString() ?: ""
+        if (className.contains("BlockedActivity")) {
+            return
+        }
+
+        // If current foreground is Focus Lock (e.g. user interacting with keyboard or dialog within Focus Lock)
+        if (currentForegroundPackage == myPackageName) {
+            return
+        }
+
+        val pkgName = eventPkg ?: activeWindowPkg ?: return
+        if (pkgName == myPackageName) return
 
         val eventType = event.eventType
 
@@ -120,14 +152,14 @@ class FocusAccessibilityService : AccessibilityService() {
         ) {
             val now = SystemClock.uptimeMillis()
 
-            // Website scanning (in browser apps)
+            // Website scanning across ANY foreground app (Change 2)
             if (blockedWebsitesCache.isNotEmpty() && (now - lastUrlScanTime > 350)) {
                 lastUrlScanTime = now
-                checkBrowserUrl(pkgName)
+                checkWebsiteOnScreen(pkgName)
             }
 
-            // Keyword scanning
-            if (blockedKeywordsCache.isNotEmpty() && (now - lastKeywordScanTime > 600)) {
+            // Keyword scanning across ANY foreground app
+            if (blockedKeywordsCache.isNotEmpty() && (now - lastKeywordScanTime > 500)) {
                 lastKeywordScanTime = now
                 checkKeywordsOnScreen(pkgName)
             }
@@ -135,6 +167,8 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun checkForegroundPackage(pkgName: String) {
+        if (pkgName == packageName) return
+
         // Debounce to prevent multiple triggers in short succession
         val now = SystemClock.uptimeMillis()
         if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1500) {
@@ -153,19 +187,24 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 2. Screen Time Limits (Soft limits)
+        // 2. Screen Time Limits (Soft limits - enforced against single shared daily usage)
         val limit = screenLimitsCache.firstOrNull { it.packageName == pkgName }
-        if (limit != null && limit.dailyLimitMinutes > 0 && limit.usedMinutesToday >= limit.dailyLimitMinutes) {
-            val h = limit.dailyLimitMinutes / 60
-            val m = limit.dailyLimitMinutes % 60
-            val limitStr = if (h > 0) "${h}h ${m}m" else "${m}m"
-            executeBlock(
-                pkgName = pkgName,
-                title = getAppNameFromPackage(pkgName),
-                reason = "Daily screen time limit ($limitStr) has been reached.",
-                type = BlockedActivity.TYPE_SCREEN_TIME
-            )
-            return
+        if (limit != null && limit.dailyLimitMinutes > 0) {
+            val today = FocusRepository.getTodayDateString()
+            val todayUsed = todayUsageCache[pkgName]
+                ?: (if (limit.lastResetDate == today) limit.usedMinutesToday else 0)
+            if (todayUsed >= limit.dailyLimitMinutes) {
+                val h = limit.dailyLimitMinutes / 60
+                val m = limit.dailyLimitMinutes % 60
+                val limitStr = if (h > 0) "${h}h ${m}m" else "${m}m"
+                executeBlock(
+                    pkgName = pkgName,
+                    title = getAppNameFromPackage(pkgName),
+                    reason = "Daily screen time limit ($limitStr) has been reached.",
+                    type = BlockedActivity.TYPE_SCREEN_TIME
+                )
+                return
+            }
         }
 
         // 3. Group Rules (Schedule or Shared Budget)
@@ -204,13 +243,16 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun checkBrowserUrl(pkgName: String) {
+    private fun checkWebsiteOnScreen(pkgName: String) {
+        if (pkgName == packageName) return
         val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() == packageName) return
+
         try {
-            // First check recognized browser address bar
-            val urlText = ContentScanner.extractBrowserUrl(root, pkgName)
-            if (urlText != null) {
-                val matched = ContentScanner.matchBlockedWebsite(urlText, blockedWebsitesCache)
+            // Fast-path: Check recognized browser address bar
+            val urlBarText = ContentScanner.extractBrowserUrl(root, pkgName)
+            if (urlBarText != null) {
+                val matched = ContentScanner.matchBlockedWebsiteInTexts(listOf(urlBarText), blockedWebsitesCache)
                 if (matched != null) {
                     executeBlock(
                         pkgName = pkgName,
@@ -222,31 +264,29 @@ class FocusAccessibilityService : AccessibilityService() {
                 }
             }
 
-            // Fallback for other browsers: check text nodes for blocked domains
-            if (ContentScanner.isKnownBrowser(pkgName) || pkgName.contains("browser") || pkgName.contains("chrome")) {
-                val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 6)
-                for (text in allTexts) {
-                    val matched = ContentScanner.matchBlockedWebsite(text, blockedWebsitesCache)
-                    if (matched != null) {
-                        executeBlock(
-                            pkgName = pkgName,
-                            title = matched.domainOrUrl,
-                            reason = "This website is in your blocked websites list.",
-                            type = BlockedActivity.TYPE_WEBSITE
-                        )
-                        return
-                    }
-                }
+            // Guaranteed fallback: Full-text scan across ANY foreground app
+            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 12)
+            val matchedInContent = ContentScanner.matchBlockedWebsiteInTexts(allTexts, blockedWebsitesCache)
+            if (matchedInContent != null) {
+                executeBlock(
+                    pkgName = pkgName,
+                    title = matchedInContent.domainOrUrl,
+                    reason = "This website is in your blocked websites list.",
+                    type = BlockedActivity.TYPE_WEBSITE
+                )
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking browser URL", e)
+            Log.e(TAG, "Error checking website on screen", e)
         }
     }
 
     private fun checkKeywordsOnScreen(pkgName: String) {
+        if (pkgName == packageName) return
         val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() == packageName) return
+
         try {
-            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 10)
+            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 12)
             val matchedKeyword = ContentScanner.matchBlockedKeyword(allTexts, blockedKeywordsCache)
             if (matchedKeyword != null) {
                 executeBlock(
@@ -268,14 +308,15 @@ class FocusAccessibilityService : AccessibilityService() {
         type: String,
         nextWindow: String? = null
     ) {
+        if (pkgName == packageName) return
+
         lastBlockedTime = SystemClock.uptimeMillis()
         lastBlockedPackage = pkgName
 
-        // 1. Immediately dismiss foreground app via back then home
+        // 1. Perform back action to leave whatever content triggered the block
         performGlobalAction(GLOBAL_ACTION_BACK)
-        performGlobalAction(GLOBAL_ACTION_HOME)
 
-        // 2. Launch full-screen Blocked Activity
+        // 2. Launch full-screen 3-second black interstitial (Change 5)
         try {
             val intent = Intent(this, BlockedActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or

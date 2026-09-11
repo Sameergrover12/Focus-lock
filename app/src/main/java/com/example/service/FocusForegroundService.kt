@@ -70,6 +70,9 @@ class FocusForegroundService : Service() {
         super.onCreate()
         Log.d(TAG, "FocusForegroundService created")
         startInForeground()
+        serviceScope.launch {
+            (application as? FocusApplication)?.repository?.resetDailyLimitsIfNeeded()
+        }
         startUsageTrackingLoop()
     }
 
@@ -168,20 +171,50 @@ class FocusForegroundService : Service() {
             // Reset used minutes in DB for screen limits and groups
             val app = application as? FocusApplication ?: return
             val repo = app.repository
-
-            val allLimits = repo.getAllScreenTimeLimitsSync()
-            for (limit in allLimits) {
-                repo.updateScreenTimeUsage(limit.packageName, 0, today)
-            }
-
-            val allGroups = repo.getAllGroupsSync()
-            for (group in allGroups) {
-                repo.updateGroupUsage(group.id, 0, today)
-            }
+            repo.resetDailyLimitsIfNeeded()
         }
     }
 
+    private val appMetadataCache = mutableMapOf<String, Pair<String, String?>>()
+
+    private fun getAppMetadata(pkgName: String): Pair<String, String?> {
+        val cached = appMetadataCache[pkgName]
+        if (cached != null) return cached
+
+        var name = pkgName
+        var iconBase64: String? = null
+        try {
+            val pm = packageManager
+            val info = pm.getApplicationInfo(pkgName, 0)
+            name = pm.getApplicationLabel(info).toString()
+            val drawable = pm.getApplicationIcon(info)
+            val bitmap = drawableToBitmap(drawable)
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 80, stream)
+            iconBase64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            // Uninstalled or system package
+        }
+        val result = Pair(name, iconBase64)
+        appMetadataCache[pkgName] = result
+        return result
+    }
+
+    private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): android.graphics.Bitmap {
+        if (drawable is android.graphics.drawable.BitmapDrawable && drawable.bitmap != null) {
+            return android.graphics.Bitmap.createScaledBitmap(drawable.bitmap, 64, 64, true)
+        }
+        val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth.coerceAtMost(64) else 64
+        val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight.coerceAtMost(64) else 64
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
     private suspend fun accumulateForegroundUsage(pkgName: String, secondsToAdd: Int) {
+        if (pkgName == packageName || pkgName == applicationContext.packageName) return
         val totalSec = (packageActiveSeconds[pkgName] ?: 0) + secondsToAdd
         if (totalSec >= 60) {
             val minutesToAdd = totalSec / 60
@@ -191,25 +224,26 @@ class FocusForegroundService : Service() {
             val repo = app.repository
             val today = FocusRepository.getTodayDateString()
 
-            // 1. Update DailyUsageLog
-            val currentLogs = repo.allBlockedApps // fetch today's usage
-            repo.logAppUsage(pkgName, minutesToAdd, today)
+            // 1. Update DailyUsageLog (also updates ScreenTimeLimit internally)
+            val (appName, iconBase64) = getAppMetadata(pkgName)
+            val newDailyMinutes = repo.logAppUsage(
+                packageName = pkgName,
+                minutesToAdd = minutesToAdd,
+                appName = appName,
+                iconBase64 = iconBase64,
+                date = today
+            )
 
-            // 2. Check and update ScreenTimeLimit
+            // 2. 90% warning notification based on single shared daily usage counter
             val limits = repo.getAllScreenTimeLimitsSync()
             val limit = limits.firstOrNull { it.packageName == pkgName }
-            if (limit != null) {
-                val newUsedMinutes = limit.usedMinutesToday + minutesToAdd
-                repo.updateScreenTimeUsage(pkgName, newUsedMinutes, today)
-
-                // 90% warning notification
-                if (limit.dailyLimitMinutes > 0 &&
-                    newUsedMinutes >= (limit.dailyLimitMinutes * 0.9).toInt() &&
-                    newUsedMinutes < limit.dailyLimitMinutes &&
+            if (limit != null && limit.dailyLimitMinutes > 0) {
+                if (newDailyMinutes >= (limit.dailyLimitMinutes * 0.9).toInt() &&
+                    newDailyMinutes < limit.dailyLimitMinutes &&
                     !warnedPackagesToday.contains(pkgName)
                 ) {
                     warnedPackagesToday.add(pkgName)
-                    sendWarningNotification(pkgName, newUsedMinutes, limit.dailyLimitMinutes)
+                    sendWarningNotification(pkgName, newDailyMinutes, limit.dailyLimitMinutes)
                 }
             }
 

@@ -59,6 +59,32 @@ class FocusViewModel(
         initialValue = true
     )
 
+    val isCheatProtectionEnabled: StateFlow<Boolean> = preferencesRepository.isCheatProtectionEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    suspend fun verifyCheatPassphrase(input: String): Boolean {
+        return preferencesRepository.verifyCheatPassphrase(input)
+    }
+
+    suspend fun enableCheatProtection(passphrase: String): Boolean {
+        return preferencesRepository.enableCheatProtection(passphrase)
+    }
+
+    fun setCheatProtection(passphrase: String) {
+        viewModelScope.launch {
+            preferencesRepository.enableCheatProtection(passphrase)
+        }
+    }
+
+    fun disableCheatProtection() {
+        viewModelScope.launch {
+            preferencesRepository.disableCheatProtection()
+        }
+    }
+
     // Installed apps cache
     private val _installedApps = MutableStateFlow<List<AppInfo>>(emptyList())
     val installedApps: StateFlow<List<AppInfo>> = _installedApps.asStateFlow()

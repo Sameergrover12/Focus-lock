@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SettingsBrightness
@@ -28,7 +29,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -47,6 +52,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.preferences.ThemeMode
+import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.CheatProtectionSetupDialog
+import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
 
@@ -58,11 +66,15 @@ fun SettingsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
 
     var hasAccessibility by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
     var hasOverlay by remember { mutableStateOf(PermissionHelper.canDrawOverlays(context)) }
     var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
+
+    var showSetupDialog by remember { mutableStateOf(false) }
+    var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -77,6 +89,24 @@ fun SettingsScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
+    }
+
+    if (showSetupDialog) {
+        CheatProtectionSetupDialog(
+            onConfirm = { pass ->
+                viewModel.setCheatProtection(pass)
+                showSetupDialog = false
+            },
+            onDismiss = { showSetupDialog = false }
+        )
+    }
+
+    pendingCheatAction?.let { action ->
+        CheatProtectionAuthDialog(
+            action = action,
+            onVerify = { viewModel.verifyCheatPassphrase(it) },
+            onDismiss = { pendingCheatAction = null }
+        )
     }
 
     LazyColumn(
@@ -136,6 +166,103 @@ fun SettingsScreen(
                         selected = themeMode == ThemeMode.DARK,
                         onClick = { viewModel.setThemeMode(ThemeMode.DARK) },
                         testTag = "theme_dark_option"
+                    )
+                }
+            }
+        }
+
+        // Section: Cheat Protection Lock (Change 4)
+        item {
+            Text(
+                text = "Cheat Protection",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("cheat_protection_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isCheatProtectionEnabled) {
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    }
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                modifier = Modifier.size(40.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Cheat Protection Lock",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (isCheatProtectionEnabled) "Active • Passphrase required to loosen rules" else "Disabled • Rules can be changed freely",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = isCheatProtectionEnabled,
+                            onCheckedChange = { willEnable ->
+                                if (willEnable) {
+                                    showSetupDialog = true
+                                } else {
+                                    pendingCheatAction = PendingLooseningAction(
+                                        title = "Disable Cheat Protection",
+                                        description = "Disabling Cheat Protection allows all blocking rules and limits to be modified or removed freely without entering the passphrase.",
+                                        onAuthorized = { viewModel.disableCheatProtection() }
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("cheat_protection_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onError,
+                                checkedTrackColor = MaterialTheme.colorScheme.error
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "When active, any action that deletes a rule, increases/removes a screen-time limit, or pauses protection strictly requires typing a 600–1000 character passphrase.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

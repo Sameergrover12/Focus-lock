@@ -160,6 +160,14 @@ class FocusViewModel(
 
     init {
         loadInstalledApps()
+        refreshDailyUsageStats()
+    }
+
+    fun refreshDailyUsageStats() {
+        viewModelScope.launch {
+            repository.resetDailyLimitsIfNeeded()
+            repository.syncUsageStatsFromSystem(getApplication())
+        }
     }
 
     fun loadInstalledApps() {

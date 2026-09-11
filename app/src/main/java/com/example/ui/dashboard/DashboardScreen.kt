@@ -96,6 +96,7 @@ fun DashboardScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = PermissionHelper.isAccessibilityServiceEnabled(context)
+                viewModel.refreshDailyUsageStats()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

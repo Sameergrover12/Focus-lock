@@ -122,9 +122,29 @@ class FocusForegroundService : Service() {
 
     private fun startUsageTrackingLoop() {
         trackingJob = serviceScope.launch {
+            // Initial sync on service start to capture full-day usage prior to service launch
+            try {
+                val app = application as? FocusApplication
+                app?.repository?.syncUsageStatsFromSystem(applicationContext)
+            } catch (e: Exception) {
+                Log.w(TAG, "Initial usage stats sync failed", e)
+            }
+
+            var loopCounter = 0
             while (isActive) {
                 delay(5000) // Poll every 5 seconds
+                loopCounter++
                 checkMidnightReset()
+
+                // Every 2 minutes (24 * 5s), reconcile full-day usage with UsageStatsManager
+                if (loopCounter % 24 == 0) {
+                    try {
+                        val app = application as? FocusApplication
+                        app?.repository?.syncUsageStatsFromSystem(applicationContext)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Periodic usage stats sync failed", e)
+                    }
+                }
 
                 // Check screen interactive state (do not log usage when screen is off)
                 val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager

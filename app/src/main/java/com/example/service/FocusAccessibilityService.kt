@@ -3,10 +3,14 @@ package com.example.service
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.widget.Toast
 import com.example.FocusApplication
 import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedApp
@@ -318,57 +322,117 @@ class FocusAccessibilityService : AccessibilityService() {
         if (root.packageName?.toString() == packageName) return
 
         try {
+            // Fix 2.2: Obtain visible screen bounds to filter out off-screen/pre-rendered views
+            val displayMetrics = resources.displayMetrics
+            val screenBounds = Rect(0, 0, displayMetrics.widthPixels, displayMetrics.heightPixels)
+
             // Fast-path: Check recognized browser address bar
             if (blockedWebsitesCache.isNotEmpty()) {
                 val urlBarText = ContentScanner.extractBrowserUrl(root, pkgName)
                 if (urlBarText != null) {
-                    val matched = ContentScanner.matchBlockedWebsiteInTexts(listOf(urlBarText), blockedWebsitesCache)
+                    val urlItem = ContentScanner.ScannedNodeText(
+                        text = urlBarText,
+                        source = ContentScanner.TextSource.URL_BAR,
+                        isUserAuthored = true
+                    )
+                    val matched = ContentScanner.findWebsiteMatch(listOf(urlItem), blockedWebsitesCache)
                     if (matched != null) {
-                        executeBlock(
-                            pkgName = pkgName,
-                            title = matched.domainOrUrl,
-                            reason = "This website is in your blocked websites list.",
-                            type = BlockedActivity.TYPE_WEBSITE
-                        )
+                        onWebsiteBlockTriggered(pkgName, matched)
                         return
                     }
                 }
             }
 
-            // Full deep text scan across active window (reaches deep Compose feeds up to depth 35)
-            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 35)
-            if (allTexts.isEmpty()) return
+            // Full deep text scan across active window filtered by visible screen bounds
+            val screenNodes = ContentScanner.extractScreenNodes(root, screenBounds = screenBounds, maxDepth = 35)
+            if (screenNodes.isEmpty()) return
 
-            // 1. Check blocked websites in text content
+            // 1. Check blocked websites in text content (with word-boundary matching)
             if (blockedWebsitesCache.isNotEmpty()) {
-                val matchedWebsite = ContentScanner.matchBlockedWebsiteInTexts(allTexts, blockedWebsitesCache)
+                val matchedWebsite = ContentScanner.findWebsiteMatch(screenNodes, blockedWebsitesCache)
                 if (matchedWebsite != null) {
-                    executeBlock(
-                        pkgName = pkgName,
-                        title = matchedWebsite.domainOrUrl,
-                        reason = "This website is in your blocked websites list.",
-                        type = BlockedActivity.TYPE_WEBSITE
-                    )
+                    onWebsiteBlockTriggered(pkgName, matchedWebsite)
                     return
                 }
             }
 
-            // 2. Check blocked keywords in text content (e.g. Reddit feeds, social apps, news apps)
+            // 2. Check blocked keywords in text content (with word-boundary matching & contentDescription refinement)
             if (blockedKeywordsCache.isNotEmpty()) {
-                val matchedKeyword = ContentScanner.matchBlockedKeyword(allTexts, blockedKeywordsCache)
+                val matchedKeyword = ContentScanner.findKeywordMatch(screenNodes, blockedKeywordsCache)
                 if (matchedKeyword != null) {
-                    executeBlock(
-                        pkgName = pkgName,
-                        title = "\"${matchedKeyword.keyword}\"",
-                        reason = "This screen contains a blocked keyword phrase.",
-                        type = BlockedActivity.TYPE_KEYWORD
-                    )
+                    onKeywordBlockTriggered(pkgName, matchedKeyword)
                     return
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error scanning content on screen", e)
         }
+    }
+
+    private fun onKeywordBlockTriggered(pkgName: String, match: ContentScanner.KeywordMatchResult) {
+        val snippet = match.matchedSnippet
+        val sourceDesc = match.source.description
+        val contextSnippet = match.sourceText.replace("\n", " ").take(100)
+
+        // Fix 2.4: Temporary debug log showing exact keyword, matched text, source, and context
+        Log.w(
+            TAG,
+            "=== BLOCK TRIGGERED (KEYWORD) ===\n" +
+            "Keyword Rule: \"${match.rule.keyword}\"\n" +
+            "Matched Snippet: \"$snippet\"\n" +
+            "Source: $sourceDesc\n" +
+            "Context Text: \"$contextSnippet\"\n" +
+            "Target App: $pkgName"
+        )
+
+        // Fix 2.4: On-screen toast fired immediately so exact trigger cause is visible in real-time
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(
+                applicationContext,
+                "Focus Lock: Blocked keyword \"$snippet\"\nSource: $sourceDesc\nContext: \"$contextSnippet\"",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
+        executeBlock(
+            pkgName = pkgName,
+            title = "\"${match.rule.keyword}\"",
+            reason = "Blocked keyword \"$snippet\" detected via $sourceDesc.",
+            type = BlockedActivity.TYPE_KEYWORD
+        )
+    }
+
+    private fun onWebsiteBlockTriggered(pkgName: String, match: ContentScanner.WebsiteMatchResult) {
+        val snippet = match.matchedSnippet
+        val sourceDesc = match.source.description
+        val contextSnippet = match.sourceText.replace("\n", " ").take(100)
+
+        // Fix 2.4: Temporary debug log for website blocks
+        Log.w(
+            TAG,
+            "=== BLOCK TRIGGERED (WEBSITE) ===\n" +
+            "Website Rule: \"${match.rule.domainOrUrl}\"\n" +
+            "Matched Snippet: \"$snippet\"\n" +
+            "Source: $sourceDesc\n" +
+            "Context Text: \"$contextSnippet\"\n" +
+            "Target App: $pkgName"
+        )
+
+        // Fix 2.4: On-screen toast for website blocks
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(
+                applicationContext,
+                "Focus Lock: Blocked website \"$snippet\"\nSource: $sourceDesc",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
+        executeBlock(
+            pkgName = pkgName,
+            title = match.rule.domainOrUrl,
+            reason = "Blocked website \"$snippet\" detected via $sourceDesc.",
+            type = BlockedActivity.TYPE_WEBSITE
+        )
     }
 
     private fun executeBlock(

@@ -138,4 +138,136 @@ class FocusRepository(private val focusDao: FocusDao) {
         focusDao.updateScreenTimeUsage(packageName, newTotal, date)
         return newTotal
     }
+
+    /**
+     * Fix 1: Reconciles full daily screen time from UsageStatsManager into DailyUsageLog.
+     * Captures app usage that occurred earlier today before Focus Lock started,
+     * apps installed partway through the day, and persists uninstalled app records.
+     */
+    suspend fun syncUsageStatsFromSystem(context: android.content.Context) {
+        if (!com.example.util.PermissionHelper.isUsageStatsPermissionGranted(context)) {
+            return
+        }
+
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val usageStatsManager = context.getSystemService(android.content.Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager ?: return@withContext
+
+                val calendar = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    set(java.util.Calendar.MINUTE, 0)
+                    set(java.util.Calendar.SECOND, 0)
+                    set(java.util.Calendar.MILLISECOND, 0)
+                }
+                val startOfToday = calendar.timeInMillis
+                val now = System.currentTimeMillis()
+                val todayDate = getTodayDateString()
+
+                val aggregatedMap = mutableMapOf<String, Long>()
+
+                // 1. Query aggregated stats (API 21+)
+                try {
+                    val aggregated = usageStatsManager.queryAndAggregateUsageStats(startOfToday, now)
+                    if (!aggregated.isNullOrEmpty()) {
+                        for ((pkg, stat) in aggregated) {
+                            if (stat.totalTimeInForeground > 0) {
+                                aggregatedMap[pkg] = stat.totalTimeInForeground
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("FocusRepository", "queryAndAggregateUsageStats failed", e)
+                }
+
+                // 2. Query INTERVAL_DAILY usage stats as specified by prompt
+                try {
+                    val dailyStats = usageStatsManager.queryUsageStats(android.app.usage.UsageStatsManager.INTERVAL_DAILY, startOfToday, now)
+                    dailyStats?.forEach { stat ->
+                        if (stat.totalTimeInForeground > 0 && stat.lastTimeUsed >= startOfToday) {
+                            val existing = aggregatedMap[stat.packageName] ?: 0L
+                            aggregatedMap[stat.packageName] = maxOf(existing, stat.totalTimeInForeground)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("FocusRepository", "queryUsageStats INTERVAL_DAILY failed", e)
+                }
+
+                if (aggregatedMap.isEmpty()) return@withContext
+
+                // Existing local DB logs for today - our permanent source of truth
+                val existingLogs = focusDao.getUsageLogsForDateSync(todayDate).associateBy { it.packageName }
+                val pm = context.packageManager
+
+                for ((pkg, totalForegroundMillis) in aggregatedMap) {
+                    if (pkg == context.packageName || isSystemOverlay(pkg)) continue
+
+                    val osMinutes = (totalForegroundMillis / 60000L).toInt()
+                    val existingLog = existingLogs[pkg]
+                    val existingMinutes = existingLog?.minutesUsed ?: 0
+
+                    // Reconcile: authoritative daily usage is at least osMinutes, never lower than existing logged minutes
+                    val finalMinutes = maxOf(existingMinutes, osMinutes)
+                    if (finalMinutes <= 0) continue
+
+                    // App Name & Icon caching (cached in DB so uninstalled apps retain name & icon)
+                    var appName = existingLog?.appName ?: ""
+                    var iconBase64 = existingLog?.iconBase64
+
+                    if (appName.isBlank() || iconBase64 == null) {
+                        try {
+                            val appInfo = pm.getApplicationInfo(pkg, 0)
+                            if (appName.isBlank()) {
+                                appName = pm.getApplicationLabel(appInfo).toString()
+                            }
+                            if (iconBase64 == null) {
+                                val drawable = pm.getApplicationIcon(appInfo)
+                                iconBase64 = com.example.util.ImageUtil.drawableToBase64(drawable)
+                            }
+                        } catch (e: Exception) {
+                            // App might be uninstalled or system package
+                            if (appName.isBlank()) {
+                                appName = pkg
+                            }
+                        }
+                    }
+
+                    // Upsert into permanent local database
+                    focusDao.insertOrUpdateDailyUsageLog(
+                        DailyUsageLog(
+                            packageName = pkg,
+                            date = todayDate,
+                            minutesUsed = finalMinutes,
+                            appName = appName,
+                            iconBase64 = iconBase64
+                        )
+                    )
+
+                    // Keep ScreenTimeLimit's usedMinutesToday in sync
+                    focusDao.updateScreenTimeUsage(pkg, finalMinutes, todayDate)
+                }
+
+                // Reconcile group budgets for groups containing these apps
+                val allGroups = focusDao.getAllGroupsSync()
+                val groupApps = focusDao.getAllGroupAppsSync()
+                val updatedLogs = focusDao.getUsageLogsForDateSync(todayDate).associateBy { it.packageName }
+
+                for (group in allGroups) {
+                    if (group.budgetEnabled) {
+                        val memberPkgs = groupApps.filter { it.groupId == group.id }.map { it.packageName }
+                        val totalGroupMinutes = memberPkgs.sumOf { memberPkg -> updatedLogs[memberPkg]?.minutesUsed ?: 0 }
+                        focusDao.updateGroupUsage(group.id, totalGroupMinutes, todayDate)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FocusRepository", "Error syncing usage stats from system", e)
+            }
+        }
+    }
+
+    private fun isSystemOverlay(pkg: String): Boolean {
+        return pkg == "com.android.systemui" ||
+                pkg.contains("inputmethod") ||
+                pkg.contains(".ime") ||
+                pkg == "android"
+    }
 }

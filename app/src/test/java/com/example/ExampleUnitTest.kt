@@ -93,6 +93,73 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testWordBoundaryKeywordMatchingFalsePositives() {
+        val keywords = listOf(
+            BlockedKeyword(keyword = "hard", caseSensitive = false)
+        )
+
+        // Substrings that previously triggered false positives must NOT match
+        assertNull(ContentScanner.matchBlockedKeyword(listOf("Fixing computer hardware today"), keywords))
+        assertNull(ContentScanner.matchBlockedKeyword(listOf("A diehard fan of the movie"), keywords))
+        assertNull(ContentScanner.matchBlockedKeyword(listOf("That was a foolhardy decision"), keywords))
+
+        // True standalone word matches MUST match
+        val hit1 = ContentScanner.matchBlockedKeyword(listOf("Working very hard today"), keywords)
+        assertNotNull(hit1)
+        assertEquals("hard", hit1?.keyword)
+
+        val hit2 = ContentScanner.matchBlockedKeyword(listOf("It is HARD."), keywords)
+        assertNotNull(hit2)
+        assertEquals("hard", hit2?.keyword)
+    }
+
+    @Test
+    fun testWordBoundaryWebsiteMatchingFalsePositives() {
+        val sites = listOf(
+            BlockedWebsite(domainOrUrl = "reddit.com")
+        )
+
+        // Substring collisions must NOT match
+        assertNull(ContentScanner.matchBlockedWebsiteInTexts(listOf("Check out notreddit.com"), sites))
+        assertNull(ContentScanner.matchBlockedWebsiteInTexts(listOf("Visiting reddit.commercial"), sites))
+        assertNull(ContentScanner.matchBlockedWebsiteInTexts(listOf("Log into creditor.company"), sites))
+
+        // Real domain with path or protocol MUST match
+        assertNotNull(ContentScanner.matchBlockedWebsiteInTexts(listOf("Opening reddit.com/r/android"), sites))
+        assertNotNull(ContentScanner.matchBlockedWebsiteInTexts(listOf("https://reddit.com/post/123"), sites))
+    }
+
+    @Test
+    fun testContentDescriptionRefinement() {
+        val keywords = listOf(
+            BlockedKeyword(keyword = "casino", caseSensitive = false)
+        )
+
+        // Short alt-text label / icon metadata must NOT trigger keyword block
+        val shortAltLabel = listOf(
+            ContentScanner.ScannedNodeText(
+                text = "casino icon thumbnail",
+                source = ContentScanner.TextSource.CONTENT_DESCRIPTION_LABEL,
+                isUserAuthored = false
+            )
+        )
+        assertNull(ContentScanner.findKeywordMatch(shortAltLabel, keywords))
+
+        // Long user-authored post content in contentDescription DOES match
+        val userAuthoredDesc = listOf(
+            ContentScanner.ScannedNodeText(
+                text = "Yesterday we visited the grand casino downtown and won prizes",
+                source = ContentScanner.TextSource.CONTENT_DESCRIPTION_USER_AUTHORED,
+                isUserAuthored = true
+            )
+        )
+        val match = ContentScanner.findKeywordMatch(userAuthoredDesc, keywords)
+        assertNotNull(match)
+        assertEquals("casino", match?.matchedSnippet)
+        assertEquals(ContentScanner.TextSource.CONTENT_DESCRIPTION_USER_AUTHORED, match?.source)
+    }
+
+    @Test
     fun testForegroundPackagePropagation() {
         // Test switching between different apps updates foreground package
         FocusForegroundService.onForegroundPackageChanged("com.android.settings")

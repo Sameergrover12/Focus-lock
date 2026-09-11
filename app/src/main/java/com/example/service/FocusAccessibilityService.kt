@@ -228,17 +228,33 @@ class FocusAccessibilityService : AccessibilityService() {
         try {
             val windowList = windows
             if (!windowList.isNullOrEmpty()) {
+                // Priority 1: Application window with input focus (isFocused == true)
                 val focusedAppWindow = windowList.firstOrNull {
                     it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused
-                } ?: windowList.firstOrNull {
-                    it.isFocused && it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
-                } ?: windowList.firstOrNull {
-                    it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive
+                }
+                val focusedAppPkg = focusedAppWindow?.root?.packageName?.toString()
+                if (!focusedAppPkg.isNullOrEmpty() && !isSystemOverlay(focusedAppPkg)) {
+                    return focusedAppPkg
                 }
 
-                val focusedPkg = focusedAppWindow?.root?.packageName?.toString()
-                if (!focusedPkg.isNullOrEmpty() && !isSystemOverlay(focusedPkg)) {
-                    return focusedPkg
+                // Priority 2: Any non-IME, non-system focused window
+                val nonImeFocused = windowList.firstOrNull {
+                    it.isFocused &&
+                    it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
+                    it.type != AccessibilityWindowInfo.TYPE_SYSTEM
+                }
+                val nonImePkg = nonImeFocused?.root?.packageName?.toString()
+                if (!nonImePkg.isNullOrEmpty() && !isSystemOverlay(nonImePkg)) {
+                    return nonImePkg
+                }
+
+                // Priority 3: Active application window (e.g. app hosting active IME keyboard)
+                val activeAppWindow = windowList.firstOrNull {
+                    it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive
+                }
+                val activePkg = activeAppWindow?.root?.packageName?.toString()
+                if (!activePkg.isNullOrEmpty() && !isSystemOverlay(activePkg)) {
+                    return activePkg
                 }
             }
         } catch (e: Exception) {
@@ -333,20 +349,25 @@ class FocusAccessibilityService : AccessibilityService() {
 
         // =========================================================================
         // 2. TIME TRACKING: Attribute usage ONLY to the window with input focus!
+        // Re-evaluate which window is focused on every relevant accessibility event
+        // so the timer hands off correctly as input moves between apps, while
+        // unfocused apps (e.g. video playback in floating window) do not steal focus.
         // =========================================================================
         val focusedPkg = getCurrentlyFocusedPackage() ?: when {
-            !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
-            else -> null
+            (eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+             eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+             eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) &&
+             !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
+            else -> currentForegroundPackage // Maintain current focused app; background content changes do not steal focus
         }
 
         if (!focusedPkg.isNullOrEmpty()) {
-            if (focusedPkg == myPackageName) {
-                currentForegroundPackage = myPackageName
-                FocusForegroundService.onForegroundPackageChanged(myPackageName)
-            } else {
-                currentForegroundPackage = focusedPkg
-                FocusForegroundService.onForegroundPackageChanged(focusedPkg)
+            val targetPkg = if (focusedPkg == myPackageName) myPackageName else focusedPkg
+            if (currentForegroundPackage != targetPkg) {
+                Log.d(TAG, "Input focus handed off from '$currentForegroundPackage' to '$targetPkg'")
             }
+            currentForegroundPackage = targetPkg
+            FocusForegroundService.onForegroundPackageChanged(targetPkg)
         }
 
         // =========================================================================

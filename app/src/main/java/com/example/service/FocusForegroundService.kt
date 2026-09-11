@@ -20,6 +20,7 @@ import com.example.FocusApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.data.repository.FocusRepository
+import com.example.util.ScreenTimeHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,13 +38,18 @@ class FocusForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var trackingJob: Job? = null
 
-    // Track active seconds per package for current minute chunk
-    private val packageActiveSeconds = mutableMapOf<String, Int>()
+    // In-memory active tracking state for today (idempotent accrual based on input focus)
+    private val packageBaselineMinutesToday = mutableMapOf<String, Int>()
+    private val packageLiveSecondsToday = mutableMapOf<String, Int>()
+    private val packageLastWrittenMinutes = mutableMapOf<String, Int>()
     private val warnedPackagesToday = mutableSetOf<String>()
     private var lastRecordedDate = FocusRepository.getTodayDateString()
 
-    // Real device screen-on accumulation (non-overlapping)
-    private var screenOnActiveSeconds = 0
+    // Real device screen-on accumulation (non-overlapping sanity reference)
+    private var screenOnBaselineMinutes = 0
+    private var screenOnLiveSeconds = 0
+    private var screenOnLastWrittenMinutes = 0
+    private var screenOnInitialized = false
     private var screenStateReceiver: BroadcastReceiver? = null
 
     companion object {
@@ -235,8 +241,13 @@ class FocusForegroundService : Service() {
         if (today != lastRecordedDate) {
             lastRecordedDate = today
             warnedPackagesToday.clear()
-            packageActiveSeconds.clear()
-            screenOnActiveSeconds = 0
+            packageBaselineMinutesToday.clear()
+            packageLiveSecondsToday.clear()
+            packageLastWrittenMinutes.clear()
+            screenOnBaselineMinutes = 0
+            screenOnLiveSeconds = 0
+            screenOnLastWrittenMinutes = 0
+            screenOnInitialized = false
 
             val app = application as? FocusApplication ?: return
             val repo = app.repository
@@ -246,16 +257,23 @@ class FocusForegroundService : Service() {
     }
 
     private suspend fun accumulateScreenOnTime(secondsToAdd: Int) {
-        val totalSec = screenOnActiveSeconds + secondsToAdd
-        if (totalSec >= 60) {
-            val minutesToAdd = totalSec / 60
-            screenOnActiveSeconds = totalSec % 60
-            val app = application as? FocusApplication ?: return
-            val repo = app.repository
-            val currentMins = repo.getDeviceScreenOnMinutesTodaySync()
-            repo.updateDeviceScreenOnTime(currentMins + minutesToAdd)
-        } else {
-            screenOnActiveSeconds = totalSec
+        val app = application as? FocusApplication ?: return
+        val repo = app.repository
+
+        if (!screenOnInitialized) {
+            screenOnBaselineMinutes = repo.getDeviceScreenOnMinutesTodaySync()
+            screenOnLiveSeconds = 0
+            screenOnLastWrittenMinutes = screenOnBaselineMinutes
+            screenOnInitialized = true
+        }
+
+        screenOnLiveSeconds += secondsToAdd
+        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+        val totalScreenOn = (screenOnBaselineMinutes + (screenOnLiveSeconds / 60)).coerceIn(0, maxAllowed)
+
+        if (totalScreenOn > screenOnLastWrittenMinutes) {
+            repo.updateDeviceScreenOnTime(totalScreenOn)
+            screenOnLastWrittenMinutes = totalScreenOn
         }
     }
 
@@ -306,53 +324,75 @@ class FocusForegroundService : Service() {
 
     private suspend fun accumulateForegroundUsage(pkgName: String, secondsToAdd: Int) {
         if (pkgName == packageName || pkgName == applicationContext.packageName || isSystemOverlay(pkgName)) return
-        val totalSec = (packageActiveSeconds[pkgName] ?: 0) + secondsToAdd
-        if (totalSec >= 60) {
-            val minutesToAdd = totalSec / 60
-            packageActiveSeconds[pkgName] = totalSec % 60
 
-            val app = application as? FocusApplication ?: return
-            val repo = app.repository
-            val today = FocusRepository.getTodayDateString()
+        val app = application as? FocusApplication ?: return
+        val repo = app.repository
+        val today = FocusRepository.getTodayDateString()
 
-            // 1. Update DailyUsageLog (also updates ScreenTimeLimit internally)
+        // 1. Mark package as actively live-tracked
+        repo.markPackageAsLiveTracked(pkgName)
+
+        // 2. Initialize baseline from DB once for today if not yet cached in memory
+        if (!packageBaselineMinutesToday.containsKey(pkgName)) {
+            val existingLog = repo.getUsageLogSync(pkgName, today)
+            val initialBaseline = existingLog?.minutesUsed ?: 0
+            packageBaselineMinutesToday[pkgName] = initialBaseline
+            packageLiveSecondsToday[pkgName] = 0
+            packageLastWrittenMinutes[pkgName] = initialBaseline
+        }
+
+        // 3. Accumulate focused active seconds
+        val currentLiveSec = (packageLiveSecondsToday[pkgName] ?: 0) + secondsToAdd
+        packageLiveSecondsToday[pkgName] = currentLiveSec
+
+        // 4. Calculate total minutes as of now (absolute, never additive on stored DB value)
+        val baseline = packageBaselineMinutesToday[pkgName] ?: 0
+        val accruedMinutes = currentLiveSec / 60
+        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+        val totalMinutes = (baseline + accruedMinutes).coerceIn(0, maxAllowed)
+
+        val lastWritten = packageLastWrittenMinutes[pkgName] ?: baseline
+        if (totalMinutes > lastWritten) {
             val (appName, iconBase64) = getAppMetadata(pkgName)
-            val newDailyMinutes = repo.logAppUsage(
+            val finalPersistedMinutes = repo.setAppUsageAbsolute(
                 packageName = pkgName,
-                minutesToAdd = minutesToAdd,
+                totalMinutes = totalMinutes,
                 appName = appName,
                 iconBase64 = iconBase64,
                 date = today
             )
+            packageLastWrittenMinutes[pkgName] = finalPersistedMinutes
 
-            // 2. 90% warning notification based on single shared daily usage counter
+            // 5. 90% warning notification based on single shared daily usage counter
             val limits = repo.getAllScreenTimeLimitsSync()
             val limit = limits.firstOrNull { it.packageName == pkgName }
             if (limit != null && limit.dailyLimitMinutes > 0) {
-                if (newDailyMinutes >= (limit.dailyLimitMinutes * 0.9).toInt() &&
-                    newDailyMinutes < limit.dailyLimitMinutes &&
+                if (finalPersistedMinutes >= (limit.dailyLimitMinutes * 0.9).toInt() &&
+                    finalPersistedMinutes < limit.dailyLimitMinutes &&
                     !warnedPackagesToday.contains(pkgName)
                 ) {
                     warnedPackagesToday.add(pkgName)
-                    sendWarningNotification(pkgName, newDailyMinutes, limit.dailyLimitMinutes)
+                    sendWarningNotification(pkgName, finalPersistedMinutes, limit.dailyLimitMinutes)
                 }
             }
 
-            // 3. Check and update Groups containing this app
+            // 6. Check and update Groups containing this app (sum of members' current daily usage)
             val groupApps = repo.getAllGroupAppsSync()
-            val matchingGroupIds = groupApps.filter { it.packageName == pkgName }.map { it.groupId }
+            val matchingGroupIds = groupApps.filter { it.packageName == pkgName }.map { it.groupId }.distinct()
             if (matchingGroupIds.isNotEmpty()) {
                 val allGroups = repo.getAllGroupsSync()
+                val todayLogs = repo.getUsageLogsForDateSync(today).associateBy { it.packageName }
                 for (gId in matchingGroupIds) {
                     val group = allGroups.firstOrNull { it.id == gId }
                     if (group != null && group.budgetEnabled) {
-                        val newGroupUsed = group.usedMinutesToday + minutesToAdd
-                        repo.updateGroupUsage(gId, newGroupUsed, today)
+                        val memberPkgs = groupApps.filter { it.groupId == gId }.map { it.packageName }
+                        val totalGroupMinutes = memberPkgs.sumOf { memberPkg ->
+                            if (memberPkg == pkgName) finalPersistedMinutes else todayLogs[memberPkg]?.minutesUsed ?: 0
+                        }
+                        repo.updateGroupUsage(gId, totalGroupMinutes, today)
                     }
                 }
             }
-        } else {
-            packageActiveSeconds[pkgName] = totalSec
         }
     }
 

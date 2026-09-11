@@ -161,6 +161,9 @@ interface FocusDao {
     @Query("SELECT SUM(minutesUsed) FROM daily_usage_logs WHERE date = :date")
     fun getTotalMinutesUsedForDate(date: String): Flow<Int?>
 
+    @Query("SELECT SUM(minutesUsed) FROM daily_usage_logs WHERE date = :date")
+    suspend fun getTotalMinutesUsedForDateSync(date: String): Int?
+
     // --- Daily Device Screen-On Time ---
     @Query("SELECT screenOnMinutes FROM daily_screen_time WHERE date = :date")
     fun getScreenOnMinutesForDate(date: String): Flow<Int?>

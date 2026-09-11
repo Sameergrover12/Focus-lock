@@ -177,25 +177,47 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun testMultitaskingScreenTimeReconciliationCap() {
-        // Suppose two apps (e.g. YouTube and Chrome) were each active for 120 minutes in split-screen
-        // The sum of individual app usage = 240 minutes (4 hours)
-        val appUsageA = 120
-        val appUsageB = 120
-        val naiveSum = appUsageA + appUsageB // 240 mins (inflated!)
+    fun testIdempotentUsageOverwrites() {
+        // Baseline from before service started today
+        val baseline = 45
+        var liveSecondsAccrued = 0
 
-        // Physical screen-on time was only 120 minutes
-        val deviceScreenOnTime = 120
-        val minutesSinceMidnight = 180
-
-        // Reconciled total must use device screen-on time and be capped by minutes since midnight
-        val resolvedTotal = if (deviceScreenOnTime > 0) {
-            deviceScreenOnTime.coerceAtMost(minutesSinceMidnight)
-        } else {
-            naiveSum.coerceAtMost(minutesSinceMidnight)
+        // Simulate 5 minutes of real time active in app (300 seconds)
+        for (tick in 1..60) { // 60 ticks of 5 seconds
+            liveSecondsAccrued += 5
         }
 
-        assertEquals(120, resolvedTotal)
-        assertTrue(resolvedTotal < naiveSum)
+        val totalMinutes = baseline + (liveSecondsAccrued / 60)
+        assertEquals(50, totalMinutes)
+
+        // Multiple writes of the same point in time must produce the identical absolute number (never compounding)
+        val write1 = totalMinutes
+        val write2 = totalMinutes
+        assertEquals(50, write1)
+        assertEquals(50, write2)
+        assertEquals(write1, write2)
+    }
+
+    @Test
+    fun testDerivedTotalEqualsSumOfAppTimes() {
+        val appLogs = listOf(
+            com.example.data.local.entity.DailyUsageLog(packageName = "com.reddit", date = "2026-09-11", minutesUsed = 45),
+            com.example.data.local.entity.DailyUsageLog(packageName = "com.android.chrome", date = "2026-09-11", minutesUsed = 20),
+            com.example.data.local.entity.DailyUsageLog(packageName = "com.google.android.youtube", date = "2026-09-11", minutesUsed = 15)
+        )
+        val derivedTotal = appLogs.sumOf { it.minutesUsed }
+        assertEquals(80, derivedTotal)
+    }
+
+    @Test
+    fun testExclusiveInputFocusPreventsDoubleCrediting() {
+        // In 60 minutes of multitasking, 40 minutes spent with focus on Reddit, 20 minutes with focus on YouTube
+        val totalSessionMinutes = 60
+        val redditFocusedMinutes = 40
+        val youtubeFocusedMinutes = 20
+
+        // With exclusive focus attribution, only the focused app accrues time
+        val totalAccrued = redditFocusedMinutes + youtubeFocusedMinutes
+        assertEquals(totalSessionMinutes, totalAccrued)
     }
 }

@@ -11,6 +11,7 @@ import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedApp
 import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
+import com.example.data.local.entity.DailyScreenTime
 import com.example.data.local.entity.DailyUsageLog
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
@@ -23,9 +24,10 @@ import com.example.data.local.entity.ScreenTimeLimit
         GroupApp::class,
         BlockedWebsite::class,
         BlockedKeyword::class,
-        DailyUsageLog::class
+        DailyUsageLog::class,
+        DailyScreenTime::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

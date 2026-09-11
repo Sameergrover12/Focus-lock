@@ -5,8 +5,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -40,6 +42,10 @@ class FocusForegroundService : Service() {
     private val warnedPackagesToday = mutableSetOf<String>()
     private var lastRecordedDate = FocusRepository.getTodayDateString()
 
+    // Real device screen-on accumulation (non-overlapping)
+    private var screenOnActiveSeconds = 0
+    private var screenStateReceiver: BroadcastReceiver? = null
+
     companion object {
         private const val TAG = "FocusForegroundService"
         const val NOTIFICATION_ID = 1001
@@ -71,6 +77,26 @@ class FocusForegroundService : Service() {
         super.onCreate()
         Log.d(TAG, "FocusForegroundService created")
         startInForeground()
+
+        val app = application as? FocusApplication
+        app?.repository?.setServiceStartTime(System.currentTimeMillis())
+
+        // Register screen state receiver for physical screen on/off events
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        screenStateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> Log.d(TAG, "Screen turned ON")
+                    Intent.ACTION_SCREEN_OFF -> Log.d(TAG, "Screen turned OFF")
+                }
+            }
+        }
+        registerReceiver(screenStateReceiver, filter)
+
         serviceScope.launch {
             (application as? FocusApplication)?.repository?.resetDailyLimitsIfNeeded()
         }
@@ -83,6 +109,11 @@ class FocusForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            screenStateReceiver?.let { unregisterReceiver(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unregister screenStateReceiver", e)
+        }
         trackingJob?.cancel()
         serviceScope.cancel()
         Log.d(TAG, "FocusForegroundService destroyed")
@@ -152,6 +183,9 @@ class FocusForegroundService : Service() {
                     continue
                 }
 
+                // Accumulate true device screen-on duration (non-overlapping real time)
+                accumulateScreenOnTime(5)
+
                 val currentPkg = detectCurrentForegroundPackage()
                 if (currentPkg != null && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
                     accumulateForegroundUsage(currentPkg, 5)
@@ -202,11 +236,26 @@ class FocusForegroundService : Service() {
             lastRecordedDate = today
             warnedPackagesToday.clear()
             packageActiveSeconds.clear()
+            screenOnActiveSeconds = 0
 
-            // Reset used minutes in DB for screen limits and groups
             val app = application as? FocusApplication ?: return
             val repo = app.repository
+            repo.resetDailyTrackingState()
             repo.resetDailyLimitsIfNeeded()
+        }
+    }
+
+    private suspend fun accumulateScreenOnTime(secondsToAdd: Int) {
+        val totalSec = screenOnActiveSeconds + secondsToAdd
+        if (totalSec >= 60) {
+            val minutesToAdd = totalSec / 60
+            screenOnActiveSeconds = totalSec % 60
+            val app = application as? FocusApplication ?: return
+            val repo = app.repository
+            val currentMins = repo.getDeviceScreenOnMinutesTodaySync()
+            repo.updateDeviceScreenOnTime(currentMins + minutesToAdd)
+        } else {
+            screenOnActiveSeconds = totalSec
         }
     }
 

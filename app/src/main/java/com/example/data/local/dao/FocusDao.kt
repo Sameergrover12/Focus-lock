@@ -10,6 +10,7 @@ import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedApp
 import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
+import com.example.data.local.entity.DailyScreenTime
 import com.example.data.local.entity.DailyUsageLog
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
@@ -159,4 +160,14 @@ interface FocusDao {
 
     @Query("SELECT SUM(minutesUsed) FROM daily_usage_logs WHERE date = :date")
     fun getTotalMinutesUsedForDate(date: String): Flow<Int?>
+
+    // --- Daily Device Screen-On Time ---
+    @Query("SELECT screenOnMinutes FROM daily_screen_time WHERE date = :date")
+    fun getScreenOnMinutesForDate(date: String): Flow<Int?>
+
+    @Query("SELECT screenOnMinutes FROM daily_screen_time WHERE date = :date")
+    suspend fun getScreenOnMinutesForDateSync(date: String): Int?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdateScreenOnTime(item: DailyScreenTime)
 }

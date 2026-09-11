@@ -10,6 +10,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import com.example.FocusApplication
 import com.example.data.local.entity.AppGroup
@@ -115,7 +117,7 @@ class FocusAccessibilityService : AccessibilityService() {
                     continue
                 }
 
-                scanContentOnScreen(currentPkg)
+                scanVisibleWindowsForContent()
             }
         }
     }
@@ -161,26 +163,81 @@ class FocusAccessibilityService : AccessibilityService() {
                pkg == "android"
     }
 
+    /**
+     * Finds the package that currently has input focus.
+     * In split-screen and floating-window multitasking, ONLY the window with input focus
+     * has its usage time accrued.
+     */
+    private fun getCurrentlyFocusedPackage(): String? {
+        try {
+            val windowList = windows
+            if (!windowList.isNullOrEmpty()) {
+                val focusedAppWindow = windowList.firstOrNull {
+                    it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused
+                } ?: windowList.firstOrNull {
+                    it.isFocused && it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
+                } ?: windowList.firstOrNull {
+                    it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive
+                }
+
+                val focusedPkg = focusedAppWindow?.root?.packageName?.toString()
+                if (!focusedPkg.isNullOrEmpty() && !isSystemOverlay(focusedPkg)) {
+                    return focusedPkg
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to inspect windows for input focus", e)
+        }
+
+        val activeRoot = try { rootInActiveWindow } catch (e: Exception) { null }
+        val activePkg = activeRoot?.packageName?.toString()
+        if (!activePkg.isNullOrEmpty() && !isSystemOverlay(activePkg)) {
+            return activePkg
+        }
+        return null
+    }
+
+    /**
+     * Collects all packages visible on screen across all windows (base app, split-screen, floating windows).
+     * Blocking enforcement MUST evaluate EVERY visible window, focused or not.
+     */
+    private fun getAllVisiblePackages(eventPkg: String?): Set<String> {
+        val result = mutableSetOf<String>()
+        if (!eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg)) {
+            result.add(eventPkg)
+        }
+
+        try {
+            val windowList = windows
+            if (!windowList.isNullOrEmpty()) {
+                for (win in windowList) {
+                    if (win.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        val pkg = win.root?.packageName?.toString()
+                        if (!pkg.isNullOrEmpty() && !isSystemOverlay(pkg)) {
+                            result.add(pkg)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to collect visible window packages", e)
+        }
+
+        val activeRoot = try { rootInActiveWindow } catch (e: Exception) { null }
+        val activePkg = activeRoot?.packageName?.toString()
+        if (!activePkg.isNullOrEmpty() && !isSystemOverlay(activePkg)) {
+            result.add(activePkg)
+        }
+
+        return result
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (!isMasterEnabled) return
 
         val myPackageName = packageName
-
-        // 1. Identify event package and active window package
         val eventPkg = event.packageName?.toString()
-        val rootNode = rootInActiveWindow
-        val activeWindowPkg = rootNode?.packageName?.toString()
-
-        // Extract candidate package, prioritizing the active app over system overlays (keyboards, system UI)
-        val detectedPkg = when {
-            !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
-            !activeWindowPkg.isNullOrEmpty() && !isSystemOverlay(activeWindowPkg) -> activeWindowPkg
-            !eventPkg.isNullOrEmpty() -> eventPkg
-            !activeWindowPkg.isNullOrEmpty() -> activeWindowPkg
-            else -> return
-        }
-
         val className = event.className?.toString() ?: ""
 
         // Exclude BlockedActivity explicitly (do not scan or block the block screen itself)
@@ -190,45 +247,55 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Log detected foreground package on every accessibility event as requested for debugging
-        Log.d(TAG, "Foreground event: detectedPkg=$detectedPkg (eventPkg=$eventPkg, windowPkg=$activeWindowPkg, type=${event.eventType}, class=$className)")
-
-        // 2. Absolute self-exclusion for Focus Lock's own application ID (Change 1)
-        if (detectedPkg == myPackageName) {
-            currentForegroundPackage = myPackageName
-            FocusForegroundService.onForegroundPackageChanged(myPackageName)
-            Log.d(TAG, "Focus Lock is foreground. Bypassing scan/block.")
-            return
+        // =========================================================================
+        // 1. BLOCKING ENFORCEMENT: MUST keep scanning and matching against EVERY visible window!
+        // Opening a blocked app in a floating window MUST trigger a block immediately,
+        // even while input focus remains on the base app underneath.
+        // =========================================================================
+        val visiblePackages = getAllVisiblePackages(eventPkg)
+        for (pkg in visiblePackages) {
+            if (pkg != myPackageName) {
+                checkForegroundPackage(pkg)
+            }
         }
 
-        // 3. For any other app: Reassign and propagate foreground package immediately on every event
-        currentForegroundPackage = detectedPkg
-        FocusForegroundService.onForegroundPackageChanged(detectedPkg)
+        // =========================================================================
+        // 2. TIME TRACKING: Attribute usage ONLY to the window with input focus!
+        // In floating-window or split-screen mode, the base app sitting in the background
+        // without input focus pauses its timer instead of accruing time.
+        // =========================================================================
+        val focusedPkg = getCurrentlyFocusedPackage() ?: when {
+            !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
+            else -> null
+        }
 
+        if (!focusedPkg.isNullOrEmpty()) {
+            if (focusedPkg == myPackageName) {
+                currentForegroundPackage = myPackageName
+                FocusForegroundService.onForegroundPackageChanged(myPackageName)
+                Log.d(TAG, "Focus Lock is focused. Bypassing scan/block.")
+            } else {
+                currentForegroundPackage = focusedPkg
+                FocusForegroundService.onForegroundPackageChanged(focusedPkg)
+            }
+        }
+
+        // =========================================================================
+        // 3. CONTENT SCANNING (Website & Keyword blocking):
+        // Scan visible application windows so keywords/sites in floating windows are blocked immediately!
+        // =========================================================================
         val eventType = event.eventType
-
-        // 4. Enforce app blocking, screen time limits, and group rules
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
-            lastEvaluatedPackage != detectedPkg
-        ) {
-            lastEvaluatedPackage = detectedPkg
-            checkForegroundPackage(detectedPkg)
-        }
-
-        // 5. Website scanning and keyword scanning across foreground app
-        // Triggered on window transitions, content updates, scrolls (e.g. Reddit feeds), and focus shifts
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
             eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
-            eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED
+            eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+            eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) {
             val now = SystemClock.uptimeMillis()
             if (now - lastScanTime > 250) {
                 lastScanTime = now
                 serviceScope.launch(Dispatchers.Default) {
-                    scanContentOnScreen(detectedPkg)
+                    scanVisibleWindowsForContent()
                 }
             }
         }
@@ -311,9 +378,38 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun scanContentOnScreen(pkgName: String) {
+    private fun scanVisibleWindowsForContent() {
+        if (!isMasterEnabled) return
+        if (blockedWebsitesCache.isEmpty() && blockedKeywordsCache.isEmpty()) return
+
+        try {
+            val windowList = windows
+            if (!windowList.isNullOrEmpty()) {
+                for (win in windowList) {
+                    if (win.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        val winRoot = win.root ?: continue
+                        val winPkg = winRoot.packageName?.toString() ?: continue
+                        if (winPkg != packageName && !isSystemOverlay(winPkg)) {
+                            scanContentOnScreen(winPkg, winRoot)
+                        }
+                    }
+                }
+                return
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed scanning visible windows for content", e)
+        }
+
+        val root = try { rootInActiveWindow } catch (e: Exception) { null } ?: return
+        val rootPkg = root.packageName?.toString() ?: return
+        if (rootPkg != packageName && !isSystemOverlay(rootPkg)) {
+            scanContentOnScreen(rootPkg, root)
+        }
+    }
+
+    private fun scanContentOnScreen(pkgName: String, rootNode: AccessibilityNodeInfo? = null) {
         if (pkgName == packageName) return
-        val root = try {
+        val root = rootNode ?: try {
             rootInActiveWindow
         } catch (e: Exception) {
             null

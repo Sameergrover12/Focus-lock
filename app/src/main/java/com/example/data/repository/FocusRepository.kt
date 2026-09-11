@@ -5,11 +5,16 @@ import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedApp
 import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
+import com.example.data.local.entity.DailyScreenTime
 import com.example.data.local.entity.DailyUsageLog
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
+import com.example.util.ScreenTimeHelper
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
 
@@ -20,6 +25,27 @@ class FocusRepository(private val focusDao: FocusDao) {
             val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             return sdf.format(Date())
         }
+    }
+
+    // Packages that Focus Lock has actively live-tracked with single-window input focus today
+    private val liveTrackedPackagesToday = Collections.synchronizedSet(mutableSetOf<String>())
+    @Volatile private var serviceStartTimeToday: Long = 0L
+
+    fun setServiceStartTime(timeMillis: Long) {
+        if (serviceStartTimeToday == 0L) {
+            serviceStartTimeToday = timeMillis
+        }
+    }
+
+    fun markPackageAsLiveTracked(packageName: String) {
+        liveTrackedPackagesToday.add(packageName)
+    }
+
+    fun isPackageLiveTracked(packageName: String): Boolean = liveTrackedPackagesToday.contains(packageName)
+
+    fun resetDailyTrackingState() {
+        liveTrackedPackagesToday.clear()
+        serviceStartTimeToday = System.currentTimeMillis()
     }
 
     // Blocked Apps
@@ -110,9 +136,39 @@ class FocusRepository(private val focusDao: FocusDao) {
         focusDao.insertBlockedKeyword(BlockedKeyword(keyword = keyword.trim(), caseSensitive = caseSensitive))
     suspend fun removeBlockedKeyword(id: Long) = focusDao.deleteBlockedKeyword(id)
 
-    // Daily Usage Logs
+    // Daily Usage Logs & Device Screen-On Time
     fun getUsageLogsForDate(date: String): Flow<List<DailyUsageLog>> = focusDao.getUsageLogsForDate(date)
-    fun getTotalMinutesUsedToday(): Flow<Int?> = focusDao.getTotalMinutesUsedForDate(getTodayDateString())
+
+    /**
+     * Today's Tracked Usage: returns real device screen-on time for today.
+     * Guaranteed never to exceed the elapsed minutes since midnight.
+     */
+    fun getTotalMinutesUsedToday(): Flow<Int?> =
+        focusDao.getScreenOnMinutesForDate(getTodayDateString()).combine(
+            focusDao.getTotalMinutesUsedForDate(getTodayDateString())
+        ) { screenOn, sumOfApps ->
+            val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+            val base = screenOn ?: sumOfApps ?: 0
+            base.coerceIn(0, maxAllowed)
+        }
+
+    fun getDeviceScreenOnMinutesToday(): Flow<Int> =
+        focusDao.getScreenOnMinutesForDate(getTodayDateString()).map { minutes ->
+            val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+            (minutes ?: 0).coerceIn(0, maxAllowed)
+        }
+
+    suspend fun getDeviceScreenOnMinutesTodaySync(): Int {
+        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+        val recorded = focusDao.getScreenOnMinutesForDateSync(getTodayDateString())
+        return (recorded ?: 0).coerceIn(0, maxAllowed)
+    }
+
+    suspend fun updateDeviceScreenOnTime(minutes: Int, date: String = getTodayDateString()) {
+        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+        val sanitized = minutes.coerceIn(0, maxAllowed)
+        focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = date, screenOnMinutes = sanitized))
+    }
 
     suspend fun logAppUsage(
         packageName: String,
@@ -121,8 +177,11 @@ class FocusRepository(private val focusDao: FocusDao) {
         iconBase64: String? = null,
         date: String = getTodayDateString()
     ): Int {
+        markPackageAsLiveTracked(packageName)
         val existing = focusDao.getUsageLog(packageName, date)
-        val newTotal = (existing?.minutesUsed ?: 0) + minutesToAdd
+        val rawTotal = (existing?.minutesUsed ?: 0) + minutesToAdd
+        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+        val newTotal = rawTotal.coerceIn(0, maxAllowed)
         val name = if (appName.isNotBlank()) appName else existing?.appName ?: packageName
         val icon = iconBase64 ?: existing?.iconBase64
         focusDao.insertOrUpdateDailyUsageLog(
@@ -140,9 +199,11 @@ class FocusRepository(private val focusDao: FocusDao) {
     }
 
     /**
-     * Fix 1: Reconciles full daily screen time from UsageStatsManager into DailyUsageLog.
-     * Captures app usage that occurred earlier today before Focus Lock started,
-     * apps installed partway through the day, and persists uninstalled app records.
+     * Reconciles usage stats from system:
+     * 1. Reconciles non-overlapping device screen-on time from UsageEvents.
+     * 2. Live, focus-tracked numbers take priority for any period Focus Lock was running.
+     * 3. UsageStatsManager is used to fill genuine pre-service gaps or uninstalled apps,
+     *    avoiding overwriting live single-focus numbers with multi-window double counts.
      */
     suspend fun syncUsageStatsFromSystem(context: android.content.Context) {
         if (!com.example.util.PermissionHelper.isUsageStatsPermissionGranted(context)) {
@@ -151,6 +212,17 @@ class FocusRepository(private val focusDao: FocusDao) {
 
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
+                val todayDate = getTodayDateString()
+
+                // 1. Sync real device screen-on time from UsageEvents (non-overlapping interactive time)
+                val osScreenOn = ScreenTimeHelper.queryDeviceScreenOnMinutes(context)
+                if (osScreenOn != null) {
+                    val currentRecorded = getDeviceScreenOnMinutesTodaySync()
+                    val reconciledScreenOn = maxOf(currentRecorded, osScreenOn)
+                    updateDeviceScreenOnTime(reconciledScreenOn, todayDate)
+                }
+                val deviceScreenOnMinutes = getDeviceScreenOnMinutesTodaySync()
+
                 val usageStatsManager = context.getSystemService(android.content.Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager ?: return@withContext
 
                 val calendar = java.util.Calendar.getInstance().apply {
@@ -161,11 +233,35 @@ class FocusRepository(private val focusDao: FocusDao) {
                 }
                 val startOfToday = calendar.timeInMillis
                 val now = System.currentTimeMillis()
-                val todayDate = getTodayDateString()
 
+                // Query pre-service usage (gap before Focus Lock started today)
+                val preServiceCutoff = if (serviceStartTimeToday in (startOfToday + 1) until now) {
+                    serviceStartTimeToday
+                } else {
+                    startOfToday
+                }
+
+                val preServiceMap = mutableMapOf<String, Long>()
+                if (preServiceCutoff > startOfToday) {
+                    try {
+                        val preStats = usageStatsManager.queryUsageStats(
+                            android.app.usage.UsageStatsManager.INTERVAL_DAILY,
+                            startOfToday,
+                            preServiceCutoff
+                        )
+                        preStats?.forEach { stat ->
+                            if (stat.totalTimeInForeground > 0) {
+                                val cur = preServiceMap[stat.packageName] ?: 0L
+                                preServiceMap[stat.packageName] = maxOf(cur, stat.totalTimeInForeground)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("FocusRepository", "Failed to query pre-service stats", e)
+                    }
+                }
+
+                // Query full day stats from OS
                 val aggregatedMap = mutableMapOf<String, Long>()
-
-                // 1. Query aggregated stats (API 21+)
                 try {
                     val aggregated = usageStatsManager.queryAndAggregateUsageStats(startOfToday, now)
                     if (!aggregated.isNullOrEmpty()) {
@@ -179,7 +275,6 @@ class FocusRepository(private val focusDao: FocusDao) {
                     android.util.Log.w("FocusRepository", "queryAndAggregateUsageStats failed", e)
                 }
 
-                // 2. Query INTERVAL_DAILY usage stats as specified by prompt
                 try {
                     val dailyStats = usageStatsManager.queryUsageStats(android.app.usage.UsageStatsManager.INTERVAL_DAILY, startOfToday, now)
                     dailyStats?.forEach { stat ->
@@ -194,22 +289,33 @@ class FocusRepository(private val focusDao: FocusDao) {
 
                 if (aggregatedMap.isEmpty()) return@withContext
 
-                // Existing local DB logs for today - our permanent source of truth
                 val existingLogs = focusDao.getUsageLogsForDateSync(todayDate).associateBy { it.packageName }
                 val pm = context.packageManager
+                val maxAllowed = maxOf(deviceScreenOnMinutes, ScreenTimeHelper.getMinutesSinceMidnight())
 
                 for ((pkg, totalForegroundMillis) in aggregatedMap) {
                     if (pkg == context.packageName || isSystemOverlay(pkg)) continue
 
-                    val osMinutes = (totalForegroundMillis / 60000L).toInt()
                     val existingLog = existingLogs[pkg]
                     val existingMinutes = existingLog?.minutesUsed ?: 0
+                    val isLiveTracked = isPackageLiveTracked(pkg)
 
-                    // Reconcile: authoritative daily usage is at least osMinutes, never lower than existing logged minutes
-                    val finalMinutes = maxOf(existingMinutes, osMinutes)
+                    val finalMinutes = if (isLiveTracked && existingMinutes > 0) {
+                        // CRITICAL: Live focus-tracked numbers take priority for the period Focus Lock was running.
+                        // UsageStatsManager numbers during multitasking are inflated.
+                        // We only backfill any genuine pre-service gap.
+                        val preServiceMinutes = ((preServiceMap[pkg] ?: 0L) / 60000L).toInt()
+                        val combined = existingMinutes + preServiceMinutes
+                        combined.coerceIn(existingMinutes, maxAllowed)
+                    } else {
+                        // App was not tracked live by Focus Lock today (e.g. uninstalled app or ran before service started)
+                        val osMinutes = (totalForegroundMillis / 60000L).toInt()
+                        maxOf(existingMinutes, osMinutes).coerceIn(0, maxAllowed)
+                    }
+
                     if (finalMinutes <= 0) continue
 
-                    // App Name & Icon caching (cached in DB so uninstalled apps retain name & icon)
+                    // App Name & Icon caching
                     var appName = existingLog?.appName ?: ""
                     var iconBase64 = existingLog?.iconBase64
 
@@ -224,14 +330,12 @@ class FocusRepository(private val focusDao: FocusDao) {
                                 iconBase64 = com.example.util.ImageUtil.drawableToBase64(drawable)
                             }
                         } catch (e: Exception) {
-                            // App might be uninstalled or system package
                             if (appName.isBlank()) {
                                 appName = pkg
                             }
                         }
                     }
 
-                    // Upsert into permanent local database
                     focusDao.insertOrUpdateDailyUsageLog(
                         DailyUsageLog(
                             packageName = pkg,
@@ -242,11 +346,10 @@ class FocusRepository(private val focusDao: FocusDao) {
                         )
                     )
 
-                    // Keep ScreenTimeLimit's usedMinutesToday in sync
                     focusDao.updateScreenTimeUsage(pkg, finalMinutes, todayDate)
                 }
 
-                // Reconcile group budgets for groups containing these apps
+                // Reconcile group budgets
                 val allGroups = focusDao.getAllGroupsSync()
                 val groupApps = focusDao.getAllGroupAppsSync()
                 val updatedLogs = focusDao.getUsageLogsForDateSync(todayDate).associateBy { it.packageName }

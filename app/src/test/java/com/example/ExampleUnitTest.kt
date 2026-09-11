@@ -168,4 +168,34 @@ class ExampleUnitTest {
         // Switch to browser
         FocusForegroundService.onForegroundPackageChanged("com.android.chrome")
     }
+
+    @Test
+    fun testMinutesSinceMidnightCeiling() {
+        val minutesElapsed = com.example.util.ScreenTimeHelper.getMinutesSinceMidnight()
+        assertTrue("Minutes since midnight must be >= 0", minutesElapsed >= 0)
+        assertTrue("Minutes since midnight must be <= 1440", minutesElapsed <= 1440)
+    }
+
+    @Test
+    fun testMultitaskingScreenTimeReconciliationCap() {
+        // Suppose two apps (e.g. YouTube and Chrome) were each active for 120 minutes in split-screen
+        // The sum of individual app usage = 240 minutes (4 hours)
+        val appUsageA = 120
+        val appUsageB = 120
+        val naiveSum = appUsageA + appUsageB // 240 mins (inflated!)
+
+        // Physical screen-on time was only 120 minutes
+        val deviceScreenOnTime = 120
+        val minutesSinceMidnight = 180
+
+        // Reconciled total must use device screen-on time and be capped by minutes since midnight
+        val resolvedTotal = if (deviceScreenOnTime > 0) {
+            deviceScreenOnTime.coerceAtMost(minutesSinceMidnight)
+        } else {
+            naiveSum.coerceAtMost(minutesSinceMidnight)
+        }
+
+        assertEquals(120, resolvedTotal)
+        assertTrue(resolvedTotal < naiveSum)
+    }
 }

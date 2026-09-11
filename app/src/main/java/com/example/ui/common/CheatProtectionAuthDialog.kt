@@ -1,6 +1,9 @@
 package com.example.ui.common
 
-import androidx.compose.foundation.background
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +35,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.utf16CodePoint
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,16 +61,113 @@ data class PendingLooseningAction(
     val onAuthorized: () -> Unit
 )
 
+/**
+ * Custom TextToolbar that suppresses the "Paste" menu item
+ * to prevent pasting via selection context popups.
+ */
+class NoPasteTextToolbar(private val delegate: TextToolbar) : TextToolbar {
+    override val status: TextToolbarStatus
+        get() = delegate.status
+
+    override fun hide() {
+        delegate.hide()
+    }
+
+    override fun showMenu(
+        rect: Rect,
+        onCopyRequested: (() -> Unit)?,
+        onPasteRequested: (() -> Unit)?,
+        onCutRequested: (() -> Unit)?,
+        onSelectAllRequested: (() -> Unit)?
+    ) {
+        // Disallow paste action in popup context toolbar
+        delegate.showMenu(
+            rect = rect,
+            onCopyRequested = onCopyRequested,
+            onPasteRequested = null,
+            onCutRequested = onCutRequested,
+            onSelectAllRequested = onSelectAllRequested
+        )
+    }
+}
+
+/**
+ * Filters out pasted, drag-and-dropped, or clipboard-inserted text chunks.
+ * Ensures the passphrase can only be typed character-by-character directly from the keyboard.
+ */
+fun filterOutPaste(
+    previousText: String,
+    newText: String,
+    context: Context,
+    onPasteAttemptBlocked: () -> Unit
+): String {
+    // Single-character deletions or bulk deletions are always allowed
+    if (newText.length <= previousText.length) {
+        return newText
+    }
+
+    val addedCount = newText.length - previousText.length
+
+    // Find the exact inserted substring between previousText and newText
+    var prefixLen = 0
+    while (prefixLen < previousText.length && prefixLen < newText.length && previousText[prefixLen] == newText[prefixLen]) {
+        prefixLen++
+    }
+    var suffixLen = 0
+    while (suffixLen < (previousText.length - prefixLen) &&
+        suffixLen < (newText.length - prefixLen) &&
+        previousText[previousText.length - 1 - suffixLen] == newText[newText.length - 1 - suffixLen]
+    ) {
+        suffixLen++
+    }
+    val insertedSubstring = newText.substring(prefixLen, newText.length - suffixLen)
+
+    // Check against system clipboard
+    val clipboard = try {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    } catch (e: Exception) {
+        null
+    }
+    val clipText = clipboard?.primaryClip?.let { clip ->
+        if (clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+    }
+
+    val isClipboardMatch = if (!clipText.isNullOrEmpty() && insertedSubstring.isNotEmpty()) {
+        if (clipText == insertedSubstring || clipText == newText) {
+            true
+        } else if (insertedSubstring.length >= 2 && (clipText.contains(insertedSubstring) || insertedSubstring.contains(clipText))) {
+            true
+        } else {
+            false
+        }
+    } else false
+
+    // Bulk insertion (>3 characters at once) represents paste, drag-and-drop, or autocomplete dump
+    val isBulkInsertion = addedCount > 3
+
+    if (isClipboardMatch || isBulkInsertion) {
+        onPasteAttemptBlocked()
+        return previousText // Discard paste
+    }
+
+    return newText
+}
+
 @Composable
 fun CheatProtectionAuthDialog(
     action: PendingLooseningAction,
     onVerify: suspend (String) -> Boolean,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var inputPassphrase by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var pasteBlockedNotice by remember { mutableStateOf<String?>(null) }
     var isVerifying by remember { mutableStateOf(false) }
+
+    val textToolbar = LocalTextToolbar.current
+    val noPasteToolbar = remember(textToolbar) { NoPasteTextToolbar(textToolbar) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -112,27 +226,49 @@ fun CheatProtectionAuthDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "Type or paste your 600–1000 character passphrase:",
+                    text = "Type your 600–1,000 character passphrase (copy-paste is disabled):",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                OutlinedTextField(
-                    value = inputPassphrase,
-                    onValueChange = {
-                        inputPassphrase = it
-                        errorMessage = null
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 120.dp, max = 180.dp)
-                        .testTag("cheat_protection_input"),
-                    placeholder = { Text("Enter full passphrase...") },
-                    shape = RoundedCornerShape(12.dp),
-                    isError = errorMessage != null
-                )
+                CompositionLocalProvider(LocalTextToolbar provides noPasteToolbar) {
+                    OutlinedTextField(
+                        value = inputPassphrase,
+                        onValueChange = { incoming ->
+                            val filtered = filterOutPaste(
+                                previousText = inputPassphrase,
+                                newText = incoming,
+                                context = context,
+                                onPasteAttemptBlocked = {
+                                    pasteBlockedNotice = "Copy-paste is disabled. Passphrase must be typed manually."
+                                }
+                            )
+                            if (filtered != inputPassphrase) {
+                                pasteBlockedNotice = null
+                            }
+                            inputPassphrase = filtered
+                            errorMessage = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 120.dp, max = 180.dp)
+                            .testTag("cheat_protection_input")
+                            .onPreviewKeyEvent { keyEvent ->
+                                if (keyEvent.type == KeyEventType.KeyDown) {
+                                    val isCtrlOrMeta = keyEvent.isCtrlPressed || keyEvent.isMetaPressed
+                                    if (isCtrlOrMeta && (keyEvent.key == Key.V || keyEvent.utf16CodePoint == 'v'.code || keyEvent.utf16CodePoint == 'V'.code)) {
+                                        pasteBlockedNotice = "Copy-paste (Ctrl+V) is disabled. Passphrase must be typed manually."
+                                        true
+                                    } else false
+                                } else false
+                            },
+                        placeholder = { Text("Type full passphrase manually...") },
+                        shape = RoundedCornerShape(12.dp),
+                        isError = errorMessage != null
+                    )
+                }
 
                 Row(
                     modifier = Modifier
@@ -144,6 +280,16 @@ fun CheatProtectionAuthDialog(
                         text = "${inputPassphrase.length} characters entered",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (pasteBlockedNotice != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = pasteBlockedNotice ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
@@ -187,7 +333,6 @@ fun CheatProtectionAuthDialog(
                                 val matches = onVerify(inputPassphrase)
                                 isVerifying = false
                                 if (matches) {
-                                    // Authorizes ONLY this single action, zero persistence
                                     action.onAuthorized()
                                     onDismiss()
                                 } else {
@@ -219,7 +364,7 @@ private fun BoxIcon() {
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.errorContainer
     ) {
-        androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+        Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = Icons.Default.Lock,
                 contentDescription = null,
@@ -235,13 +380,16 @@ fun CheatProtectionSetupDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     var passphrase by remember { mutableStateOf("") }
-    var confirmPassphrase by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var pasteBlockedNotice by remember { mutableStateOf<String?>(null) }
 
     val length = passphrase.length
     val isLengthValid = length in 600..1000
-    val matchesConfirm = passphrase == confirmPassphrase
+
+    val textToolbar = LocalTextToolbar.current
+    val noPasteToolbar = remember(textToolbar) { NoPasteTextToolbar(textToolbar) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -263,7 +411,7 @@ fun CheatProtectionSetupDialog(
                         shape = RoundedCornerShape(10.dp),
                         color = MaterialTheme.colorScheme.primaryContainer
                     ) {
-                        androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+                        Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
                                 contentDescription = null,
@@ -291,33 +439,55 @@ fun CheatProtectionSetupDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "Any loosening of rules will require typing this exact passphrase. It can contain letters, numbers, punctuation, spaces, or paragraphs.",
+                    text = "Any loosening of rules will require typing this exact passphrase. It can contain letters, numbers, punctuation, spaces, or paragraphs. Copy-paste is disabled.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedTextField(
-                    value = passphrase,
-                    onValueChange = {
-                        passphrase = it
-                        errorMessage = null
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 100.dp, max = 150.dp)
-                        .testTag("cheat_setup_passphrase_input"),
-                    placeholder = { Text("Enter passphrase (min 600 chars)...") },
-                    shape = RoundedCornerShape(12.dp),
-                    isError = length > 0 && !isLengthValid
-                )
+                CompositionLocalProvider(LocalTextToolbar provides noPasteToolbar) {
+                    OutlinedTextField(
+                        value = passphrase,
+                        onValueChange = { incoming ->
+                            val filtered = filterOutPaste(
+                                previousText = passphrase,
+                                newText = incoming,
+                                context = context,
+                                onPasteAttemptBlocked = {
+                                    pasteBlockedNotice = "Copy-paste is disabled. Passphrase must be typed manually."
+                                }
+                            )
+                            if (filtered != passphrase) {
+                                pasteBlockedNotice = null
+                            }
+                            passphrase = filtered
+                            errorMessage = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 140.dp, max = 200.dp)
+                            .testTag("cheat_setup_passphrase_input")
+                            .onPreviewKeyEvent { keyEvent ->
+                                if (keyEvent.type == KeyEventType.KeyDown) {
+                                    val isCtrlOrMeta = keyEvent.isCtrlPressed || keyEvent.isMetaPressed
+                                    if (isCtrlOrMeta && (keyEvent.key == Key.V || keyEvent.utf16CodePoint == 'v'.code || keyEvent.utf16CodePoint == 'V'.code)) {
+                                        pasteBlockedNotice = "Copy-paste (Ctrl+V) is disabled. Passphrase must be typed manually."
+                                        true
+                                    } else false
+                                } else false
+                            },
+                        placeholder = { Text("Type passphrase manually (min 600 chars)...") },
+                        shape = RoundedCornerShape(12.dp),
+                        isError = length > 0 && !isLengthValid
+                    )
+                }
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -337,29 +507,13 @@ fun CheatProtectionSetupDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                OutlinedTextField(
-                    value = confirmPassphrase,
-                    onValueChange = {
-                        confirmPassphrase = it
-                        errorMessage = null
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 90.dp, max = 130.dp)
-                        .testTag("cheat_setup_confirm_input"),
-                    placeholder = { Text("Confirm exact passphrase...") },
-                    shape = RoundedCornerShape(12.dp),
-                    isError = confirmPassphrase.isNotEmpty() && !matchesConfirm
-                )
-
-                if (confirmPassphrase.isNotEmpty() && !matchesConfirm) {
+                if (pasteBlockedNotice != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Passphrases do not match",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = pasteBlockedNotice ?: "",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 4.dp)
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
@@ -396,13 +550,9 @@ fun CheatProtectionSetupDialog(
                                 errorMessage = "Passphrase must be between 600 and 1,000 characters."
                                 return@Button
                             }
-                            if (!matchesConfirm) {
-                                errorMessage = "Passphrases do not match."
-                                return@Button
-                            }
                             onConfirm(passphrase)
                         },
-                        enabled = isLengthValid && matchesConfirm,
+                        enabled = isLengthValid,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("cheat_setup_save_button"),

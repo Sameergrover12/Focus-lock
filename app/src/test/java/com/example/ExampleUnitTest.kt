@@ -65,6 +65,31 @@ class ExampleUnitTest {
         val matchingCase = listOf("Warning: SpoilerAlert ahead!")
         val hit3 = ContentScanner.matchBlockedKeyword(matchingCase, blockedKeywords)
         assertEquals("SpoilerAlert", hit3?.keyword)
+
+        // Split across inline nodes / spans in a feed
+        val multiWordRule = listOf(
+            BlockedKeyword(keyword = "breaking spoiler", caseSensitive = false)
+        )
+        val splitFeedItems = listOf("This is a breaking", "spoiler alert post")
+        val hit4 = ContentScanner.matchBlockedKeyword(splitFeedItems, multiWordRule)
+        assertNotNull(hit4)
+        assertEquals("breaking spoiler", hit4?.keyword)
+    }
+
+    @Test
+    fun testContentScannerWebsiteInTextsMatching() {
+        val blockedWebsites = listOf(
+            BlockedWebsite(domainOrUrl = "reddit.com")
+        )
+        val texts1 = listOf("Popular on reddit.com today", "Comments (20)")
+        assertNotNull(ContentScanner.matchBlockedWebsiteInTexts(texts1, blockedWebsites))
+
+        // Split domain across adjacent text nodes
+        val texts2 = listOf("Visit", "reddit", ".com", "for more")
+        assertNotNull(ContentScanner.matchBlockedWebsiteInTexts(texts2, blockedWebsites))
+
+        val texts3 = listOf("Read on wikipedia.org")
+        assertNull(ContentScanner.matchBlockedWebsiteInTexts(texts3, blockedWebsites))
     }
 
     @Test

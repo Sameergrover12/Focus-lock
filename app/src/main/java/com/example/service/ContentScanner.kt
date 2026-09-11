@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
@@ -95,17 +96,28 @@ object ContentScanner {
                 }
             }
         }
+
+        // Also check joined screen text in case domain was broken into separate nodes/spans
+        val joined = screenTexts.joinToString(" ").lowercase(Locale.ROOT)
+        val joinedNoSpace = screenTexts.joinToString("").lowercase(Locale.ROOT)
+        for ((rule, norm) in normalizedRules) {
+            if (joined.contains(norm) || joinedNoSpace.contains(norm)) {
+                return rule
+            }
+        }
+
         return null
     }
 
     /**
      * Recursively walks the accessibility tree and collects all text nodes.
-     * Limits recursion depth to prevent performance overhead.
+     * Supports deep Compose and RecyclerView hierarchies up to maxDepth (default 35).
      */
-    fun extractAllScreenText(rootNode: AccessibilityNodeInfo?, maxDepth: Int = 12): List<String> {
+    fun extractAllScreenText(rootNode: AccessibilityNodeInfo?, maxDepth: Int = 35): List<String> {
         if (rootNode == null) return emptyList()
         val textList = mutableListOf<String>()
-        collectTextRecursive(rootNode, textList, depth = 0, maxDepth = maxDepth)
+        var visitedNodes = 0
+        collectTextRecursive(rootNode, textList, depth = 0, maxDepth = maxDepth, countSupplier = { visitedNodes++ }, maxNodes = 1000)
         return textList
     }
 
@@ -113,30 +125,74 @@ object ContentScanner {
         node: AccessibilityNodeInfo?,
         result: MutableList<String>,
         depth: Int,
-        maxDepth: Int
+        maxDepth: Int,
+        countSupplier: () -> Int,
+        maxNodes: Int
     ) {
         if (node == null || depth > maxDepth) return
+        if (countSupplier() > maxNodes) return
 
         val text = node.text?.toString()?.trim()
+        val desc = node.contentDescription?.toString()?.trim()
+        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            node.hintText?.toString()?.trim()
+        } else null
+        val tooltip = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            node.tooltipText?.toString()?.trim()
+        } else null
+        val paneTitle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            node.paneTitle?.toString()?.trim()
+        } else null
+        val stateDesc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            node.stateDescription?.toString()?.trim()
+        } else null
+        val errorText = node.error?.toString()?.trim()
+
         if (!text.isNullOrEmpty()) {
             result.add(text)
         }
-        val desc = node.contentDescription?.toString()?.trim()
         if (!desc.isNullOrEmpty() && desc != text) {
             result.add(desc)
         }
+        if (!hint.isNullOrEmpty() && hint != text && hint != desc) {
+            result.add(hint)
+        }
+        if (!tooltip.isNullOrEmpty() && tooltip != text && tooltip != desc) {
+            result.add(tooltip)
+        }
+        if (!paneTitle.isNullOrEmpty() && paneTitle != text) {
+            result.add(paneTitle)
+        }
+        if (!stateDesc.isNullOrEmpty() && stateDesc != text && stateDesc != desc) {
+            result.add(stateDesc)
+        }
+        if (!errorText.isNullOrEmpty()) {
+            result.add(errorText)
+        }
 
-        for (i in 0 until node.childCount) {
+        // When both text and contentDescription exist on the same node, also add their concatenation
+        // to handle feed items where post semantics or titles are partitioned
+        if (!text.isNullOrEmpty() && !desc.isNullOrEmpty() && text != desc) {
+            result.add("$text $desc")
+        }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i)
             if (child != null) {
-                collectTextRecursive(child, result, depth + 1, maxDepth)
-                child.recycle()
+                collectTextRecursive(child, result, depth + 1, maxDepth, countSupplier, maxNodes)
+                try {
+                    child.recycle()
+                } catch (e: Exception) {
+                    // Ignored on newer Android runtimes where recycle is safe/no-op
+                }
             }
         }
     }
 
     /**
      * Checks screen text against list of blocked keywords.
+     * Evaluates individual strings and joined feed texts to capture split spans.
      */
     fun matchBlockedKeyword(screenTexts: List<String>, blockedKeywords: List<BlockedKeyword>): BlockedKeyword? {
         if (screenTexts.isEmpty() || blockedKeywords.isEmpty()) return null
@@ -157,6 +213,24 @@ object ContentScanner {
                 }
             }
         }
+
+        // Also check joined feed text to detect keywords split across adjacent inline spans or Compose text nodes
+        val combinedText = screenTexts.joinToString(" ")
+        for (keywordItem in blockedKeywords) {
+            val targetKeyword = keywordItem.keyword.trim()
+            if (targetKeyword.isEmpty()) continue
+
+            val isMatch = if (keywordItem.caseSensitive) {
+                combinedText.contains(targetKeyword)
+            } else {
+                combinedText.contains(targetKeyword, ignoreCase = true)
+            }
+
+            if (isMatch) {
+                return keywordItem
+            }
+        }
+
         return null
     }
 }

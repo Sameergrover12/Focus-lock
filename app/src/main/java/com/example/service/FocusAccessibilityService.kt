@@ -1,7 +1,9 @@
 package com.example.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -16,17 +18,21 @@ import com.example.data.repository.FocusRepository
 import com.example.ui.blocked.BlockedActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
 class FocusAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var periodicScanJob: Job? = null
 
     // Local cached in-memory rules for fast checks
     @Volatile private var blockedAppsCache = listOf<BlockedApp>()
@@ -40,8 +46,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private var lastBlockedTime = 0L
     private var lastBlockedPackage: String? = null
-    private var lastUrlScanTime = 0L
-    private var lastKeywordScanTime = 0L
+    private var lastScanTime = 0L
     private var lastEvaluatedPackage: String? = null
 
     companion object {
@@ -64,6 +69,9 @@ class FocusAccessibilityService : AccessibilityService() {
         // Start listening to database changes to maintain warm memory caches
         observeDatabaseRules()
 
+        // Start lightweight periodic rescan backstop for feed-style apps and coalesced events
+        startPeriodicContentScanner()
+
         // Also ensure foreground service is running
         FocusForegroundService.startService(applicationContext)
     }
@@ -74,8 +82,38 @@ class FocusAccessibilityService : AccessibilityService() {
         currentForegroundPackage = null
         lastEvaluatedPackage = null
         FocusForegroundService.onForegroundPackageChanged(null)
+        periodicScanJob?.cancel()
         serviceScope.cancel()
         Log.d(TAG, "FocusAccessibilityService destroyed")
+    }
+
+    private fun startPeriodicContentScanner() {
+        periodicScanJob?.cancel()
+        periodicScanJob = serviceScope.launch(Dispatchers.Default) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            while (isActive) {
+                delay(350) // Roughly 300–500ms lightweight periodic rescan
+
+                if (!isMasterEnabled) continue
+
+                // Pauses immediately when screen is off
+                val isInteractive = powerManager?.isInteractive ?: true
+                if (!isInteractive) continue
+
+                val currentPkg = currentForegroundPackage
+                // Pauses immediately when Focus Lock itself is foreground or system overlay
+                if (currentPkg.isNullOrEmpty() || currentPkg == packageName || isSystemOverlay(currentPkg)) {
+                    continue
+                }
+
+                // Run only when active website or keyword rules exist
+                if (blockedWebsitesCache.isEmpty() && blockedKeywordsCache.isEmpty()) {
+                    continue
+                }
+
+                scanContentOnScreen(currentPkg)
+            }
+        }
     }
 
     private fun observeDatabaseRules() {
@@ -176,21 +214,18 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // 5. Website scanning and keyword scanning across foreground app
+        // Triggered on window transitions, content updates, scrolls (e.g. Reddit feeds), and focus shifts
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED
         ) {
             val now = SystemClock.uptimeMillis()
-
-            // Website scanning across ANY foreground app
-            if (blockedWebsitesCache.isNotEmpty() && (now - lastUrlScanTime > 350)) {
-                lastUrlScanTime = now
-                checkWebsiteOnScreen(detectedPkg)
-            }
-
-            // Keyword scanning across ANY foreground app
-            if (blockedKeywordsCache.isNotEmpty() && (now - lastKeywordScanTime > 500)) {
-                lastKeywordScanTime = now
-                checkKeywordsOnScreen(detectedPkg)
+            if (now - lastScanTime > 250) {
+                lastScanTime = now
+                serviceScope.launch(Dispatchers.Default) {
+                    scanContentOnScreen(detectedPkg)
+                }
             }
         }
     }
@@ -272,20 +307,45 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun checkWebsiteOnScreen(pkgName: String) {
+    private fun scanContentOnScreen(pkgName: String) {
         if (pkgName == packageName) return
-        val root = rootInActiveWindow ?: return
+        val root = try {
+            rootInActiveWindow
+        } catch (e: Exception) {
+            null
+        } ?: return
+
         if (root.packageName?.toString() == packageName) return
 
         try {
             // Fast-path: Check recognized browser address bar
-            val urlBarText = ContentScanner.extractBrowserUrl(root, pkgName)
-            if (urlBarText != null) {
-                val matched = ContentScanner.matchBlockedWebsiteInTexts(listOf(urlBarText), blockedWebsitesCache)
-                if (matched != null) {
+            if (blockedWebsitesCache.isNotEmpty()) {
+                val urlBarText = ContentScanner.extractBrowserUrl(root, pkgName)
+                if (urlBarText != null) {
+                    val matched = ContentScanner.matchBlockedWebsiteInTexts(listOf(urlBarText), blockedWebsitesCache)
+                    if (matched != null) {
+                        executeBlock(
+                            pkgName = pkgName,
+                            title = matched.domainOrUrl,
+                            reason = "This website is in your blocked websites list.",
+                            type = BlockedActivity.TYPE_WEBSITE
+                        )
+                        return
+                    }
+                }
+            }
+
+            // Full deep text scan across active window (reaches deep Compose feeds up to depth 35)
+            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 35)
+            if (allTexts.isEmpty()) return
+
+            // 1. Check blocked websites in text content
+            if (blockedWebsitesCache.isNotEmpty()) {
+                val matchedWebsite = ContentScanner.matchBlockedWebsiteInTexts(allTexts, blockedWebsitesCache)
+                if (matchedWebsite != null) {
                     executeBlock(
                         pkgName = pkgName,
-                        title = matched.domainOrUrl,
+                        title = matchedWebsite.domainOrUrl,
                         reason = "This website is in your blocked websites list.",
                         type = BlockedActivity.TYPE_WEBSITE
                     )
@@ -293,40 +353,21 @@ class FocusAccessibilityService : AccessibilityService() {
                 }
             }
 
-            // Guaranteed fallback: Full-text scan across ANY foreground app
-            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 12)
-            val matchedInContent = ContentScanner.matchBlockedWebsiteInTexts(allTexts, blockedWebsitesCache)
-            if (matchedInContent != null) {
-                executeBlock(
-                    pkgName = pkgName,
-                    title = matchedInContent.domainOrUrl,
-                    reason = "This website is in your blocked websites list.",
-                    type = BlockedActivity.TYPE_WEBSITE
-                )
+            // 2. Check blocked keywords in text content (e.g. Reddit feeds, social apps, news apps)
+            if (blockedKeywordsCache.isNotEmpty()) {
+                val matchedKeyword = ContentScanner.matchBlockedKeyword(allTexts, blockedKeywordsCache)
+                if (matchedKeyword != null) {
+                    executeBlock(
+                        pkgName = pkgName,
+                        title = "\"${matchedKeyword.keyword}\"",
+                        reason = "This screen contains a blocked keyword phrase.",
+                        type = BlockedActivity.TYPE_KEYWORD
+                    )
+                    return
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking website on screen", e)
-        }
-    }
-
-    private fun checkKeywordsOnScreen(pkgName: String) {
-        if (pkgName == packageName) return
-        val root = rootInActiveWindow ?: return
-        if (root.packageName?.toString() == packageName) return
-
-        try {
-            val allTexts = ContentScanner.extractAllScreenText(root, maxDepth = 12)
-            val matchedKeyword = ContentScanner.matchBlockedKeyword(allTexts, blockedKeywordsCache)
-            if (matchedKeyword != null) {
-                executeBlock(
-                    pkgName = pkgName,
-                    title = "\"${matchedKeyword.keyword}\"",
-                    reason = "This screen contains a blocked keyword phrase.",
-                    type = BlockedActivity.TYPE_KEYWORD
-                )
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking keywords on screen", e)
+            Log.e(TAG, "Error scanning content on screen", e)
         }
     }
 
@@ -337,29 +378,36 @@ class FocusAccessibilityService : AccessibilityService() {
         type: String,
         nextWindow: String? = null
     ) {
-        if (pkgName == packageName) return
+        serviceScope.launch(Dispatchers.Main) {
+            if (pkgName == packageName) return@launch
 
-        lastBlockedTime = SystemClock.uptimeMillis()
-        lastBlockedPackage = pkgName
-
-        // 1. Perform back action to leave whatever content triggered the block
-        performGlobalAction(GLOBAL_ACTION_BACK)
-
-        // 2. Launch full-screen 3-second black interstitial (Change 5)
-        try {
-            val intent = Intent(this, BlockedActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra(BlockedActivity.EXTRA_TITLE, title)
-                putExtra(BlockedActivity.EXTRA_REASON, reason)
-                putExtra(BlockedActivity.EXTRA_TYPE, type)
-                putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
-                putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+            val now = SystemClock.uptimeMillis()
+            if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1500) {
+                return@launch
             }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch BlockedActivity", e)
+
+            lastBlockedTime = now
+            lastBlockedPackage = pkgName
+
+            // 1. Perform back action to leave whatever content triggered the block
+            performGlobalAction(GLOBAL_ACTION_BACK)
+
+            // 2. Launch full-screen 3-second black interstitial (Change 5)
+            try {
+                val intent = Intent(this@FocusAccessibilityService, BlockedActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra(BlockedActivity.EXTRA_TITLE, title)
+                    putExtra(BlockedActivity.EXTRA_REASON, reason)
+                    putExtra(BlockedActivity.EXTRA_TYPE, type)
+                    putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
+                    putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch BlockedActivity", e)
+            }
         }
     }
 

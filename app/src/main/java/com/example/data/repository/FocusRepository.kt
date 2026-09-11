@@ -146,13 +146,14 @@ class FocusRepository(private val focusDao: FocusDao) {
         focusDao.getUsageLogsForDateSync(date)
 
     /**
-     * Today's Tracked Usage: derived as the sum of individual per-app tracked times for today.
+     * Today's Total Screen Time: returns the absolute physical device screen-on time for today.
      * Guaranteed never to exceed the elapsed minutes since midnight.
+     * Immune to multi-window, split-screen, or floating-window multiplication.
      */
     fun getTotalMinutesUsedToday(): Flow<Int> =
-        focusDao.getTotalMinutesUsedForDate(getTodayDateString()).map { sumOfApps ->
+        focusDao.getScreenOnMinutesForDate(getTodayDateString()).map { screenOn ->
             val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
-            (sumOfApps ?: 0).coerceIn(0, maxAllowed)
+            (screenOn ?: 0).coerceIn(0, maxAllowed)
         }
 
     fun getDeviceScreenOnMinutesToday(): Flow<Int> =
@@ -303,20 +304,14 @@ class FocusRepository(private val focusDao: FocusDao) {
                 for ((pkg, totalForegroundMillis) in aggregatedMap) {
                     if (pkg == context.packageName || isSystemOverlay(pkg)) continue
 
-                    // Live focus-tracked numbers take priority while Focus Lock is actively observing.
-                    // The periodic UsageStatsManager sync must NOT overwrite or add to periods covered by live tracking.
-                    if (isPackageLiveTracked(pkg)) {
-                        continue
-                    }
-
                     val existingLog = existingLogs[pkg]
                     val existingMinutes = existingLog?.minutesUsed ?: 0
                     val osMinutes = ((totalForegroundMillis / 60000L).toInt()).coerceIn(0, maxAllowed)
 
                     if (osMinutes <= 0 && existingMinutes <= 0) continue
 
-                    // Absolute idempotent overwrite with OS-reported minutes
-                    val finalMinutes = osMinutes
+                    // Authoritative individual app time from UsageStatsManager (already handles overlapping windows)
+                    val finalMinutes = maxOf(osMinutes, existingMinutes).coerceIn(0, maxAllowed)
 
                     var appName = existingLog?.appName ?: ""
                     var iconBase64 = existingLog?.iconBase64
@@ -340,7 +335,7 @@ class FocusRepository(private val focusDao: FocusDao) {
 
                     android.util.Log.d(
                         "FocusUsageTracker",
-                        "[SYNC] $pkg before: ${existingMinutes}m -> overwriting with OS absolute: ${finalMinutes}m"
+                        "[SYNC] $pkg before: ${existingMinutes}m -> UsageStatsManager: ${osMinutes}m (resolved: ${finalMinutes}m)"
                     )
 
                     focusDao.insertOrUpdateDailyUsageLog(
@@ -354,6 +349,7 @@ class FocusRepository(private val focusDao: FocusDao) {
                     )
 
                     focusDao.updateScreenTimeUsage(pkg, finalMinutes, todayDate)
+                    com.example.service.FocusForegroundService.updateBaselineForPackage(pkg, finalMinutes)
 
                     val confirmed = focusDao.getUsageLog(pkg, todayDate)?.minutesUsed
                     android.util.Log.d(

@@ -239,12 +239,9 @@ fun DashboardScreen(
             }
         }
 
-        // Today's Usage Overview Card
+        // Today's Usage Overview Card (Total Device Screen Time)
         item {
-            // "Today's Tracked Usage" is the straightforward sum of every individual app's time for the day
-            val totalMins = remember(todayUsageLogs) {
-                todayUsageLogs.sumOf { it.minutesUsed }
-            }
+            val totalMins = totalMinutesToday ?: 0
             val hours = totalMins / 60
             val mins = totalMins % 60
             val timeString = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
@@ -262,7 +259,7 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Today's Tracked Usage",
+                            text = "Total Screen Time",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Medium
@@ -287,7 +284,7 @@ fun DashboardScreen(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "Sum of individual app usage today. Resets automatically at midnight.",
+                        text = "Physical screen-on time today. Resets automatically at midnight.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

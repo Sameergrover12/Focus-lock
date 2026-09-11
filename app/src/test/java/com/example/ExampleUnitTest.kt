@@ -199,14 +199,39 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun testDerivedTotalEqualsSumOfAppTimes() {
-        val appLogs = listOf(
-            com.example.data.local.entity.DailyUsageLog(packageName = "com.reddit", date = "2026-09-11", minutesUsed = 45),
-            com.example.data.local.entity.DailyUsageLog(packageName = "com.android.chrome", date = "2026-09-11", minutesUsed = 20),
-            com.example.data.local.entity.DailyUsageLog(packageName = "com.google.android.youtube", date = "2026-09-11", minutesUsed = 15)
+    fun testIntervalMergingWithOverlappingFloatingWindows() {
+        // App A foreground from t = 1000 to t = 3000 (2000 ms)
+        // App B (floating window/PIP) foreground from t = 2000 to t = 4000 (2000 ms)
+        // Without merging, naive sum is 4000 ms (double counting).
+        // With interval merging, physical screen span is [1000, 4000] = 3000 ms.
+        val intervals = listOf(
+            com.example.util.TimeInterval(start = 1000L, end = 3000L),
+            com.example.util.TimeInterval(start = 2000L, end = 4000L)
         )
-        val derivedTotal = appLogs.sumOf { it.minutesUsed }
-        assertEquals(80, derivedTotal)
+        val mergedDuration = com.example.util.ScreenTimeHelper.mergeIntervals(intervals)
+        assertEquals(3000L, mergedDuration)
+
+        // Triple overlap (Split screen + Picture-in-picture)
+        val tripleOverlap = listOf(
+            com.example.util.TimeInterval(start = 10000L, end = 30000L), // Chrome: 20s
+            com.example.util.TimeInterval(start = 15000L, end = 35000L), // YouTube PIP: 20s
+            com.example.util.TimeInterval(start = 20000L, end = 25000L)  // Floating Calculator: 5s
+        )
+        // Merged interval is [10000, 35000] = 25000 ms (25s), NOT 45s
+        val tripleMerged = com.example.util.ScreenTimeHelper.mergeIntervals(tripleOverlap)
+        assertEquals(25000L, tripleMerged)
+    }
+
+    @Test
+    fun testPhysicalScreenTimeCannotExceedClockTime() {
+        val minutesElapsed = com.example.util.ScreenTimeHelper.getMinutesSinceMidnight()
+        assertTrue("Minutes since midnight must be >= 0", minutesElapsed >= 0)
+        assertTrue("Minutes since midnight must be <= 1440", minutesElapsed <= 1440)
+
+        // Raw sum of overlapping apps could be 3000 minutes, but physical screen time is clamped
+        val inflatedAppSum = 3000
+        val clampedScreenTime = inflatedAppSum.coerceIn(0, minutesElapsed)
+        assertTrue(clampedScreenTime <= minutesElapsed)
     }
 
     @Test

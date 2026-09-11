@@ -72,12 +72,20 @@ class FocusAccessibilityService : AccessibilityService() {
         val isServiceRunning = _isServiceRunning.asStateFlow()
 
         @Volatile
+        private var instance: FocusAccessibilityService? = null
+
+        @Volatile
         var currentForegroundPackage: String? = null
             private set
+
+        fun getActiveFocusedPackage(): String? {
+            return instance?.getCurrentlyFocusedPackage() ?: currentForegroundPackage
+        }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         _isServiceRunning.value = true
         currentForegroundPackage = null
         lastEvaluatedPackage = null
@@ -95,6 +103,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         _isServiceRunning.value = false
         currentForegroundPackage = null
         lastEvaluatedPackage = null
@@ -224,7 +233,7 @@ class FocusAccessibilityService : AccessibilityService() {
      * In split-screen and floating-window multitasking, ONLY the window with input focus
      * has its usage time accrued.
      */
-    private fun getCurrentlyFocusedPackage(): String? {
+    fun getCurrentlyFocusedPackage(): String? {
         try {
             val windowList = windows
             if (!windowList.isNullOrEmpty()) {
@@ -353,12 +362,11 @@ class FocusAccessibilityService : AccessibilityService() {
         // so the timer hands off correctly as input moves between apps, while
         // unfocused apps (e.g. video playback in floating window) do not steal focus.
         // =========================================================================
-        val focusedPkg = getCurrentlyFocusedPackage() ?: when {
-            (eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
-             eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-             eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) &&
-             !eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) -> eventPkg
-            else -> currentForegroundPackage // Maintain current focused app; background content changes do not steal focus
+        val focusedPkg = getCurrentlyFocusedPackage() ?: when (eventType) {
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                if (!eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg)) eventPkg else currentForegroundPackage
+            }
+            else -> currentForegroundPackage // Unfocused floating windows or background state changes NEVER steal focus
         }
 
         if (!focusedPkg.isNullOrEmpty()) {

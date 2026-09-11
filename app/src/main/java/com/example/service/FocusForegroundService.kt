@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -58,10 +59,17 @@ class FocusForegroundService : Service() {
         const val WARNING_NOTIFICATION_ID_BASE = 2000
 
         @Volatile
+        private var instance: FocusForegroundService? = null
+
+        @Volatile
         private var activeForegroundPackage: String? = null
 
         fun onForegroundPackageChanged(packageName: String?) {
             activeForegroundPackage = packageName
+        }
+
+        fun updateBaselineForPackage(packageName: String, minutes: Int) {
+            instance?.updatePackageBaseline(packageName, minutes)
         }
 
         fun startService(context: Context) {
@@ -81,6 +89,7 @@ class FocusForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         Log.d(TAG, "FocusForegroundService created")
         startInForeground()
 
@@ -115,6 +124,7 @@ class FocusForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         try {
             screenStateReceiver?.let { unregisterReceiver(it) }
         } catch (e: Exception) {
@@ -123,6 +133,12 @@ class FocusForegroundService : Service() {
         trackingJob?.cancel()
         serviceScope.cancel()
         Log.d(TAG, "FocusForegroundService destroyed")
+    }
+
+    fun updatePackageBaseline(packageName: String, minutes: Int) {
+        packageBaselineMinutesToday[packageName] = minutes
+        packageLiveSecondsToday[packageName] = 0
+        packageLastWrittenMinutes[packageName] = minutes
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -183,9 +199,12 @@ class FocusForegroundService : Service() {
                     }
                 }
 
-                // Check screen interactive state (do not log usage when screen is off)
+                // Check screen interactive state and unlocked state (do not log usage when screen is off or device is locked)
                 val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
-                if (powerManager != null && !powerManager.isInteractive) {
+                val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                val isInteractive = powerManager?.isInteractive ?: false
+                val isLocked = keyguardManager?.isKeyguardLocked ?: false
+                if (!isInteractive || isLocked) {
                     continue
                 }
 
@@ -201,9 +220,9 @@ class FocusForegroundService : Service() {
     }
 
     private fun detectCurrentForegroundPackage(): String? {
-        // If accessibility service is running, it is the primary live source
+        // If accessibility service is running, it is the primary live source for active window focus
         if (FocusAccessibilityService.isServiceRunning.value) {
-            val fromAccessibility = FocusAccessibilityService.currentForegroundPackage ?: activeForegroundPackage
+            val fromAccessibility = FocusAccessibilityService.getActiveFocusedPackage() ?: activeForegroundPackage
             if (!fromAccessibility.isNullOrEmpty()) {
                 return fromAccessibility
             }

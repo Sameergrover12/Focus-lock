@@ -292,8 +292,7 @@ class FocusForegroundService : Service() {
         }
 
         screenOnLiveSeconds += secondsToAdd
-        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
-        val totalScreenOn = (screenOnBaselineMinutes + (screenOnLiveSeconds / 60)).coerceIn(0, maxAllowed)
+        val totalScreenOn = screenOnBaselineMinutes + (screenOnLiveSeconds / 60)
 
         if (totalScreenOn > screenOnLastWrittenMinutes) {
             repo.updateDeviceScreenOnTime(totalScreenOn)
@@ -340,10 +339,7 @@ class FocusForegroundService : Service() {
     }
 
     private fun isSystemOverlay(pkg: String): Boolean {
-        return pkg == "com.android.systemui" ||
-               pkg.contains("inputmethod") ||
-               pkg.contains(".ime") ||
-               pkg == "android"
+        return ScreenTimeHelper.isIgnoredSystemPackage(pkg, this)
     }
 
     private suspend fun accumulateForegroundUsage(pkgName: String, secondsToAdd: Int) {
@@ -373,8 +369,7 @@ class FocusForegroundService : Service() {
         // 4. Calculate total minutes as of now (absolute, never additive on stored DB value)
         val baseline = packageBaselineMinutesToday[pkgName] ?: 0
         val accruedMinutes = currentLiveSec / 60
-        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
-        val totalMinutes = (baseline + accruedMinutes).coerceIn(0, maxAllowed)
+        val totalMinutes = baseline + accruedMinutes
 
         val lastWritten = packageLastWrittenMinutes[pkgName] ?: baseline
         if (totalMinutes > lastWritten) {

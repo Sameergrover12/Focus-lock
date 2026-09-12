@@ -158,6 +158,12 @@ interface FocusDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateDailyUsageLog(log: DailyUsageLog)
 
+    @Query("DELETE FROM daily_usage_logs WHERE packageName = :packageName AND date = :date")
+    suspend fun deleteUsageLog(packageName: String, date: String)
+
+    @Query("DELETE FROM daily_usage_logs WHERE date = :date")
+    suspend fun deleteUsageLogsForDate(date: String)
+
     @Query("SELECT SUM(minutesUsed) FROM daily_usage_logs WHERE date = :date")
     fun getTotalMinutesUsedForDate(date: String): Flow<Int?>
 

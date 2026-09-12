@@ -310,4 +310,21 @@ class ExampleUnitTest {
 
         assertEquals("Session crossing midnight only contributes 16 minutes to today", 16, minutesToday)
     }
+
+    @Test
+    fun testTrueScreenTimeFromResumedAndPausedEvents() {
+        // App A resumed at 10:00 (600,000 ms), paused at 10:15 (900,000 ms)
+        // App B resumed at 10:11 (660,000 ms), paused at 10:20 (1,200,000 ms) (overlaps with App A -> [600,000, 1,200,000] = 10 mins)
+        // App C resumed at 11:00 (3,600,000 ms), paused at 11:30 (5,400,000 ms) -> 30 mins
+        val intervals = listOf(
+            com.example.util.TimeInterval(600_000L, 900_000L),
+            com.example.util.TimeInterval(660_000L, 1_200_000L),
+            com.example.util.TimeInterval(3_600_000L, 5_400_000L)
+        )
+        val mergedMillis = com.example.util.ScreenTimeHelper.mergeIntervals(intervals)
+        val screenTimeMinutes = (mergedMillis / 60000L).toInt()
+
+        // [10:00, 10:20] = 10 mins; [11:00, 11:30] = 30 mins. Total = 40 mins.
+        assertEquals(40, screenTimeMinutes)
+    }
 }

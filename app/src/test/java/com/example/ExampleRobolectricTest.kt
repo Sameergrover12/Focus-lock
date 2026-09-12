@@ -18,4 +18,16 @@ class ExampleRobolectricTest {
     val appName = context.getString(R.string.app_name)
     assertEquals("Focus Lock", appName)
   }
+
+  @Test
+  fun `verify system packages are filtered`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("com.google.android.permissioncontroller", context))
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("com.android.launcher", context))
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("com.android.launcher3", context))
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("com.android.systemui", context))
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("android", context))
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("com.google.android.inputmethod.latin", context))
+    org.junit.Assert.assertTrue(com.example.util.ScreenTimeHelper.isIgnoredSystemPackage("com.example", context))
+  }
 }

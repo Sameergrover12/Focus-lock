@@ -1,9 +1,9 @@
 package com.example.util
 
-import android.app.KeyguardManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.Intent
 import android.os.PowerManager
 import android.util.Log
 import java.time.LocalDate
@@ -48,8 +48,6 @@ object ScreenTimeHelper {
 
     /**
      * Calculates elapsed minutes since 00:00:00.000 local time today.
-     * Guaranteed never to be negative and never to exceed elapsed minutes in the current day.
-     * Acts as the physical clock ceiling for any screen time measurement today.
      */
     fun getMinutesSinceMidnight(zoneId: ZoneId = getLocalZoneId()): Int {
         val startOfDay = getStartOfDayMillis(zoneId)
@@ -60,8 +58,6 @@ object ScreenTimeHelper {
 
     /**
      * Merges overlapping or adjacent time intervals and returns the total non-overlapping duration in milliseconds.
-     * For example, if App A was foreground [10:00, 10:30] and App B was foreground in split-screen/floating
-     * window [10:15, 10:45], the merged interval is [10:00, 10:45] (45 minutes total, NOT 60).
      */
     fun mergeIntervals(intervals: List<TimeInterval>): Long {
         if (intervals.isEmpty()) return 0L
@@ -89,13 +85,10 @@ object ScreenTimeHelper {
     }
 
     /**
-     * Calculates total device screen time for today by:
-     * 1. Tracking absolute screen ON and UNLOCKED intervals (using SCREEN_INTERACTIVE, SCREEN_NON_INTERACTIVE,
-     *    KEYGUARD_HIDDEN, KEYGUARD_SHOWN).
-     * 2. Merging overlapping foreground events across all applications (immune to floating windows, PIP,
-     *    and multi-window double counting).
-     * 3. Strictly ignoring any data and events that occurred before 00:00:00.000 local time today.
-     * Guaranteed never to exceed elapsed minutes since local midnight.
+     * Total Screen Time: Calculates the true screen time by querying UsageEvents
+     * and calculating the time between ACTIVITY_RESUMED and ACTIVITY_PAUSED events
+     * across the device, properly merging overlapping times.
+     * Does not do manual math against midnight.
      */
     fun queryDeviceScreenOnMinutes(context: Context): Int? {
         if (!PermissionHelper.isUsageStatsPermissionGranted(context)) {
@@ -111,119 +104,57 @@ object ScreenTimeHelper {
 
             val events = usageStatsManager.queryEvents(startOfToday, now) ?: return null
 
-            val screenUnlockedIntervals = mutableListOf<TimeInterval>()
             val foregroundIntervals = mutableListOf<TimeInterval>()
-
-            // Track state for absolute screen on + unlocked intervals
-            var isScreenOn = false
-            var isKeyguardLocked = false
-            var currentUnlockedScreenStart: Long? = null
-
-            // Track state for foreground sessions per package (to merge overlapping windows)
             val openForegroundSessions = mutableMapOf<String, Long>()
-
             val event = UsageEvents.Event()
 
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 val time = event.timeStamp
-                // Strictly ignore events before 00:00:00.000 local time today
                 if (time < startOfToday || time > now) continue
+                val pkg = event.packageName
+                if (pkg.isNullOrEmpty()) continue
 
                 when (event.eventType) {
-                    // Screen Interactive / Non-Interactive (Events 15 & 16)
-                    UsageEvents.Event.SCREEN_INTERACTIVE -> {
-                        isScreenOn = true
-                        if (!isKeyguardLocked && currentUnlockedScreenStart == null) {
-                            currentUnlockedScreenStart = time
-                        }
-                    }
-                    UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
-                        isScreenOn = false
-                        val effectiveStart = currentUnlockedScreenStart ?: startOfToday
-                        if (time > effectiveStart) {
-                            screenUnlockedIntervals.add(TimeInterval(maxOf(effectiveStart, startOfToday), time))
-                        }
-                        currentUnlockedScreenStart = null
-                    }
-                    // Keyguard Hidden / Shown (Events 17 & 18)
-                    UsageEvents.Event.KEYGUARD_HIDDEN -> {
-                        isKeyguardLocked = false
-                        if (isScreenOn && currentUnlockedScreenStart == null) {
-                            currentUnlockedScreenStart = time
-                        }
-                    }
-                    UsageEvents.Event.KEYGUARD_SHOWN -> {
-                        isKeyguardLocked = true
-                        val effectiveStart = currentUnlockedScreenStart ?: startOfToday
-                        if (time > effectiveStart) {
-                            screenUnlockedIntervals.add(TimeInterval(maxOf(effectiveStart, startOfToday), time))
-                        }
-                        currentUnlockedScreenStart = null
-                    }
-                    // Foreground Activity Events (Activity resumed, paused, stopped)
                     UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        val pkg = event.packageName
-                        if (!pkg.isNullOrEmpty() && !openForegroundSessions.containsKey(pkg)) {
-                            openForegroundSessions[pkg] = time
-                        }
+                        openForegroundSessions[pkg] = time
                     }
                     UsageEvents.Event.ACTIVITY_PAUSED,
                     UsageEvents.Event.ACTIVITY_STOPPED -> {
-                        val pkg = event.packageName
-                        if (!pkg.isNullOrEmpty()) {
-                            val startTime = openForegroundSessions.remove(pkg) ?: startOfToday
-                            val effectiveStart = maxOf(startTime, startOfToday)
-                            if (time > effectiveStart) {
-                                foregroundIntervals.add(TimeInterval(effectiveStart, time))
-                            }
+                        val startTime = openForegroundSessions.remove(pkg)
+                        if (startTime != null && time > startTime) {
+                            foregroundIntervals.add(TimeInterval(startTime, time))
                         }
                     }
                 }
             }
 
-            // Account for currently active session up to now
+            // If an activity was resumed and is still active right now, account for it up to now
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-            val currentlyInteractive = powerManager?.isInteractive ?: false
-            val currentlyUnlocked = !(keyguardManager?.isKeyguardLocked ?: false)
-
-            if (currentlyInteractive && currentlyUnlocked) {
-                val screenStart = currentUnlockedScreenStart ?: (now - 5000L).coerceAtLeast(startOfToday)
-                if (now > screenStart) {
-                    screenUnlockedIntervals.add(TimeInterval(screenStart, now))
-                }
-
+            val isInteractive = powerManager?.isInteractive ?: true
+            if (isInteractive) {
                 for ((_, startTime) in openForegroundSessions) {
-                    val effectiveStart = maxOf(startTime, startOfToday)
-                    if (now > effectiveStart) {
-                        foregroundIntervals.add(TimeInterval(effectiveStart, now))
+                    if (now > startTime) {
+                        foregroundIntervals.add(TimeInterval(startTime, now))
                     }
                 }
             }
 
-            // Calculate non-overlapping durations
-            val screenUnlockedMillis = mergeIntervals(screenUnlockedIntervals)
-            val mergedForegroundMillis = mergeIntervals(foregroundIntervals)
-
-            // Select the most comprehensive non-overlapping duration
-            val bestMillis = maxOf(screenUnlockedMillis, mergedForegroundMillis)
-            val calculatedMinutes = (bestMillis / 60000L).toInt()
-
-            val maxAllowed = getMinutesSinceMidnight()
-            calculatedMinutes.coerceIn(0, maxAllowed)
+            val mergedMillis = mergeIntervals(foregroundIntervals)
+            val totalMinutes = (mergedMillis / 60000L).toInt()
+            totalMinutes
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to query device screen time intervals", e)
+            Log.w(TAG, "Failed to query device screen time from UsageEvents", e)
             null
         }
     }
 
     /**
-     * Queries individual application foreground usage strictly from 00:00:00.000 local time today to now.
-     * Strictly ignores all data and events that occurred before local midnight today.
-     * Prevents pulling in usage from yesterday evening.
+     * Individual App Time: Queries UsageStatsManager.queryUsageStats(...) and uses the
+     * built-in totalTimeInForeground property from the UsageStats object for each package.
+     * Does NOT do manual timestamp math (currentTime - startOfDay).
      */
-    fun queryAppForegroundMillisToday(context: Context): Map<String, Long> {
+    fun queryAppUsageStats(context: Context): Map<String, Long> {
         if (!PermissionHelper.isUsageStatsPermissionGranted(context)) {
             return emptyMap()
         }
@@ -235,68 +166,92 @@ object ScreenTimeHelper {
             val startOfToday = getStartOfDayMillis()
             val now = System.currentTimeMillis()
 
-            val events = usageStatsManager.queryEvents(startOfToday, now) ?: return emptyMap()
+            val statsList = usageStatsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_DAILY,
+                startOfToday,
+                now
+            )
 
-            val appIntervals = mutableMapOf<String, MutableList<TimeInterval>>()
-            val openSessions = mutableMapOf<String, Long>()
-            val event = UsageEvents.Event()
-
-            while (events.hasNextEvent()) {
-                events.getNextEvent(event)
-                val time = event.timeStamp
-                // STRICT RULE: Ignore all data and events that occurred before 00:00:00.000 local time today
-                if (time < startOfToday || time > now) continue
-                val pkg = event.packageName ?: continue
-
-                when (event.eventType) {
-                    UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        val prevStart = openSessions[pkg]
-                        if (prevStart != null && time > prevStart) {
-                            appIntervals.getOrPut(pkg) { mutableListOf() }
-                                .add(TimeInterval(maxOf(prevStart, startOfToday), time))
-                        }
-                        openSessions[pkg] = time
-                    }
-                    UsageEvents.Event.ACTIVITY_PAUSED,
-                    UsageEvents.Event.ACTIVITY_STOPPED -> {
-                        val startTime = openSessions.remove(pkg) ?: startOfToday
-                        val effectiveStart = maxOf(startTime, startOfToday)
-                        if (time > effectiveStart) {
-                            appIntervals.getOrPut(pkg) { mutableListOf() }
-                                .add(TimeInterval(effectiveStart, time))
-                        }
-                    }
-                }
-            }
-
-            // Account for applications currently running in foreground at 'now'
-            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-            val currentlyInteractive = powerManager?.isInteractive ?: false
-            val currentlyUnlocked = !(keyguardManager?.isKeyguardLocked ?: false)
-
-            if (currentlyInteractive && currentlyUnlocked) {
-                for ((pkg, startTime) in openSessions) {
-                    val effectiveStart = maxOf(startTime, startOfToday)
-                    if (now > effectiveStart) {
-                        appIntervals.getOrPut(pkg) { mutableListOf() }
-                            .add(TimeInterval(effectiveStart, now))
-                    }
-                }
-            }
-
-            // Merge per-app intervals to eliminate multi-window or internal activity overlap
             val resultMap = mutableMapOf<String, Long>()
-            for ((pkg, intervals) in appIntervals) {
-                val nonOverlappingMillis = mergeIntervals(intervals)
-                if (nonOverlappingMillis > 0L) {
-                    resultMap[pkg] = nonOverlappingMillis
+            if (!statsList.isNullOrEmpty()) {
+                for (stat in statsList) {
+                    val foregroundTime = stat.totalTimeInForeground
+                    if (foregroundTime > 0) {
+                        val current = resultMap[stat.packageName] ?: 0L
+                        resultMap[stat.packageName] = maxOf(current, foregroundTime)
+                    }
                 }
             }
+
+            if (resultMap.isEmpty()) {
+                val aggregated = usageStatsManager.queryAndAggregateUsageStats(startOfToday, now)
+                if (!aggregated.isNullOrEmpty()) {
+                    for ((pkg, stat) in aggregated) {
+                        val foregroundTime = stat.totalTimeInForeground
+                        if (foregroundTime > 0) {
+                            resultMap[pkg] = foregroundTime
+                        }
+                    }
+                }
+            }
+
             resultMap
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to query per-app foreground millis today", e)
+            Log.w(TAG, "Failed to query app usage stats from UsageStatsManager", e)
             emptyMap()
         }
+    }
+
+    /**
+     * Filters out background system processes like 'com.google.android.permissioncontroller' or
+     * 'com.android.launcher' so they don't clog the UI.
+     * Only shows apps the user actually interacts with.
+     */
+    fun isIgnoredSystemPackage(pkg: String, context: Context): Boolean {
+        if (pkg.isBlank()) return true
+        if (pkg == context.packageName || pkg == "com.example") return true
+        if (pkg == "android" || pkg == "com.android.systemui") return true
+        if (pkg == "com.google.android.gms") return true
+
+        // Permission controller
+        if (pkg.contains("permissioncontroller")) return true
+
+        // Launcher / Home screens
+        if (pkg.contains("launcher") || pkg.contains("trebuchet") || pkg.contains("home")) return true
+        if (pkg == "com.google.android.apps.nexuslauncher" ||
+            pkg == "com.android.launcher3" ||
+            pkg == "com.sec.android.app.launcher"
+        ) return true
+
+        // Keyboards / Input Methods
+        if (pkg.contains("inputmethod") || pkg.contains(".ime") || pkg.contains("keyboard")) return true
+
+        // System providers and framework daemons
+        if (pkg.startsWith("com.android.providers.")) return true
+        if (pkg.startsWith("com.android.server.")) return true
+        if (pkg.startsWith("com.google.android.ext.")) return true
+
+        // Check if package is registered as a launcher/home activity
+        try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val homeActivities = context.packageManager.queryIntentActivities(homeIntent, 0)
+            if (homeActivities.any { it.activityInfo?.packageName == pkg }) {
+                return true
+            }
+        } catch (e: Exception) {
+            // ignore
+        }
+
+        // Only show apps the user actually interacts with: verify the app has a launch intent
+        try {
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
+            if (launchIntent == null) {
+                return true
+            }
+        } catch (e: Exception) {
+            return true
+        }
+
+        return false
     }
 }

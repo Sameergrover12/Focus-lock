@@ -136,9 +136,11 @@ class FocusForegroundService : Service() {
     }
 
     fun updatePackageBaseline(packageName: String, minutes: Int) {
-        packageBaselineMinutesToday[packageName] = minutes
+        val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+        val clamped = minutes.coerceIn(0, maxAllowed)
+        packageBaselineMinutesToday[packageName] = clamped
         packageLiveSecondsToday[packageName] = 0
-        packageLastWrittenMinutes[packageName] = minutes
+        packageLastWrittenMinutes[packageName] = clamped
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -258,6 +260,7 @@ class FocusForegroundService : Service() {
     private suspend fun checkMidnightReset() {
         val today = FocusRepository.getTodayDateString()
         if (today != lastRecordedDate) {
+            Log.d(TAG, "Midnight rollover detected: $lastRecordedDate -> $today. Resetting daily in-memory tracking maps.")
             lastRecordedDate = today
             warnedPackagesToday.clear()
             packageBaselineMinutesToday.clear()
@@ -270,12 +273,14 @@ class FocusForegroundService : Service() {
 
             val app = application as? FocusApplication ?: return
             val repo = app.repository
+            repo.updateCurrentDate(today)
             repo.resetDailyTrackingState()
             repo.resetDailyLimitsIfNeeded()
         }
     }
 
     private suspend fun accumulateScreenOnTime(secondsToAdd: Int) {
+        checkMidnightReset()
         val app = application as? FocusApplication ?: return
         val repo = app.repository
 
@@ -342,6 +347,7 @@ class FocusForegroundService : Service() {
     }
 
     private suspend fun accumulateForegroundUsage(pkgName: String, secondsToAdd: Int) {
+        checkMidnightReset()
         if (pkgName == packageName || pkgName == applicationContext.packageName || isSystemOverlay(pkgName)) return
 
         val app = application as? FocusApplication ?: return

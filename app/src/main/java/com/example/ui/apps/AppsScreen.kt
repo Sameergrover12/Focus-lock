@@ -100,7 +100,7 @@ fun AppsScreen(
     val usageLogsMap = remember(todayUsageLogs) {
         todayUsageLogs.associateBy { it.packageName }
     }
-    val todayDateStr = remember { FocusRepository.getTodayDateString() }
+    val todayDateStr = FocusRepository.getTodayDateString()
 
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(

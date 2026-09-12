@@ -214,7 +214,7 @@ class FocusAccessibilityService : AccessibilityService() {
             prefRepo.isMasterEnabled.collect { isMasterEnabled = it }
         }
         serviceScope.launch(Dispatchers.IO) {
-            repo.getUsageLogsForDate(FocusRepository.getTodayDateString()).collect { logs ->
+            repo.getTodayUsageLogs().collect { logs ->
                 todayUsageCache = logs.associate { it.packageName to it.minutesUsed }
             }
         }

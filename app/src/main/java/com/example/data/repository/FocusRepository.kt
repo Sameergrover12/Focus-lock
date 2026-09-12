@@ -11,19 +11,26 @@ import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
 import com.example.util.ScreenTimeHelper
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
-import java.text.SimpleDateFormat
 import java.util.Collections
-import java.util.Date
-import java.util.Locale
 
 class FocusRepository(private val focusDao: FocusDao) {
 
     companion object {
-        fun getTodayDateString(): String {
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            return sdf.format(Date())
+        fun getTodayDateString(): String = ScreenTimeHelper.getTodayDateString()
+    }
+
+    private val _currentDateFlow = MutableStateFlow(getTodayDateString())
+    val currentDateFlow: StateFlow<String> = _currentDateFlow.asStateFlow()
+
+    fun updateCurrentDate(newDate: String = getTodayDateString()) {
+        if (_currentDateFlow.value != newDate) {
+            _currentDateFlow.value = newDate
         }
     }
 
@@ -46,6 +53,7 @@ class FocusRepository(private val focusDao: FocusDao) {
     fun resetDailyTrackingState() {
         liveTrackedPackagesToday.clear()
         serviceStartTimeToday = System.currentTimeMillis()
+        updateCurrentDate()
     }
 
     // Blocked Apps
@@ -139,6 +147,11 @@ class FocusRepository(private val focusDao: FocusDao) {
     // Daily Usage Logs & Device Screen-On Time
     fun getUsageLogsForDate(date: String): Flow<List<DailyUsageLog>> = focusDao.getUsageLogsForDate(date)
 
+    fun getTodayUsageLogs(): Flow<List<DailyUsageLog>> =
+        currentDateFlow.flatMapLatest { date ->
+            focusDao.getUsageLogsForDate(date)
+        }
+
     suspend fun getUsageLogSync(packageName: String, date: String = getTodayDateString()): DailyUsageLog? =
         focusDao.getUsageLog(packageName, date)
 
@@ -151,15 +164,19 @@ class FocusRepository(private val focusDao: FocusDao) {
      * Immune to multi-window, split-screen, or floating-window multiplication.
      */
     fun getTotalMinutesUsedToday(): Flow<Int> =
-        focusDao.getScreenOnMinutesForDate(getTodayDateString()).map { screenOn ->
-            val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
-            (screenOn ?: 0).coerceIn(0, maxAllowed)
+        currentDateFlow.flatMapLatest { date ->
+            focusDao.getScreenOnMinutesForDate(date).map { screenOn ->
+                val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+                (screenOn ?: 0).coerceIn(0, maxAllowed)
+            }
         }
 
     fun getDeviceScreenOnMinutesToday(): Flow<Int> =
-        focusDao.getScreenOnMinutesForDate(getTodayDateString()).map { minutes ->
-            val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
-            (minutes ?: 0).coerceIn(0, maxAllowed)
+        currentDateFlow.flatMapLatest { date ->
+            focusDao.getScreenOnMinutesForDate(date).map { minutes ->
+                val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
+                (minutes ?: 0).coerceIn(0, maxAllowed)
+            }
         }
 
     suspend fun getDeviceScreenOnMinutesTodaySync(): Int {
@@ -248,6 +265,7 @@ class FocusRepository(private val focusDao: FocusDao) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val todayDate = getTodayDateString()
+                updateCurrentDate(todayDate)
                 val maxAllowed = ScreenTimeHelper.getMinutesSinceMidnight()
 
                 // 1. Sync real device screen-on time from UsageEvents (non-overlapping interactive time)
@@ -258,50 +276,15 @@ class FocusRepository(private val focusDao: FocusDao) {
                     updateDeviceScreenOnTime(reconciledScreenOn, todayDate)
                 }
 
-                val usageStatsManager = context.getSystemService(android.content.Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager ?: return@withContext
-
-                val calendar = java.util.Calendar.getInstance().apply {
-                    set(java.util.Calendar.HOUR_OF_DAY, 0)
-                    set(java.util.Calendar.MINUTE, 0)
-                    set(java.util.Calendar.SECOND, 0)
-                    set(java.util.Calendar.MILLISECOND, 0)
-                }
-                val startOfToday = calendar.timeInMillis
-                val now = System.currentTimeMillis()
-
-                // Query full day stats from OS
-                val aggregatedMap = mutableMapOf<String, Long>()
-                try {
-                    val aggregated = usageStatsManager.queryAndAggregateUsageStats(startOfToday, now)
-                    if (!aggregated.isNullOrEmpty()) {
-                        for ((pkg, stat) in aggregated) {
-                            if (stat.totalTimeInForeground > 0) {
-                                aggregatedMap[pkg] = stat.totalTimeInForeground
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.w("FocusUsageTracker", "queryAndAggregateUsageStats failed", e)
-                }
-
-                try {
-                    val dailyStats = usageStatsManager.queryUsageStats(android.app.usage.UsageStatsManager.INTERVAL_DAILY, startOfToday, now)
-                    dailyStats?.forEach { stat ->
-                        if (stat.totalTimeInForeground > 0 && stat.lastTimeUsed >= startOfToday) {
-                            val existing = aggregatedMap[stat.packageName] ?: 0L
-                            aggregatedMap[stat.packageName] = maxOf(existing, stat.totalTimeInForeground)
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.w("FocusUsageTracker", "queryUsageStats INTERVAL_DAILY failed", e)
-                }
-
-                if (aggregatedMap.isEmpty()) return@withContext
+                // 2. Query individual app foreground times strictly starting from 00:00:00.000 local time today.
+                // Strictly ignores all data and events that occurred before local midnight today.
+                val appForegroundMillisMap = ScreenTimeHelper.queryAppForegroundMillisToday(context)
+                if (appForegroundMillisMap.isEmpty()) return@withContext
 
                 val existingLogs = focusDao.getUsageLogsForDateSync(todayDate).associateBy { it.packageName }
                 val pm = context.packageManager
 
-                for ((pkg, totalForegroundMillis) in aggregatedMap) {
+                for ((pkg, totalForegroundMillis) in appForegroundMillisMap) {
                     if (pkg == context.packageName || isSystemOverlay(pkg)) continue
 
                     val existingLog = existingLogs[pkg]
@@ -310,7 +293,7 @@ class FocusRepository(private val focusDao: FocusDao) {
 
                     if (osMinutes <= 0 && existingMinutes <= 0) continue
 
-                    // Authoritative individual app time from UsageStatsManager (already handles overlapping windows)
+                    // Authoritative individual app time strictly bounded by physical clock elapsed since midnight
                     val finalMinutes = maxOf(osMinutes, existingMinutes).coerceIn(0, maxAllowed)
 
                     var appName = existingLog?.appName ?: ""
@@ -335,7 +318,7 @@ class FocusRepository(private val focusDao: FocusDao) {
 
                     android.util.Log.d(
                         "FocusUsageTracker",
-                        "[SYNC] $pkg before: ${existingMinutes}m -> UsageStatsManager: ${osMinutes}m (resolved: ${finalMinutes}m)"
+                        "[SYNC] $pkg before: ${existingMinutes}m -> UsageEvents today: ${osMinutes}m (resolved: ${finalMinutes}m)"
                     )
 
                     focusDao.insertOrUpdateDailyUsageLog(

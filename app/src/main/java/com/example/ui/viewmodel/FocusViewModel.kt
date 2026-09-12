@@ -132,7 +132,7 @@ class FocusViewModel(
         initialValue = 0
     )
 
-    val todayUsageLogs: StateFlow<List<DailyUsageLog>> = repository.getUsageLogsForDate(FocusRepository.getTodayDateString()).stateIn(
+    val todayUsageLogs: StateFlow<List<DailyUsageLog>> = repository.getTodayUsageLogs().stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()

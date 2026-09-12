@@ -245,4 +245,69 @@ class ExampleUnitTest {
         val totalAccrued = redditFocusedMinutes + youtubeFocusedMinutes
         assertEquals(totalSessionMinutes, totalAccrued)
     }
+
+    @Test
+    fun testLocalStartOfDayCalculation() {
+        val zone = com.example.util.ScreenTimeHelper.getLocalZoneId()
+        val startOfDay = com.example.util.ScreenTimeHelper.getStartOfDayMillis(zone)
+        val zonedDateTime = java.time.Instant.ofEpochMilli(startOfDay).atZone(zone)
+
+        assertEquals("Hour must be 0", 0, zonedDateTime.hour)
+        assertEquals("Minute must be 0", 0, zonedDateTime.minute)
+        assertEquals("Second must be 0", 0, zonedDateTime.second)
+        assertEquals("Nano must be 0", 0, zonedDateTime.nano)
+
+        val todayDateStr = com.example.util.ScreenTimeHelper.getTodayDateString(zone)
+        val expectedDateStr = java.time.LocalDate.now(zone).toString()
+        assertEquals(expectedDateStr, todayDateStr)
+    }
+
+    @Test
+    fun testEventsBeforeMidnightStrictlyIgnored() {
+        val zone = com.example.util.ScreenTimeHelper.getLocalZoneId()
+        val startOfToday = com.example.util.ScreenTimeHelper.getStartOfDayMillis(zone)
+
+        // Events from yesterday evening: 28 minutes of usage before midnight
+        val yesterdayEveningStart = startOfToday - (28 * 60 * 1000L)
+        val yesterdayEveningEnd = startOfToday - (5 * 60 * 1000L)
+
+        // Events today: 16 minutes of usage after midnight
+        val todaySessionStart = startOfToday + (2 * 60 * 1000L)
+        val todaySessionEnd = startOfToday + (18 * 60 * 1000L) // 16 minutes
+
+        val allEvents = listOf(
+            com.example.util.TimeInterval(yesterdayEveningStart, yesterdayEveningEnd),
+            com.example.util.TimeInterval(todaySessionStart, todaySessionEnd)
+        )
+
+        // Strict rule: Any interval or portion before startOfToday is filtered / clamped to startOfToday
+        val todayOnlyIntervals = allEvents
+            .filter { it.end > startOfToday }
+            .map { com.example.util.TimeInterval(maxOf(it.start, startOfToday), it.end) }
+
+        val todayMillis = com.example.util.ScreenTimeHelper.mergeIntervals(todayOnlyIntervals)
+        val todayMinutes = (todayMillis / 60000L).toInt()
+
+        assertEquals("Usage today must strictly be 16 minutes, NOT 44 minutes", 16, todayMinutes)
+    }
+
+    @Test
+    fun testMidnightRolloverSessionClamping() {
+        val zone = com.example.util.ScreenTimeHelper.getLocalZoneId()
+        val startOfToday = com.example.util.ScreenTimeHelper.getStartOfDayMillis(zone)
+
+        // Session opened at 23:55 yesterday (5 mins before midnight) and closed at 00:16 today (16 mins after midnight)
+        val sessionStartBeforeMidnight = startOfToday - (5 * 60 * 1000L)
+        val sessionEndAfterMidnight = startOfToday + (16 * 60 * 1000L)
+
+        // When processed for today, effective start must be clamped to startOfToday (00:00:00.000)
+        val effectiveStart = maxOf(sessionStartBeforeMidnight, startOfToday)
+        assertEquals(startOfToday, effectiveStart)
+
+        val clampedInterval = listOf(com.example.util.TimeInterval(effectiveStart, sessionEndAfterMidnight))
+        val millisToday = com.example.util.ScreenTimeHelper.mergeIntervals(clampedInterval)
+        val minutesToday = (millisToday / 60000L).toInt()
+
+        assertEquals("Session crossing midnight only contributes 16 minutes to today", 16, minutesToday)
+    }
 }

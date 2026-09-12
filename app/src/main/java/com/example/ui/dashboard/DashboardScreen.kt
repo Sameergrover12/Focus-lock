@@ -503,12 +503,13 @@ private fun AppUsageHistoryItem(
     totalMinutesToday: Int
 ) {
     val (proportion, percentage, durationText) = remember(log.minutesUsed, totalMinutesToday) {
+        val boundedMinutes = if (totalMinutesToday > 0) minOf(log.minutesUsed, totalMinutesToday) else log.minutesUsed
         val prop = if (totalMinutesToday > 0) {
-            (log.minutesUsed.toFloat() / totalMinutesToday.toFloat()).coerceIn(0f, 1f)
+            (boundedMinutes.toFloat() / totalMinutesToday.toFloat()).coerceIn(0f, 1f)
         } else 0f
-        val pct = (prop * 100).toInt()
-        val hours = log.minutesUsed / 60
-        val mins = log.minutesUsed % 60
+        val pct = (prop * 100).toInt().coerceIn(0, 100)
+        val hours = boundedMinutes / 60
+        val mins = boundedMinutes % 60
         val durText = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
         Triple(prop, pct, durText)
     }
@@ -597,7 +598,7 @@ private fun AppUsageHistoryItem(
 
             // Proportional visual bar showing share of total usage today
             LinearProgressIndicator(
-                progress = { proportion },
+                progress = { proportion.coerceIn(0f, 1f) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)

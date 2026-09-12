@@ -9,8 +9,16 @@ import android.util.Log
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Calendar
+import java.util.TimeZone
 
 data class TimeInterval(val start: Long, val end: Long)
+
+data class UsageEventsData(
+    val totalScreenOnMinutes: Int,
+    val totalScreenOnMillis: Long,
+    val appUsageMillis: Map<String, Long>
+)
 
 object ScreenTimeHelper {
 
@@ -28,14 +36,23 @@ object ScreenTimeHelper {
     }
 
     /**
-     * Calculates the 'Start of Day' (00:00:00.000) timestamp in milliseconds
-     * strictly using the device's local timezone.
+     * Time Bounds: Calculate local midnight (Calendar.getInstance() set to 00:00:00 local time).
      */
     fun getStartOfDayMillis(zoneId: ZoneId = getLocalZoneId()): Long {
-        return LocalDate.now(zoneId)
-            .atStartOfDay(zoneId)
-            .toInstant()
-            .toEpochMilli()
+        return try {
+            val cal = Calendar.getInstance(TimeZone.getTimeZone(zoneId)).apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            cal.timeInMillis
+        } catch (e: Exception) {
+            LocalDate.now(zoneId)
+                .atStartOfDay(zoneId)
+                .toInstant()
+                .toEpochMilli()
+        }
     }
 
     /**
@@ -85,12 +102,12 @@ object ScreenTimeHelper {
     }
 
     /**
-     * Total Screen Time: Calculates the true screen time by querying UsageEvents
-     * and calculating the time between ACTIVITY_RESUMED and ACTIVITY_PAUSED events
-     * across the device, properly merging overlapping times.
-     * Does not do manual math against midnight.
+     * Queries UsageEvents strictly from local midnight (00:00:00) to System.currentTimeMillis().
+     * - Total Screen Time: ONLY by measuring durations between SCREEN_INTERACTIVE (15) and SCREEN_NON_INTERACTIVE (16).
+     * - Individual App Time: exact duration between ACTIVITY_RESUMED (1) and ACTIVITY_PAUSED (2).
+     * - Dangling Sessions: if RESUMED/INTERACTIVE without a closing event, adds (now - startEventTime).
      */
-    fun queryDeviceScreenOnMinutes(context: Context): Int? {
+    fun queryUsageEventsToday(context: Context): UsageEventsData? {
         if (!PermissionHelper.isUsageStatsPermissionGranted(context)) {
             return null
         }
@@ -102,104 +119,133 @@ object ScreenTimeHelper {
             val startOfToday = getStartOfDayMillis()
             val now = System.currentTimeMillis()
 
+            if (now <= startOfToday) {
+                return UsageEventsData(0, 0L, emptyMap())
+            }
+
             val events = usageStatsManager.queryEvents(startOfToday, now) ?: return null
-
-            val foregroundIntervals = mutableListOf<TimeInterval>()
-            val openForegroundSessions = mutableMapOf<String, Long>()
-            val event = UsageEvents.Event()
-
-            while (events.hasNextEvent()) {
-                events.getNextEvent(event)
-                val time = event.timeStamp
-                if (time < startOfToday || time > now) continue
-                val pkg = event.packageName
-                if (pkg.isNullOrEmpty()) continue
-
-                when (event.eventType) {
-                    UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        openForegroundSessions[pkg] = time
-                    }
-                    UsageEvents.Event.ACTIVITY_PAUSED,
-                    UsageEvents.Event.ACTIVITY_STOPPED -> {
-                        val startTime = openForegroundSessions.remove(pkg)
-                        if (startTime != null && time > startTime) {
-                            foregroundIntervals.add(TimeInterval(startTime, time))
-                        }
-                    }
-                }
-            }
-
-            // If an activity was resumed and is still active right now, account for it up to now
-            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            val isInteractive = powerManager?.isInteractive ?: true
-            if (isInteractive) {
-                for ((_, startTime) in openForegroundSessions) {
-                    if (now > startTime) {
-                        foregroundIntervals.add(TimeInterval(startTime, now))
-                    }
-                }
-            }
-
-            val mergedMillis = mergeIntervals(foregroundIntervals)
-            val totalMinutes = (mergedMillis / 60000L).toInt()
-            totalMinutes
+            parseUsageEvents(events, startOfToday, now)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to query device screen time from UsageEvents", e)
+            Log.w(TAG, "Failed to query UsageEvents today", e)
             null
         }
     }
 
     /**
-     * Individual App Time: Queries UsageStatsManager.queryUsageStats(...) and uses the
-     * built-in totalTimeInForeground property from the UsageStats object for each package.
-     * Does NOT do manual timestamp math (currentTime - startOfDay).
+     * Pure parser for UsageEvents respecting exact architectural rules:
+     * 1. Total Screen Time: ONLY durations between Event.SCREEN_INTERACTIVE (15) and Event.SCREEN_NON_INTERACTIVE (16).
+     * 2. Individual App Time: exact durations between Event.ACTIVITY_RESUMED (1) and Event.ACTIVITY_PAUSED (2).
+     * 3. Dangling Sessions: if loop finishes with an open RESUMED/INTERACTIVE event, add time to System.currentTimeMillis().
      */
-    fun queryAppUsageStats(context: Context): Map<String, Long> {
-        if (!PermissionHelper.isUsageStatsPermissionGranted(context)) {
-            return emptyMap()
-        }
+    fun parseUsageEvents(
+        events: UsageEvents,
+        startOfToday: Long,
+        now: Long
+    ): UsageEventsData {
+        var totalScreenOnMillis = 0L
+        var lastScreenInteractiveTime: Long? = null
 
-        return try {
-            val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
-                ?: return emptyMap()
+        val appResumedMap = mutableMapOf<String, Long>()
+        val appUsageMillis = mutableMapOf<String, Long>()
 
-            val startOfToday = getStartOfDayMillis()
-            val now = System.currentTimeMillis()
+        val event = UsageEvents.Event()
 
-            val statsList = usageStatsManager.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY,
-                startOfToday,
-                now
-            )
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            val time = event.timeStamp
+            if (time < startOfToday || time > now) continue
 
-            val resultMap = mutableMapOf<String, Long>()
-            if (!statsList.isNullOrEmpty()) {
-                for (stat in statsList) {
-                    val foregroundTime = stat.totalTimeInForeground
-                    if (foregroundTime > 0) {
-                        val current = resultMap[stat.packageName] ?: 0L
-                        resultMap[stat.packageName] = maxOf(current, foregroundTime)
+            when (event.eventType) {
+                // Event.SCREEN_INTERACTIVE (15)
+                UsageEvents.Event.SCREEN_INTERACTIVE -> {
+                    if (lastScreenInteractiveTime == null) {
+                        lastScreenInteractiveTime = time
                     }
                 }
-            }
+                // Event.SCREEN_NON_INTERACTIVE (16)
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                    val start = lastScreenInteractiveTime
+                    if (start != null) {
+                        val duration = time - start
+                        if (duration > 0) {
+                            totalScreenOnMillis += duration
+                        }
+                        lastScreenInteractiveTime = null
+                    }
+                }
 
-            if (resultMap.isEmpty()) {
-                val aggregated = usageStatsManager.queryAndAggregateUsageStats(startOfToday, now)
-                if (!aggregated.isNullOrEmpty()) {
-                    for ((pkg, stat) in aggregated) {
-                        val foregroundTime = stat.totalTimeInForeground
-                        if (foregroundTime > 0) {
-                            resultMap[pkg] = foregroundTime
+                // Event.ACTIVITY_RESUMED (1)
+                UsageEvents.Event.ACTIVITY_RESUMED -> {
+                    val pkg = event.packageName
+                    if (!pkg.isNullOrEmpty()) {
+                        val prevStart = appResumedMap[pkg]
+                        if (prevStart != null) {
+                            val duration = time - prevStart
+                            if (duration > 0) {
+                                appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + duration
+                            }
+                        }
+                        appResumedMap[pkg] = time
+                    }
+                }
+                // Event.ACTIVITY_PAUSED (2)
+                UsageEvents.Event.ACTIVITY_PAUSED -> {
+                    val pkg = event.packageName
+                    if (!pkg.isNullOrEmpty()) {
+                        val startTime = appResumedMap.remove(pkg)
+                        if (startTime != null) {
+                            val duration = time - startTime
+                            if (duration > 0) {
+                                appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + duration
+                            }
                         }
                     }
                 }
             }
-
-            resultMap
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to query app usage stats from UsageStatsManager", e)
-            emptyMap()
         }
+
+        // Dangling Sessions:
+        // If the loop finishes and an app (or the screen) had a RESUMED/INTERACTIVE event but no closing event,
+        // add the time from that start event to System.currentTimeMillis().
+        if (lastScreenInteractiveTime != null && now > lastScreenInteractiveTime) {
+            val duration = now - lastScreenInteractiveTime
+            if (duration > 0) {
+                totalScreenOnMillis += duration
+            }
+        }
+
+        for ((pkg, startTime) in appResumedMap) {
+            if (now > startTime) {
+                val duration = now - startTime
+                if (duration > 0) {
+                    appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + duration
+                }
+            }
+        }
+
+        val totalMinutes = (totalScreenOnMillis / 60000L).toInt()
+
+        return UsageEventsData(
+            totalScreenOnMinutes = totalMinutes,
+            totalScreenOnMillis = totalScreenOnMillis,
+            appUsageMillis = appUsageMillis
+        )
+    }
+
+    /**
+     * Total Screen Time: Calculates device screen time from UsageEvents
+     * measuring durations between SCREEN_INTERACTIVE and SCREEN_NON_INTERACTIVE events.
+     */
+    fun queryDeviceScreenOnMinutes(context: Context): Int? {
+        return queryUsageEventsToday(context)?.totalScreenOnMinutes
+    }
+
+    /**
+     * Individual App Time: Measured strictly from UsageEvents ACTIVITY_RESUMED and ACTIVITY_PAUSED.
+     * Replaced queryUsageStats() completely.
+     */
+    fun queryAppUsageStats(context: Context): Map<String, Long> {
+        return queryUsageEventsToday(context)?.appUsageMillis ?: emptyMap()
     }
 
     /**

@@ -327,4 +327,103 @@ class ExampleUnitTest {
         // [10:00, 10:20] = 10 mins; [11:00, 11:30] = 30 mins. Total = 40 mins.
         assertEquals(40, screenTimeMinutes)
     }
+
+    @Test
+    fun testUsageEventsScreenInteractiveAndDanglingSession() {
+        val midnight = 10_000_000L
+        val now = midnight + 3_600_000L // 60 minutes after midnight
+
+        // Simulate screen sessions:
+        // Session 1: 10 mins (interactive at +10m, non-interactive at +20m)
+        // Session 2: Dangling session (interactive at +45m, no non-interactive event before 'now')
+        var totalScreenOnMillis = 0L
+        var lastScreenInteractiveTime: Long? = null
+
+        val events = listOf(
+            Pair(15 /* SCREEN_INTERACTIVE */, midnight + 600_000L),
+            Pair(16 /* SCREEN_NON_INTERACTIVE */, midnight + 1_200_000L),
+            Pair(15 /* SCREEN_INTERACTIVE */, midnight + 2_700_000L) // Dangling
+        )
+
+        for ((type, time) in events) {
+            when (type) {
+                15 -> {
+                    if (lastScreenInteractiveTime == null) lastScreenInteractiveTime = time
+                }
+                16 -> {
+                    val start = lastScreenInteractiveTime
+                    if (start != null) {
+                        totalScreenOnMillis += (time - start)
+                        lastScreenInteractiveTime = null
+                    }
+                }
+            }
+        }
+
+        // Dangling session resolved up to 'now'
+        if (lastScreenInteractiveTime != null && now > lastScreenInteractiveTime) {
+            totalScreenOnMillis += (now - lastScreenInteractiveTime)
+        }
+
+        // 10 mins + (60m - 45m = 15 mins) = 25 minutes = 1,500,000 ms
+        val totalMinutes = (totalScreenOnMillis / 60000L).toInt()
+        assertEquals(25, totalMinutes)
+    }
+
+    @Test
+    fun testIndividualAppCannotExceedScreenOnTime() {
+        val totalScreenOnMinutes = 52
+        val youtubeRawMinutes = 61 // e.g. from background service or legacy bucket
+
+        // Architectural rule: Individual apps cannot exceed total screen time
+        val sanitizedMinutes = if (totalScreenOnMinutes > 0) minOf(youtubeRawMinutes, totalScreenOnMinutes) else youtubeRawMinutes
+        assertEquals(52, sanitizedMinutes)
+        assertTrue("Individual app minutes cannot exceed screen on minutes", sanitizedMinutes <= totalScreenOnMinutes)
+
+        // UI Progress bar and percentage capping
+        val proportion = (sanitizedMinutes.toFloat() / totalScreenOnMinutes.toFloat()).coerceIn(0f, 1f)
+        val percentage = (proportion * 100).toInt().coerceIn(0, 100)
+        assertEquals(1.0f, proportion, 0.001f)
+        assertEquals(100, percentage)
+    }
+
+    @Test
+    fun testActivityResumedToPausedAccountingWithDangling() {
+        val midnight = 10_000_000L
+        val now = midnight + 3_600_000L // +60m
+
+        val appResumedMap = mutableMapOf<String, Long>()
+        val appUsageMillis = mutableMapOf<String, Long>()
+
+        // YouTube resumed at +10m, paused at +30m (20 mins)
+        // YouTube resumed at +40m, dangling until 'now' (+60m) (20 mins)
+        // Total YouTube = 40 mins
+        val events = listOf(
+            Triple("com.google.android.youtube", 1 /* RESUMED */, midnight + 600_000L),
+            Triple("com.google.android.youtube", 2 /* PAUSED */, midnight + 1_800_000L),
+            Triple("com.google.android.youtube", 1 /* RESUMED */, midnight + 2_400_000L)
+        )
+
+        for ((pkg, type, time) in events) {
+            when (type) {
+                1 -> appResumedMap[pkg] = time
+                2 -> {
+                    val start = appResumedMap.remove(pkg)
+                    if (start != null) {
+                        appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + (time - start)
+                    }
+                }
+            }
+        }
+
+        // Resolve dangling sessions
+        for ((pkg, startTime) in appResumedMap) {
+            if (now > startTime) {
+                appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + (now - startTime)
+            }
+        }
+
+        val youtubeMinutes = ((appUsageMillis["com.google.android.youtube"] ?: 0L) / 60000L).toInt()
+        assertEquals(40, youtubeMinutes)
+    }
 }

@@ -200,6 +200,9 @@ class FocusRepository(private val focusDao: FocusDao) {
     ): Int {
         markPackageAsLiveTracked(packageName)
         val finalMinutes = maxOf(0, totalMinutes)
+        val screenOnToday = getDeviceScreenOnMinutesTodaySync()
+        // Individual apps cannot exceed total screen time
+        val boundedMinutes = if (screenOnToday > 0) minOf(finalMinutes, screenOnToday) else finalMinutes
 
         val existing = focusDao.getUsageLog(packageName, date)
         val beforeMinutes = existing?.minutesUsed ?: 0
@@ -209,20 +212,20 @@ class FocusRepository(private val focusDao: FocusDao) {
 
         android.util.Log.d(
             "FocusUsageTracker",
-            "[LIVE-TRACK] $packageName before: ${beforeMinutes}m -> writing absolute: ${finalMinutes}m"
+            "[LIVE-TRACK] $packageName before: ${beforeMinutes}m -> writing absolute: ${boundedMinutes}m"
         )
 
         focusDao.insertOrUpdateDailyUsageLog(
             DailyUsageLog(
                 packageName = packageName,
                 date = date,
-                minutesUsed = finalMinutes,
+                minutesUsed = boundedMinutes,
                 appName = name,
                 iconBase64 = icon
             )
         )
         // Keep ScreenTimeLimit's usedMinutesToday in sync with daily usage log
-        focusDao.updateScreenTimeUsage(packageName, finalMinutes, date)
+        focusDao.updateScreenTimeUsage(packageName, boundedMinutes, date)
 
         val confirmed = focusDao.getUsageLog(packageName, date)?.minutesUsed
         android.util.Log.d(
@@ -230,7 +233,7 @@ class FocusRepository(private val focusDao: FocusDao) {
             "[LIVE-TRACK] $packageName confirmed in DB: ${confirmed}m"
         )
 
-        return finalMinutes
+        return boundedMinutes
     }
 
     suspend fun logAppUsage(
@@ -247,10 +250,10 @@ class FocusRepository(private val focusDao: FocusDao) {
 
     /**
      * Reconciles usage stats from system:
-     * 1. Reconciles non-overlapping device screen-on time from UsageEvents as sanity reference.
-     * 2. Live, single-focus tracked numbers take priority while Focus Lock is running.
-     * 3. Periodic UsageStatsManager sync fills genuine gaps (apps used before service started today),
-     *    overwriting with OS absolute numbers without compounding or overwriting live-tracked periods.
+     * 1. Reconciles non-overlapping device screen-on time strictly from UsageEvents (SCREEN_INTERACTIVE - SCREEN_NON_INTERACTIVE).
+     * 2. Reconciles individual app foreground time strictly from UsageEvents (ACTIVITY_RESUMED - ACTIVITY_PAUSED).
+     * 3. Dangling sessions are added up to current timestamp.
+     * 4. Enforces rule that individual app usage cannot exceed total screen time.
      */
     suspend fun syncUsageStatsFromSystem(context: android.content.Context) {
         if (!com.example.util.PermissionHelper.isUsageStatsPermissionGranted(context)) {
@@ -262,21 +265,17 @@ class FocusRepository(private val focusDao: FocusDao) {
                 val todayDate = getTodayDateString()
                 updateCurrentDate(todayDate)
 
-                // 1. Total Screen Time: query UsageEvents and calculate the time between
-                // ACTIVITY_RESUMED and ACTIVITY_PAUSED events across the device, merging overlapping times properly.
-                val osScreenOn = ScreenTimeHelper.queryDeviceScreenOnMinutes(context)
-                if (osScreenOn != null) {
-                    updateDeviceScreenOnTime(osScreenOn, todayDate)
-                }
+                // 1. Query UsageEvents strictly from local midnight to System.currentTimeMillis()
+                val usageData = ScreenTimeHelper.queryUsageEventsToday(context) ?: return@withContext
 
-                // 2. Individual App Time: Query UsageStatsManager.queryUsageStats(...) and use the
-                // built-in .totalTimeInForeground property from the UsageStats object for each package.
-                val appUsageStatsMap = ScreenTimeHelper.queryAppUsageStats(context)
+                val osScreenOn = usageData.totalScreenOnMinutes
+                updateDeviceScreenOnTime(osScreenOn, todayDate)
 
+                val appUsageStatsMap = usageData.appUsageMillis
                 val existingLogs = focusDao.getUsageLogsForDateSync(todayDate).associateBy { it.packageName }
                 val pm = context.packageManager
 
-                // 3. Filter System Apps: Filter out background system processes like 'com.google.android.permissioncontroller'
+                // 2. Filter System Apps: Filter out background system processes like 'com.google.android.permissioncontroller'
                 // or 'com.android.launcher' so they don't clog the UI. Remove any stale/corrupt system rows from DB.
                 for ((pkg, _) in existingLogs) {
                     if (ScreenTimeHelper.isIgnoredSystemPackage(pkg, context)) {
@@ -290,7 +289,7 @@ class FocusRepository(private val focusDao: FocusDao) {
                         continue
                     }
 
-                    // Authoritative individual app time from UsageStatsManager.totalTimeInForeground (NO manual timestamp math)
+                    // Authoritative individual app time from UsageEvents (ACTIVITY_RESUMED to ACTIVITY_PAUSED)
                     val osMinutes = (totalForegroundMillis / 60000L).toInt()
                     if (osMinutes <= 0) {
                         if (existingLogs.containsKey(pkg)) {
@@ -299,7 +298,8 @@ class FocusRepository(private val focusDao: FocusDao) {
                         continue
                     }
 
-                    val finalMinutes = osMinutes
+                    // Architectural Rule: Individual apps cannot exceed total screen time
+                    val finalMinutes = if (osScreenOn > 0) minOf(osMinutes, osScreenOn) else osMinutes
 
                     val existingLog = existingLogs[pkg]
                     var appName = existingLog?.appName ?: ""
@@ -324,7 +324,7 @@ class FocusRepository(private val focusDao: FocusDao) {
 
                     android.util.Log.d(
                         "FocusUsageTracker",
-                        "[SYNC] $pkg -> UsageStatsManager.totalTimeInForeground: ${osMinutes}m"
+                        "[SYNC-EVENTS] $pkg -> ACTIVITY_RESUMED to PAUSED: ${finalMinutes}m (raw: ${osMinutes}m, screenOn: ${osScreenOn}m)"
                     )
 
                     focusDao.insertOrUpdateDailyUsageLog(

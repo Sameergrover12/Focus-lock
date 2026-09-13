@@ -51,6 +51,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.Intent
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import com.example.receiver.FocusDeviceAdminReceiver
 import com.example.data.preferences.ThemeMode
 import com.example.ui.common.CheatProtectionAuthDialog
 import com.example.ui.common.CheatProtectionSetupDialog
@@ -67,6 +73,7 @@ fun SettingsScreen(
 
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
+    val isInvincibleModeEnabled by viewModel.isInvincibleModeEnabled.collectAsStateWithLifecycle()
 
     var hasAccessibility by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
@@ -74,6 +81,8 @@ fun SettingsScreen(
     var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
 
     var showSetupDialog by remember { mutableStateOf(false) }
+    var showCheatEnableDialog by remember { mutableStateOf(false) }
+    var showInvincibleConfirmDialog by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     DisposableEffect(lifecycleOwner) {
@@ -83,12 +92,66 @@ fun SettingsScreen(
                 hasUsageStats = PermissionHelper.isUsageStatsPermissionGranted(context)
                 hasOverlay = PermissionHelper.canDrawOverlays(context)
                 hasBattery = PermissionHelper.isBatteryOptimizationIgnored(context)
+                
+                // If returning from Device Admin screen and user wanted to enable invincible
+                val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+                if (dpm.isAdminActive(adminComponent) && !isInvincibleModeEnabled && showInvincibleConfirmDialog) {
+                    // Do nothing, dialog will show
+                } else if (!dpm.isAdminActive(adminComponent)) {
+                    showInvincibleConfirmDialog = false
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
+    }
+
+    if (showCheatEnableDialog) {
+        AlertDialog(
+            onDismissRequest = { showCheatEnableDialog = false },
+            title = { Text("Enable Strict Protection?") },
+            text = { Text("Are you sure? Once enabled, you will not be able to disable this protection without manually typing a 600-character confirmation text. There is no easy way out.") },
+            confirmButton = {
+                Button(onClick = {
+                    showCheatEnableDialog = false
+                    showSetupDialog = true
+                }) {
+                    Text("I Understand & Enable")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showCheatEnableDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showInvincibleConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showInvincibleConfirmDialog = false },
+            title = { Text("Point of No Return") },
+            text = { Text("This will make the app completely invincible. You will not be able to uninstall the app, remove its permissions, or disable its services while a focus session is active. Do you accept this strict commitment?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showInvincibleConfirmDialog = false
+                        viewModel.setInvincibleModeEnabled(true)
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Make Invincible")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showInvincibleConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showSetupDialog) {
@@ -240,7 +303,7 @@ fun SettingsScreen(
                             checked = isCheatProtectionEnabled,
                             onCheckedChange = { willEnable ->
                                 if (willEnable) {
-                                    showSetupDialog = true
+                                    showCheatEnableDialog = true
                                 } else {
                                     pendingCheatAction = PendingLooseningAction(
                                         title = "Disable Cheat Protection",
@@ -264,6 +327,61 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    
+                    if (isCheatProtectionEnabled) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        androidx.compose.material3.HorizontalDivider()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Invincible Mode (Uninstall Protection)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (isInvincibleModeEnabled) "Active • OS settings blocked" else "Disabled • Device admin not active",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = isInvincibleModeEnabled,
+                                onCheckedChange = { willEnable ->
+                                    if (willEnable) {
+                                        val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                                        val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+                                        if (dpm.isAdminActive(adminComponent)) {
+                                            showInvincibleConfirmDialog = true
+                                        } else {
+                                            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+                                                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required for Invincible Mode to prevent uninstallation.")
+                                            }
+                                            context.startActivity(intent)
+                                            showInvincibleConfirmDialog = true
+                                        }
+                                    } else {
+                                        pendingCheatAction = PendingLooseningAction(
+                                            title = "Disable Invincible Mode",
+                                            description = "Disabling Invincible Mode will allow uninstalling the app and changing system settings.",
+                                            onAuthorized = { viewModel.setInvincibleModeEnabled(false) }
+                                        )
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.onError,
+                                    checkedTrackColor = MaterialTheme.colorScheme.error
+                                )
+                            )
+                        }
+                    }
                 }
             }
         }

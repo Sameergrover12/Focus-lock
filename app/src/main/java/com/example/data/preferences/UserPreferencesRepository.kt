@@ -30,6 +30,7 @@ class UserPreferencesRepository(private val context: Context) {
         val CHEAT_PROTECTION_ENABLED = booleanPreferencesKey("cheat_protection_enabled")
         val CHEAT_PROTECTION_HASH = stringPreferencesKey("cheat_protection_hash")
         val CHEAT_PROTECTION_SALT = stringPreferencesKey("cheat_protection_salt")
+        val INVINCIBLE_MODE_ENABLED = booleanPreferencesKey("invincible_mode_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { preferences ->
@@ -50,6 +51,10 @@ class UserPreferencesRepository(private val context: Context) {
 
     val isCheatProtectionEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] ?: false
+    }
+
+    val isInvincibleModeEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: false
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
@@ -89,6 +94,12 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = false
             preferences.remove(PreferencesKeys.CHEAT_PROTECTION_HASH)
             preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
+        }
+    }
+
+    suspend fun setInvincibleModeEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = enabled
         }
     }
 

@@ -50,6 +50,7 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var blockedWebsitesCache = listOf<BlockedWebsite>()
     @Volatile private var blockedKeywordsCache = listOf<BlockedKeyword>()
     @Volatile private var isMasterEnabled = true
+    @Volatile private var isInvincibleModeEnabled = false
     @Volatile private var todayUsageCache = mapOf<String, Int>()
 
     // Pre-indexed O(1) structures updated on background thread (Dispatchers.Default)
@@ -214,6 +215,9 @@ class FocusAccessibilityService : AccessibilityService() {
             prefRepo.isMasterEnabled.collect { isMasterEnabled = it }
         }
         serviceScope.launch(Dispatchers.IO) {
+            prefRepo.isInvincibleModeEnabled.collect { isInvincibleModeEnabled = it }
+        }
+        serviceScope.launch(Dispatchers.IO) {
             repo.getTodayUsageLogs().collect { logs ->
                 todayUsageCache = logs.associate { it.packageName to it.minutesUsed }
             }
@@ -345,6 +349,31 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun handleEventInBackground(eventPkg: String?, eventType: Int) {
         val myPackageName = packageName
+
+        // Invincible Mode Intercept: prevent disabling device admin, uninstallation, or revoking accessibility
+        if (isInvincibleModeEnabled && eventPkg == "com.android.settings") {
+            try {
+                val root = rootInActiveWindow
+                if (root != null) {
+                    val appName = packageManager.getApplicationLabel(applicationInfo).toString()
+                    // Quick check if the current settings screen mentions our app by name or package
+                    val foundNodesByName = root.findAccessibilityNodeInfosByText(appName)
+                    val foundNodesByPkg = root.findAccessibilityNodeInfosByText(myPackageName)
+                    
+                    if (foundNodesByName.isNotEmpty() || foundNodesByPkg.isNotEmpty()) {
+                        Log.d(TAG, "Invincible Mode: Intercepting settings access to $appName")
+                        val homeIntent = Intent(Intent.ACTION_MAIN).apply { 
+                            addCategory(Intent.CATEGORY_HOME)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK 
+                        }
+                        startActivity(homeIntent)
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Invincible Mode: Failed to scan settings nodes", e)
+            }
+        }
 
         // =========================================================================
         // 1. BLOCKING ENFORCEMENT: Evaluate visible packages

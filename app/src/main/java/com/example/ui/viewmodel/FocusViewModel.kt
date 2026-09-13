@@ -65,6 +65,18 @@ class FocusViewModel(
         initialValue = false
     )
 
+    val isInvincibleModeEnabled: StateFlow<Boolean> = preferencesRepository.isInvincibleModeEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    fun setInvincibleModeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setInvincibleModeEnabled(enabled)
+        }
+    }
+
     suspend fun verifyCheatPassphrase(input: String): Boolean {
         return preferencesRepository.verifyCheatPassphrase(input)
     }

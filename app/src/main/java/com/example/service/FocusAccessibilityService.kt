@@ -375,6 +375,43 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
+        // Invincible Mode Intercept: prevent hiding apps via Launchers/Security apps
+        if (isInvincibleModeEnabled && eventPkg != null) {
+            val isLauncherOrSecurity = eventPkg.contains("launcher", ignoreCase = true) ||
+                                       eventPkg.contains("home", ignoreCase = true) ||
+                                       eventPkg.contains("security", ignoreCase = true)
+                                       
+            if (isLauncherOrSecurity) {
+                try {
+                    val root = rootInActiveWindow
+                    if (root != null) {
+                        // Check for hide apps keywords
+                        val hideKeywords = listOf("hide apps", "hidden apps", "hide application")
+                        var foundHideMenu = false
+                        for (keyword in hideKeywords) {
+                            val foundNodes = root.findAccessibilityNodeInfosByText(keyword)
+                            if (foundNodes.isNotEmpty()) {
+                                foundHideMenu = true
+                                break
+                            }
+                        }
+                        
+                        if (foundHideMenu) {
+                            Log.d(TAG, "Invincible Mode: Intercepting hide apps menu in $eventPkg")
+                            val homeIntent = Intent(Intent.ACTION_MAIN).apply { 
+                                addCategory(Intent.CATEGORY_HOME)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK 
+                            }
+                            startActivity(homeIntent)
+                            return
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Invincible Mode: Failed to scan launcher nodes", e)
+                }
+            }
+        }
+
         // =========================================================================
         // 1. BLOCKING ENFORCEMENT: Evaluate visible packages
         // =========================================================================

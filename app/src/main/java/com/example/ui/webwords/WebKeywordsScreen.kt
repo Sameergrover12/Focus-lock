@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,7 +62,6 @@ fun WebKeywordsScreen(
 
     var newWebsiteInput by remember { mutableStateOf("") }
     var newKeywordInput by remember { mutableStateOf("") }
-    var isCaseSensitive by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     pendingCheatAction?.let { action ->
@@ -210,7 +208,7 @@ fun WebKeywordsScreen(
                                 Button(
                                     onClick = {
                                         if (newKeywordInput.isNotBlank()) {
-                                            viewModel.addBlockedKeyword(newKeywordInput, isCaseSensitive)
+                                            viewModel.addBlockedKeyword(newKeywordInput)
                                             newKeywordInput = ""
                                         }
                                     },
@@ -220,16 +218,6 @@ fun WebKeywordsScreen(
                                 ) {
                                     Icon(imageVector = Icons.Default.Add, contentDescription = "Add")
                                 }
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isCaseSensitive,
-                                    onCheckedChange = { isCaseSensitive = it }
-                                )
-                                Text("Case sensitive match", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
@@ -281,7 +269,7 @@ fun WebKeywordsScreen(
                     RuleItemCard(
                         icon = Icons.Default.TextFields,
                         primaryText = word.keyword,
-                        secondaryText = if (word.caseSensitive) "Case sensitive match" else "Case insensitive match",
+                        secondaryText = "Blocks matching screen & browser text",
                         onDelete = {
                             if (isCheatProtectionEnabled) {
                                 pendingCheatAction = PendingLooseningAction(
@@ -313,7 +301,7 @@ private fun RuleItemCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(testTag),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
@@ -364,7 +352,7 @@ private fun RuleItemCard(
 private fun EmptyStateCard(message: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
     ) {
         Box(

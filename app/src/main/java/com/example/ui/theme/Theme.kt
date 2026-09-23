@@ -31,13 +31,19 @@ val DarkFocusColorScheme: ColorScheme = darkColorScheme(
     onPrimaryContainer = SageOnPrimaryContainerDark,
     secondary = SageSecondaryDark,
     onSecondary = SageOnSecondaryDark,
+    secondaryContainer = SageSecondaryContainerDark,
+    onSecondaryContainer = SageOnSecondaryContainerDark,
     background = SageBackgroundDark,
     onBackground = SageOnSurfaceDark,
     surface = SageSurfaceDark,
     onSurface = SageOnSurfaceDark,
     surfaceVariant = SageSurfaceVariantDark,
     onSurfaceVariant = SageOnSurfaceVariantDark,
-    outline = SageOutlineDark
+    outline = SageOutlineDark,
+    error = SageErrorDark,
+    errorContainer = SageErrorContainerDark,
+    onError = SageOnErrorDark,
+    onErrorContainer = SageOnErrorContainerDark
 )
 
 @Composable

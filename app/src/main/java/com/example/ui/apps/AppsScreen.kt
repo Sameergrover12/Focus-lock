@@ -274,7 +274,7 @@ private fun AppBlockRow(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("app_block_row_${app.packageName}"),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isBlocked) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
@@ -301,7 +301,7 @@ private fun AppBlockRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = if (isBlocked) "Locked — Opening blocked" else app.packageName,
+                    text = if (isBlocked) "Locked — Opening blocked" else "Unrestricted",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isBlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -350,7 +350,7 @@ private fun AppScreenLimitRow(
             .fillMaxWidth()
             .clickable { onConfigure() }
             .testTag("app_limit_row_${app.packageName}"),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {

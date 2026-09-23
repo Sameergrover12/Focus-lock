@@ -1,6 +1,7 @@
 package com.example.ui.dashboard
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -130,8 +131,9 @@ fun DashboardScreen(
                         .testTag("accessibility_warning_banner"),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -149,12 +151,12 @@ fun DashboardScreen(
                                 text = "Protection is Inactive",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer
+                                color = MaterialTheme.colorScheme.error
                             )
                             Text(
                                 text = "Accessibility service is off. Tap to re-enable in system settings.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -168,7 +170,7 @@ fun DashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("master_switch_card"),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (isMasterEnabled) {
                         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
@@ -248,11 +250,11 @@ fun DashboardScreen(
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
+                Column(modifier = Modifier.padding(24.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -260,7 +262,7 @@ fun DashboardScreen(
                     ) {
                         Text(
                             text = "Total Screen Time",
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Medium
                         )
@@ -268,25 +270,17 @@ fun DashboardScreen(
                             imageVector = Icons.Default.HourglassTop,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
                         text = timeString,
-                        style = MaterialTheme.typography.displaySmall,
+                        style = MaterialTheme.typography.displayMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = "Physical screen-on time today. Resets automatically at midnight.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -522,7 +516,7 @@ private fun AppUsageHistoryItem(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("usage_log_${log.packageName}"),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
@@ -561,7 +555,7 @@ private fun AppUsageHistoryItem(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = log.appName.ifBlank { log.packageName },
+                        text = log.appName.ifBlank { "Application" },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -569,7 +563,7 @@ private fun AppUsageHistoryItem(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = log.packageName,
+                        text = "Usage recorded today",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

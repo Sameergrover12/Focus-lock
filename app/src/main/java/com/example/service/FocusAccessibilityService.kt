@@ -741,15 +741,15 @@ class FocusAccessibilityService : AccessibilityService() {
             lastBlockedTime = now
             lastBlockedPackage = pkgName
 
-            // 1. Perform back action to leave whatever content triggered the block
-            performGlobalAction(GLOBAL_ACTION_BACK)
+            // 1. Force-collapse floating windows, PiP, and split-screens at the OS level
+            performGlobalAction(GLOBAL_ACTION_HOME)
 
             // 2. Launch full-screen 3-second black interstitial (Change 5)
             try {
                 val intent = Intent(this@FocusAccessibilityService, BlockedActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            Intent.FLAG_ACTIVITY_CLEAR_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP
                     putExtra(BlockedActivity.EXTRA_TITLE, title)
                     putExtra(BlockedActivity.EXTRA_REASON, reason)
                     putExtra(BlockedActivity.EXTRA_TYPE, type)

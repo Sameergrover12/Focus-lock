@@ -1,5 +1,6 @@
 package com.example.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -251,12 +252,11 @@ fun SettingsScreen(
                     .testTag("cheat_protection_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isCheatProtectionEnabled) {
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    }
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
+                border = if (isCheatProtectionEnabled) {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+                } else null,
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -272,13 +272,13 @@ fun SettingsScreen(
                             Surface(
                                 modifier = Modifier.size(40.dp),
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primaryContainer
+                                color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error.copy(alpha = 0.15f) else MaterialTheme.colorScheme.primaryContainer
                             ) {
                                 androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Lock,
                                         contentDescription = null,
-                                        tint = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.primary,
+                                        tint = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -289,7 +289,7 @@ fun SettingsScreen(
                                     text = "Cheat Protection Lock",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = if (isCheatProtectionEnabled) "Active • Passphrase required to loosen rules" else "Disabled • Rules can be changed freely",

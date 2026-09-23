@@ -1,6 +1,7 @@
 package com.example.ui.groups
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -242,7 +244,7 @@ private fun GroupCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("group_card_${group.id}"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isCurrentlyBlocked) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
@@ -250,7 +252,7 @@ private fun GroupCard(
                 MaterialTheme.colorScheme.surface
             }
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             // Title and action buttons
@@ -293,23 +295,56 @@ private fun GroupCard(
                 }
             }
 
-            // Member app icons preview
+            // Member app icons preview (avatar-stack style)
             if (groupDetail.memberApps.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(groupDetail.memberApps, key = { it.packageName }) { app ->
-                        AppIconImage(icon = app.icon, modifier = Modifier.size(32.dp))
+                    val maxVisibleIcons = 4
+                    val displayApps = groupDetail.memberApps.take(maxVisibleIcons)
+                    val remainingCount = groupDetail.memberApps.size - displayApps.size
+                    val iconOverlapStep = 22.dp
+                    val iconSize = 32.dp
+                    val totalStackWidth = iconSize + (iconOverlapStep * (displayApps.size - 1))
+
+                    Box(
+                        modifier = Modifier
+                            .width(totalStackWidth)
+                            .height(iconSize)
+                    ) {
+                        displayApps.forEachIndexed { index, app ->
+                            Box(
+                                modifier = Modifier
+                                    .padding(start = (index * 22).dp)
+                                    .size(iconSize)
+                                    .clip(CircleShape)
+                                    .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                            ) {
+                                AppIconImage(icon = app.icon, modifier = Modifier.fillMaxSize())
+                            }
+                        }
                     }
-                    item {
-                        Text(
-                            text = "(${groupDetail.memberApps.size} apps)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 4.dp)
-                        )
+
+                    if (remainingCount > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.height(24.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            ) {
+                                Text(
+                                    text = "+$remainingCount",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                     }
                 }
             }

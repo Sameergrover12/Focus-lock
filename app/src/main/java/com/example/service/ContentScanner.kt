@@ -66,6 +66,24 @@ object ContentScanner {
     }
 
     /**
+     * Target strings used to intercept OEM Settings and Launchers "Hide Apps" loophole.
+     */
+    val HIDE_APP_TARGET_STRINGS = listOf(
+        "hide apps on home and apps screens",
+        "hide apps",
+        "hidden apps",
+        "app hider"
+    )
+
+    fun isHideAppsString(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val lower = text.trim()
+        return HIDE_APP_TARGET_STRINGS.any { target ->
+            lower.contains(target, ignoreCase = true)
+        }
+    }
+
+    /**
      * Extracts text from the browser's address bar if available.
      */
     fun extractBrowserUrl(rootNode: AccessibilityNodeInfo?, packageName: String): String? {

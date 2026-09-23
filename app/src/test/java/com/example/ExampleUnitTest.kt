@@ -114,6 +114,32 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testHideAppsStringMatching() {
+        // Required exact and variation matching for all specified targets
+        assertTrue(ContentScanner.isHideAppsString("Hide apps"))
+        assertTrue(ContentScanner.isHideAppsString("HIDE APPS"))
+        assertTrue(ContentScanner.isHideAppsString("Hidden apps"))
+        assertTrue(ContentScanner.isHideAppsString("hidden apps"))
+        assertTrue(ContentScanner.isHideAppsString("Hide apps on Home and Apps screens"))
+        assertTrue(ContentScanner.isHideAppsString("hide apps on home and apps screens"))
+        assertTrue(ContentScanner.isHideAppsString("App Hider"))
+        assertTrue(ContentScanner.isHideAppsString("app hider"))
+        assertTrue(ContentScanner.isHideAppsString("Settings > Home screen > Hide apps on Home and Apps screens"))
+        assertTrue(ContentScanner.isHideAppsString("Security: Hidden apps (3 apps hidden)"))
+        assertTrue(ContentScanner.isHideAppsString("Smart App Hider Pro"))
+
+        // Standard OS Settings and safe navigation must NOT trigger
+        assertFalse(ContentScanner.isHideAppsString("Wi-Fi"))
+        assertFalse(ContentScanner.isHideAppsString("Bluetooth"))
+        assertFalse(ContentScanner.isHideAppsString("Apps & notifications"))
+        assertFalse(ContentScanner.isHideAppsString("Display & Brightness"))
+        assertFalse(ContentScanner.isHideAppsString("Battery"))
+        assertFalse(ContentScanner.isHideAppsString("Installed Apps"))
+        assertFalse(ContentScanner.isHideAppsString(null))
+        assertFalse(ContentScanner.isHideAppsString(""))
+    }
+
+    @Test
     fun testWordBoundaryWebsiteMatchingFalsePositives() {
         val sites = listOf(
             BlockedWebsite(domainOrUrl = "reddit.com")

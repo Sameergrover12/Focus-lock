@@ -66,6 +66,8 @@ class FocusAccessibilityService : AccessibilityService() {
     private var lastBlockedPackage: String? = null
     private var lastScanTime = 0L
     private var lastEvaluatedPackage: String? = null
+    private var lastHideAppInterceptTime = 0L
+    private var lastHideAppScanTime = 0L
 
     companion object {
         private const val TAG = "FocusAccessibility"
@@ -340,10 +342,153 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
+        // -------------------------------------------------------------------------
+        // 0. OS "HIDE APPS" TEXT INTERCEPTOR:
+        // Blocks user from accessing OEM Settings or Launcher "Hide Apps" loophole
+        // -------------------------------------------------------------------------
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        ) {
+            if (checkAndInterceptHideApps(event)) {
+                return
+            }
+        }
+
         // Offload window traversal, visible package collection, blocking checks, focus evaluation,
         // and text scanning to background thread (Dispatchers.Default) to eliminate UI thread jitter!
         serviceScope.launch(Dispatchers.Default) {
             handleEventInBackground(eventPkg, eventType)
+        }
+    }
+
+    /**
+     * Intercepts phone manufacturer "Hide Apps" loophole screens across OEM Launchers,
+     * Security apps, and native System Settings.
+     */
+    private fun checkAndInterceptHideApps(event: AccessibilityEvent): Boolean {
+        // Step 1: Extract text from AccessibilityEvent
+        for (cs in event.text) {
+            val text = cs?.toString() ?: continue
+            if (ContentScanner.isHideAppsString(text)) {
+                triggerHideAppIntercept()
+                return true
+            }
+        }
+        val eventDesc = event.contentDescription?.toString()
+        if (eventDesc != null && ContentScanner.isHideAppsString(eventDesc)) {
+            triggerHideAppIntercept()
+            return true
+        }
+
+        // Step 2: Extract text from rootInActiveWindow
+        val now = SystemClock.uptimeMillis()
+        // Throttle TYPE_WINDOW_CONTENT_CHANGED window node searches to prevent scrolling lag
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            if (now - lastHideAppScanTime < 250) {
+                return false
+            }
+        }
+        lastHideAppScanTime = now
+
+        val root = try { rootInActiveWindow } catch (e: Exception) { null } ?: return false
+        try {
+            // 2A: Query indexed texts using findAccessibilityNodeInfosByText
+            val targetSearchQueries = listOf("Hide apps", "Hidden apps", "App Hider")
+            for (query in targetSearchQueries) {
+                val matchedNodes = root.findAccessibilityNodeInfosByText(query)
+                if (!matchedNodes.isNullOrEmpty()) {
+                    for (node in matchedNodes) {
+                        try {
+                            val nodeText = node.text?.toString()
+                            val nodeDesc = node.contentDescription?.toString()
+                            if (ContentScanner.isHideAppsString(nodeText) || ContentScanner.isHideAppsString(nodeDesc)) {
+                                triggerHideAppIntercept()
+                                return true
+                            }
+                        } finally {
+                            try { node.recycle() } catch (_: Exception) {}
+                        }
+                    }
+                }
+            }
+
+            // 2B: Shallow bounded traversal (max depth 10, max 60 nodes) for non-indexed custom OEM views
+            if (scanNodeTreeForHideApps(root, depth = 0, maxDepth = 10, count = intArrayOf(0), maxNodes = 60)) {
+                triggerHideAppIntercept()
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed scanning window for hide apps", e)
+        }
+
+        return false
+    }
+
+    private fun scanNodeTreeForHideApps(
+        node: AccessibilityNodeInfo?,
+        depth: Int,
+        maxDepth: Int,
+        count: IntArray,
+        maxNodes: Int
+    ): Boolean {
+        if (node == null || depth > maxDepth || count[0] >= maxNodes) return false
+        count[0]++
+
+        val text = node.text?.toString()
+        val desc = node.contentDescription?.toString()
+        if (ContentScanner.isHideAppsString(text) || ContentScanner.isHideAppsString(desc)) {
+            return true
+        }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            val child = node.getChild(i)
+            if (child != null) {
+                val found = scanNodeTreeForHideApps(child, depth + 1, maxDepth, count, maxNodes)
+                try { child.recycle() } catch (_: Exception) {}
+                if (found) return true
+            }
+        }
+        return false
+    }
+
+    private fun triggerHideAppIntercept() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastHideAppInterceptTime < 1500) {
+            return
+        }
+        lastHideAppInterceptTime = now
+
+        Log.w(TAG, "Hide Apps screen intercepted! Forcefully ejecting user.")
+
+        // Step A: Immediately execute performGlobalAction(GLOBAL_ACTION_HOME) or performGlobalAction(GLOBAL_ACTION_BACK)
+        val homeKicked = performGlobalAction(GLOBAL_ACTION_HOME)
+        if (!homeKicked) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+
+        // Additional safeguard: send HOME intent
+        try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            startActivity(homeIntent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start HOME intent fallback", e)
+        }
+
+        // Step B: Show quick Toast message
+        Handler(Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(
+                    applicationContext,
+                    "Nice try! Hiding the focus app is disabled.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to show toast", e)
+            }
         }
     }
 
@@ -386,11 +531,11 @@ class FocusAccessibilityService : AccessibilityService() {
                     val root = rootInActiveWindow
                     if (root != null) {
                         // Check for hide apps keywords
-                        val hideKeywords = listOf("hide apps", "hidden apps", "hide application")
+                        val hideKeywords = listOf("hide apps", "hidden apps", "hide application", "app hider")
                         var foundHideMenu = false
                         for (keyword in hideKeywords) {
                             val foundNodes = root.findAccessibilityNodeInfosByText(keyword)
-                            if (foundNodes.isNotEmpty()) {
+                            if (!foundNodes.isNullOrEmpty()) {
                                 foundHideMenu = true
                                 break
                             }
@@ -398,11 +543,7 @@ class FocusAccessibilityService : AccessibilityService() {
                         
                         if (foundHideMenu) {
                             Log.d(TAG, "Invincible Mode: Intercepting hide apps menu in $eventPkg")
-                            val homeIntent = Intent(Intent.ACTION_MAIN).apply { 
-                                addCategory(Intent.CATEGORY_HOME)
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK 
-                            }
-                            startActivity(homeIntent)
+                            triggerHideAppIntercept()
                             return
                         }
                     }

@@ -75,6 +75,27 @@ object ContentScanner {
         "app hider"
     )
 
+    /**
+     * System package keywords allowed for Hide Apps text scanning:
+     * - "settings" (standard Android settings)
+     * - "launcher" (system launchers)
+     * - "security" or "safecenter" (OEM-specific security apps)
+     */
+    val HIDE_APP_SYSTEM_PACKAGE_KEYWORDS = listOf(
+        "settings",
+        "launcher",
+        "security",
+        "safecenter"
+    )
+
+    fun isHideAppsTargetPackage(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val lower = packageName.lowercase()
+        return HIDE_APP_SYSTEM_PACKAGE_KEYWORDS.any { keyword ->
+            lower.contains(keyword)
+        }
+    }
+
     fun isHideAppsString(text: String?): Boolean {
         if (text.isNullOrBlank()) return false
         val lower = text.trim()

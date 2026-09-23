@@ -17,9 +17,25 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Generate Debug Keystore
+      - name: Generate Deterministic Debug Keystore
         run: |
-          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ -f "debug.keystore.base64" ]; then
+            echo "Restoring persistent debug.keystore from repository base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          else
+            echo "Generating consistent debug.keystore via keytool..."
+            keytool -genkey -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          mkdir -p ~/.android
+          cp debug.keystore ~/.android/debug.keystore
           cp debug.keystore app/debug.keystore 2>/dev/null || true
 
       - name: Setup Gradle
@@ -27,17 +43,19 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Build Release APK
+      - name: Build APKs with Dynamic Version Code
+        env:
+          VERSION_CODE: ${{ github.run_number }}
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x gradlew
-            ./gradlew assembleRelease --no-daemon
+            ./gradlew assembleDebug assembleRelease --no-daemon
           else
-            gradle assembleRelease --no-daemon
+            gradle assembleDebug assembleRelease --no-daemon
           fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: focus-app-release
-          path: app/build/outputs/apk/release/*.apk
+          name: focus-app-apks
+          path: app/build/outputs/apk/**/*.apk

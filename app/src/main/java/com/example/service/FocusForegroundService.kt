@@ -21,6 +21,7 @@ import com.example.FocusApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.data.repository.FocusRepository
+import com.example.focusapp.util.MotivationLibrary
 import com.example.util.ScreenTimeHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,17 +97,33 @@ class FocusForegroundService : Service() {
         val app = application as? FocusApplication
         app?.repository?.setServiceStartTime(System.currentTimeMillis())
 
-        // Register screen state receiver for physical screen on/off events
+        // Register screen state and time tamper receiver
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
         }
         screenStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_ON -> Log.d(TAG, "Screen turned ON")
                     Intent.ACTION_SCREEN_OFF -> Log.d(TAG, "Screen turned OFF")
+                    Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED -> {
+                        Log.w(TAG, "Device time changed (possible tampering). Showing quick feedback.")
+                        serviceScope.launch(Dispatchers.Main) {
+                            try {
+                                android.widget.Toast.makeText(
+                                    applicationContext,
+                                    MotivationLibrary.getRandomQuickFeedback(),
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to display quick feedback on time change", e)
+                            }
+                        }
+                    }
                 }
             }
         }

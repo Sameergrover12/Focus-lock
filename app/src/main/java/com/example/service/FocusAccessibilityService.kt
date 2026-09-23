@@ -21,6 +21,7 @@ import com.example.data.local.entity.BlockedWebsite
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
 import com.example.data.repository.FocusRepository
+import com.example.focusapp.util.MotivationLibrary
 import com.example.ui.blocked.BlockedActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -366,6 +367,13 @@ class FocusAccessibilityService : AccessibilityService() {
      * Security apps, and native System Settings.
      */
     private fun checkAndInterceptHideApps(event: AccessibilityEvent): Boolean {
+        // ONLY execute the "Hide apps" text scanner if the package name contains:
+        // "settings", "launcher", "security", or "safecenter"
+        val eventPkg = event.packageName?.toString()
+        if (!ContentScanner.isHideAppsTargetPackage(eventPkg)) {
+            return false
+        }
+
         // Step 1: Extract text from AccessibilityEvent
         for (cs in event.text) {
             val text = cs?.toString() ?: continue
@@ -391,6 +399,12 @@ class FocusAccessibilityService : AccessibilityService() {
         lastHideAppScanTime = now
 
         val root = try { rootInActiveWindow } catch (e: Exception) { null } ?: return false
+        val rootPkg = root.packageName?.toString()
+        // Ensure root window also belongs to target system packages, avoiding false positives on chat apps/browsers
+        if (!ContentScanner.isHideAppsTargetPackage(rootPkg)) {
+            return false
+        }
+
         try {
             // 2A: Query indexed texts using findAccessibilityNodeInfosByText
             val targetSearchQueries = listOf("Hide apps", "Hidden apps", "App Hider")
@@ -452,6 +466,23 @@ class FocusAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private var lastSettingsTamperTime = 0L
+
+    private fun showQuickFeedback(customMessage: String? = null) {
+        val message = customMessage ?: MotivationLibrary.getRandomQuickFeedback()
+        Handler(Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(
+                    applicationContext,
+                    message,
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to show quick feedback toast", e)
+            }
+        }
+    }
+
     private fun triggerHideAppIntercept() {
         val now = SystemClock.uptimeMillis()
         if (now - lastHideAppInterceptTime < 1500) {
@@ -478,24 +509,42 @@ class FocusAccessibilityService : AccessibilityService() {
             Log.w(TAG, "Failed to start HOME intent fallback", e)
         }
 
-        // Step B: Show quick Toast message
-        Handler(Looper.getMainLooper()).post {
-            try {
-                Toast.makeText(
-                    applicationContext,
-                    "Nice try! Hiding the focus app is disabled.",
-                    Toast.LENGTH_SHORT
-                ).show()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to show toast", e)
-            }
+        // Step B: Show Category B Quick Toast / HUD with MotivationLibrary line
+        showQuickFeedback()
+    }
+
+    private fun triggerSettingsTamperIntercept(reason: String) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSettingsTamperTime < 1500) {
+            return
         }
+        lastSettingsTamperTime = now
+
+        Log.w(TAG, "Critical settings tamper intercepted ($reason)! Forcefully ejecting user.")
+
+        val homeKicked = performGlobalAction(GLOBAL_ACTION_HOME)
+        if (!homeKicked) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+
+        try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            startActivity(homeIntent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start HOME intent for settings tamper", e)
+        }
+
+        // Category B: Quick Toast / HUD with MotivationLibrary line
+        showQuickFeedback()
     }
 
     private fun handleEventInBackground(eventPkg: String?, eventType: Int) {
         val myPackageName = packageName
 
-        // Invincible Mode Intercept: prevent disabling device admin, uninstallation, or revoking accessibility
+        // Invincible Mode Intercept: prevent disabling device admin, uninstallation, revoking accessibility, or changing time
         if (isInvincibleModeEnabled && eventPkg == "com.android.settings") {
             try {
                 val root = rootInActiveWindow
@@ -507,11 +556,23 @@ class FocusAccessibilityService : AccessibilityService() {
                     
                     if (foundNodesByName.isNotEmpty() || foundNodesByPkg.isNotEmpty()) {
                         Log.d(TAG, "Invincible Mode: Intercepting settings access to $appName")
-                        val homeIntent = Intent(Intent.ACTION_MAIN).apply { 
-                            addCategory(Intent.CATEGORY_HOME)
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK 
+                        triggerSettingsTamperIntercept("Disabling permissions/admin for $appName")
+                        return
+                    }
+
+                    // Check for Date & Time tampering attempts
+                    val timeKeywords = listOf("Date & time", "Date and time", "Set time", "Automatic date & time")
+                    var foundTimeTamper = false
+                    for (tk in timeKeywords) {
+                        val nodes = root.findAccessibilityNodeInfosByText(tk)
+                        if (!nodes.isNullOrEmpty()) {
+                            foundTimeTamper = true
+                            break
                         }
-                        startActivity(homeIntent)
+                    }
+                    if (foundTimeTamper) {
+                        Log.d(TAG, "Invincible Mode: Intercepting Date & Time tampering")
+                        triggerSettingsTamperIntercept("Date & Time tampering")
                         return
                     }
                 }
@@ -520,32 +581,26 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Invincible Mode Intercept: prevent hiding apps via Launchers/Security apps
-        if (isInvincibleModeEnabled && eventPkg != null) {
-            val isLauncherOrSecurity = eventPkg.contains("launcher", ignoreCase = true) ||
-                                       eventPkg.contains("home", ignoreCase = true) ||
-                                       eventPkg.contains("security", ignoreCase = true)
-                                       
-            if (isLauncherOrSecurity) {
+        // Invincible Mode Intercept: prevent hiding apps via Launchers/Security apps/Settings
+        if (isInvincibleModeEnabled && ContentScanner.isHideAppsTargetPackage(eventPkg)) {
+            val root = try { rootInActiveWindow } catch (e: Exception) { null }
+            val rootPkg = root?.packageName?.toString()
+            if (root != null && ContentScanner.isHideAppsTargetPackage(rootPkg)) {
                 try {
-                    val root = rootInActiveWindow
-                    if (root != null) {
-                        // Check for hide apps keywords
-                        val hideKeywords = listOf("hide apps", "hidden apps", "hide application", "app hider")
-                        var foundHideMenu = false
-                        for (keyword in hideKeywords) {
-                            val foundNodes = root.findAccessibilityNodeInfosByText(keyword)
-                            if (!foundNodes.isNullOrEmpty()) {
-                                foundHideMenu = true
-                                break
-                            }
+                    val hideKeywords = listOf("hide apps", "hidden apps", "hide application", "app hider")
+                    var foundHideMenu = false
+                    for (keyword in hideKeywords) {
+                        val foundNodes = root.findAccessibilityNodeInfosByText(keyword)
+                        if (!foundNodes.isNullOrEmpty()) {
+                            foundHideMenu = true
+                            break
                         }
-                        
-                        if (foundHideMenu) {
-                            Log.d(TAG, "Invincible Mode: Intercepting hide apps menu in $eventPkg")
-                            triggerHideAppIntercept()
-                            return
-                        }
+                    }
+                    
+                    if (foundHideMenu) {
+                        Log.d(TAG, "Invincible Mode: Intercepting hide apps menu in $eventPkg")
+                        triggerHideAppIntercept()
+                        return
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Invincible Mode: Failed to scan launcher nodes", e)
@@ -801,65 +856,51 @@ class FocusAccessibilityService : AccessibilityService() {
     private fun onKeywordBlockTriggered(pkgName: String, match: ContentScanner.KeywordMatchResult) {
         val snippet = match.matchedSnippet
         val sourceDesc = match.source.description
-        val contextSnippet = match.sourceText.replace("\n", " ").take(100)
 
-        // Fix 2.4: Temporary debug log showing exact keyword, matched text, source, and context
         Log.w(
             TAG,
-            "=== BLOCK TRIGGERED (KEYWORD) ===\n" +
+            "=== RESTRICTED KEYWORD DETECTED ===\n" +
             "Keyword Rule: \"${match.rule.keyword}\"\n" +
             "Matched Snippet: \"$snippet\"\n" +
             "Source: $sourceDesc\n" +
-            "Context Text: \"$contextSnippet\"\n" +
             "Target App: $pkgName"
         )
 
-        // Fix 2.4: On-screen toast fired immediately so exact trigger cause is visible in real-time
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(
-                applicationContext,
-                "Focus Lock: Blocked keyword \"$snippet\"\nSource: $sourceDesc\nContext: \"$contextSnippet\"",
-                Toast.LENGTH_LONG
-            ).show()
+        val now = SystemClock.uptimeMillis()
+        if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1500) {
+            return
+        }
+        lastBlockedTime = now
+        lastBlockedPackage = pkgName
+
+        // Eject user from the view displaying the restricted keyword
+        val backed = performGlobalAction(GLOBAL_ACTION_BACK)
+        if (!backed) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
         }
 
-        executeBlock(
-            pkgName = pkgName,
-            title = "\"${match.rule.keyword}\"",
-            reason = "Blocked keyword \"$snippet\" detected via $sourceDesc.",
-            type = BlockedActivity.TYPE_KEYWORD
-        )
+        // Category B: Quick Toast / HUD Snackbars (Use QUICK_FEEDBACK_LINES)
+        showQuickFeedback()
     }
 
     private fun onWebsiteBlockTriggered(pkgName: String, match: ContentScanner.WebsiteMatchResult) {
         val snippet = match.matchedSnippet
         val sourceDesc = match.source.description
-        val contextSnippet = match.sourceText.replace("\n", " ").take(100)
 
-        // Fix 2.4: Temporary debug log for website blocks
         Log.w(
             TAG,
             "=== BLOCK TRIGGERED (WEBSITE) ===\n" +
             "Website Rule: \"${match.rule.domainOrUrl}\"\n" +
             "Matched Snippet: \"$snippet\"\n" +
             "Source: $sourceDesc\n" +
-            "Context Text: \"$contextSnippet\"\n" +
             "Target App: $pkgName"
         )
 
-        // Fix 2.4: On-screen toast for website blocks
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(
-                applicationContext,
-                "Focus Lock: Blocked website \"$snippet\"\nSource: $sourceDesc",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-
+        // Category A: Full-Screen Block Overlay (Use FULL_SCREEN_QUOTES)
         executeBlock(
             pkgName = pkgName,
             title = match.rule.domainOrUrl,
-            reason = "Blocked website \"$snippet\" detected via $sourceDesc.",
+            reason = "Restricted website \"$snippet\" detected via $sourceDesc.",
             type = BlockedActivity.TYPE_WEBSITE
         )
     }
@@ -885,7 +926,7 @@ class FocusAccessibilityService : AccessibilityService() {
             // 1. Force-collapse floating windows, PiP, and split-screens at the OS level
             performGlobalAction(GLOBAL_ACTION_HOME)
 
-            // 2. Launch full-screen 3-second black interstitial (Change 5)
+            // 2. Launch full-screen card displaying randomized quote (Category A)
             try {
                 val intent = Intent(this@FocusAccessibilityService, BlockedActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -896,6 +937,7 @@ class FocusAccessibilityService : AccessibilityService() {
                     putExtra(BlockedActivity.EXTRA_TYPE, type)
                     putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
                     putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+                    putExtra(BlockedActivity.EXTRA_QUOTE, MotivationLibrary.getRandomFullScreenQuote())
                 }
                 startActivity(intent)
             } catch (e: Exception) {

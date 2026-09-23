@@ -140,6 +140,37 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testHideAppsTargetPackageValidation() {
+        // Must match system settings packages
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.android.settings"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.samsung.android.settings"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.miui.settings"))
+
+        // Must match system launchers
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.sec.android.app.launcher"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.google.android.apps.nexuslauncher"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.teslacoilsw.launcher"))
+
+        // Must match OEM security / safecenter packages
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.miui.securitycenter"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.coloros.safecenter"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.vivo.safecenter"))
+        assertTrue(ContentScanner.isHideAppsTargetPackage("com.lenovo.safecenter"))
+
+        // Chat apps, browsers, and user apps MUST NOT be scanned for hide apps
+        assertFalse(ContentScanner.isHideAppsTargetPackage("com.whatsapp"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("org.telegram.messenger"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("com.google.android.apps.messaging"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("com.android.chrome"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("org.mozilla.firefox"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("com.instagram.android"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("com.discord"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage("com.example.focuslock"))
+        assertFalse(ContentScanner.isHideAppsTargetPackage(null))
+        assertFalse(ContentScanner.isHideAppsTargetPackage(""))
+    }
+
+    @Test
     fun testWordBoundaryWebsiteMatchingFalsePositives() {
         val sites = listOf(
             BlockedWebsite(domainOrUrl = "reddit.com")
@@ -451,5 +482,42 @@ class ExampleUnitTest {
 
         val youtubeMinutes = ((appUsageMillis["com.google.android.youtube"] ?: 0L) / 60000L).toInt()
         assertEquals(40, youtubeMinutes)
+    }
+
+    @Test
+    fun testMotivationLibraryQuotesAndFeedbackLines() {
+        // Verify full screen quotes count and content
+        assertEquals(30, com.example.focusapp.util.MotivationLibrary.FULL_SCREEN_QUOTES.size)
+        val quote = com.example.focusapp.util.MotivationLibrary.getRandomFullScreenQuote()
+        assertTrue(quote.isNotBlank())
+        assertTrue(com.example.focusapp.util.MotivationLibrary.FULL_SCREEN_QUOTES.contains(quote))
+
+        // Verify quick feedback lines count and content
+        assertEquals(25, com.example.focusapp.util.MotivationLibrary.QUICK_FEEDBACK_LINES.size)
+        val feedback = com.example.focusapp.util.MotivationLibrary.getRandomQuickFeedback()
+        assertTrue(feedback.isNotBlank())
+        assertTrue(com.example.focusapp.util.MotivationLibrary.QUICK_FEEDBACK_LINES.contains(feedback))
+    }
+
+    @Test
+    fun testHideAppsTargetPackageConstraints() {
+        // System Settings, Launchers, and Security/Safecenter apps should return true
+        assertTrue(com.example.service.ContentScanner.isHideAppsTargetPackage("com.android.settings"))
+        assertTrue(com.example.service.ContentScanner.isHideAppsTargetPackage("com.google.android.settings"))
+        assertTrue(com.example.service.ContentScanner.isHideAppsTargetPackage("com.sec.android.app.launcher"))
+        assertTrue(com.example.service.ContentScanner.isHideAppsTargetPackage("com.android.launcher3"))
+        assertTrue(com.example.service.ContentScanner.isHideAppsTargetPackage("com.miui.securitycenter"))
+        assertTrue(com.example.service.ContentScanner.isHideAppsTargetPackage("com.oppo.safecenter"))
+
+        // Chat applications, browsers, and standard third-party apps MUST return false
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("com.whatsapp"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("org.telegram.messenger"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("com.discord"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("com.slack"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("com.android.chrome"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("org.mozilla.firefox"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage("com.instagram.android"))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage(null))
+        assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage(""))
     }
 }

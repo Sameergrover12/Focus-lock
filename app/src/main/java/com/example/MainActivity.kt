@@ -45,7 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Insights
 import com.example.service.FocusForegroundService
+import com.example.ui.analytics.AnalyticsScreen
 import com.example.ui.apps.AppsScreen
 import com.example.ui.dashboard.DashboardScreen
 import com.example.ui.groups.GroupsScreen
@@ -77,6 +79,7 @@ class MainActivity : ComponentActivity() {
             FocusLockTheme(themeMode = themeMode) {
                 if (!isOnboardingComplete) {
                     OnboardingScreen(
+                        viewModel = viewModel,
                         onComplete = {
                             viewModel.setOnboardingComplete(true)
                         }
@@ -101,10 +104,11 @@ sealed class NavigationTab(
     val testTag: String
 ) {
     object Dashboard : NavigationTab(0, "Home", Icons.Default.Shield, "nav_dashboard")
-    object Apps : NavigationTab(1, "Apps", Icons.Default.Apps, "nav_apps")
-    object Groups : NavigationTab(2, "Groups", Icons.Default.Group, "nav_groups")
-    object WebWords : NavigationTab(3, "Web/Words", Icons.Default.Language, "nav_webwords")
-    object SettingsTab : NavigationTab(4, "Settings", Icons.Default.Settings, "nav_settings")
+    object Analytics : NavigationTab(1, "Analytics", Icons.Default.Insights, "nav_analytics")
+    object Apps : NavigationTab(2, "Apps", Icons.Default.Apps, "nav_apps")
+    object Groups : NavigationTab(3, "Groups", Icons.Default.Group, "nav_groups")
+    object WebWords : NavigationTab(4, "Web/Words", Icons.Default.Language, "nav_webwords")
+    object SettingsTab : NavigationTab(5, "Settings", Icons.Default.Settings, "nav_settings")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -116,6 +120,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
     val tabs = remember {
         listOf(
             NavigationTab.Dashboard,
+            NavigationTab.Analytics,
             NavigationTab.Apps,
             NavigationTab.Groups,
             NavigationTab.WebWords,
@@ -171,6 +176,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                     NavigationBarItem(
                         icon = { Icon(tab.icon, contentDescription = tab.title) },
                         label = { Text(tab.title, style = MaterialTheme.typography.labelSmall) },
+                        alwaysShowLabel = false,
                         selected = currentTabIndex == tab.routeIndex,
                         onClick = { currentTabIndex = tab.routeIndex },
                         modifier = Modifier.testTag(tab.testTag),
@@ -196,10 +202,14 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                     viewModel = viewModel,
                     onNavigateToTab = { currentTabIndex = it }
                 )
-                1 -> AppsScreen(viewModel = viewModel)
-                2 -> GroupsScreen(viewModel = viewModel)
-                3 -> WebKeywordsScreen(viewModel = viewModel)
-                4 -> SettingsScreen(viewModel = viewModel)
+                1 -> AnalyticsScreen(
+                    viewModel = viewModel,
+                    onNavigateToApps = { currentTabIndex = 2 }
+                )
+                2 -> AppsScreen(viewModel = viewModel)
+                3 -> GroupsScreen(viewModel = viewModel)
+                4 -> WebKeywordsScreen(viewModel = viewModel)
+                5 -> SettingsScreen(viewModel = viewModel)
             }
         }
     }

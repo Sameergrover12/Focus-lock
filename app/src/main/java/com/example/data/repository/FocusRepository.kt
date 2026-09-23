@@ -152,6 +152,9 @@ class FocusRepository(private val focusDao: FocusDao) {
             focusDao.getUsageLogsForDate(date)
         }
 
+    val recentDailyScreenTimes: Flow<List<DailyScreenTime>> = focusDao.getRecentDailyScreenTimes()
+    val allRecentUsageLogs: Flow<List<DailyUsageLog>> = focusDao.getAllRecentUsageLogs()
+
     suspend fun getUsageLogSync(packageName: String, date: String = getTodayDateString()): DailyUsageLog? =
         focusDao.getUsageLog(packageName, date)
 

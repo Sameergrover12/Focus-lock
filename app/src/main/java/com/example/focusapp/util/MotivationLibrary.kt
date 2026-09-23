@@ -63,5 +63,12 @@ object MotivationLibrary {
     )
 
     fun getRandomFullScreenQuote(): String = FULL_SCREEN_QUOTES.random()
-    fun getRandomQuickFeedback(): String = QUICK_FEEDBACK_LINES.random()
+    fun getRandomQuickFeedback(reclaimedCommitment: String? = null): String {
+        val base = QUICK_FEEDBACK_LINES.random()
+        return if (!reclaimedCommitment.isNullOrBlank() && kotlin.random.Random.nextInt(3) == 0) {
+            "$base Remember your commitment to $reclaimedCommitment."
+        } else {
+            base
+        }
+    }
 }

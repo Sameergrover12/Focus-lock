@@ -170,12 +170,18 @@ interface FocusDao {
     @Query("SELECT SUM(minutesUsed) FROM daily_usage_logs WHERE date = :date")
     suspend fun getTotalMinutesUsedForDateSync(date: String): Int?
 
+    @Query("SELECT * FROM daily_usage_logs ORDER BY date DESC, minutesUsed DESC LIMIT 200")
+    fun getAllRecentUsageLogs(): Flow<List<DailyUsageLog>>
+
     // --- Daily Device Screen-On Time ---
     @Query("SELECT screenOnMinutes FROM daily_screen_time WHERE date = :date")
     fun getScreenOnMinutesForDate(date: String): Flow<Int?>
 
     @Query("SELECT screenOnMinutes FROM daily_screen_time WHERE date = :date")
     suspend fun getScreenOnMinutesForDateSync(date: String): Int?
+
+    @Query("SELECT * FROM daily_screen_time ORDER BY date DESC LIMIT 7")
+    fun getRecentDailyScreenTimes(): Flow<List<DailyScreenTime>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateScreenOnTime(item: DailyScreenTime)

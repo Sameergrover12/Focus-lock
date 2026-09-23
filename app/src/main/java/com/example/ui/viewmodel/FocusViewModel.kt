@@ -10,6 +10,7 @@ import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedApp
 import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
+import com.example.data.local.entity.DailyScreenTime
 import com.example.data.local.entity.DailyUsageLog
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
@@ -70,6 +71,50 @@ class FocusViewModel(
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = false
     )
+
+    val reclaimedCommitment: StateFlow<String> = preferencesRepository.reclaimedCommitment.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = "My Focus"
+    )
+
+    val cognitivePassphrase: StateFlow<String> = preferencesRepository.cognitivePassphrase.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
+    )
+
+    val emergencyBreaksRemaining: StateFlow<Int> = preferencesRepository.emergencyBreaksRemaining.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS
+    )
+
+    val activeEmergencyBreakUntil: StateFlow<Long> = preferencesRepository.activeEmergencyBreakUntil.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0L
+    )
+
+    fun setReclaimedCommitment(commitment: String) {
+        viewModelScope.launch {
+            preferencesRepository.setReclaimedCommitment(commitment)
+        }
+    }
+
+    fun setCognitivePassphrase(phrase: String) {
+        viewModelScope.launch {
+            preferencesRepository.setCognitivePassphrase(phrase)
+        }
+    }
+
+    suspend fun triggerEmergencyBreak(typedPhrase: String): Boolean {
+        return preferencesRepository.triggerEmergencyBreak(typedPhrase)
+    }
+
+    suspend fun isEmergencyBreakActive(): Boolean {
+        return preferencesRepository.isEmergencyBreakActive()
+    }
 
     fun setInvincibleModeEnabled(enabled: Boolean) {
         viewModelScope.launch {
@@ -150,6 +195,18 @@ class FocusViewModel(
         initialValue = emptyList()
     )
 
+    val recentDailyScreenTimes: StateFlow<List<DailyScreenTime>> = repository.recentDailyScreenTimes.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val allRecentUsageLogs: StateFlow<List<DailyUsageLog>> = repository.allRecentUsageLogs.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     // Combined Groups with App Details
     val groupsWithDetails: StateFlow<List<GroupWithAppDetails>> = combine(
         groups,
@@ -219,6 +276,18 @@ class FocusViewModel(
             } else {
                 repository.unblockApp(app.packageName)
             }
+        }
+    }
+
+    fun blockApp(packageName: String, appName: String) {
+        viewModelScope.launch {
+            repository.blockApp(packageName, appName)
+        }
+    }
+
+    fun unblockApp(packageName: String) {
+        viewModelScope.launch {
+            repository.unblockApp(packageName)
         }
     }
 

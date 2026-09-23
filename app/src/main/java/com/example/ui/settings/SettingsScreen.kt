@@ -3,6 +3,7 @@ package com.example.ui.settings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -48,7 +49,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,6 +62,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import com.example.receiver.FocusDeviceAdminReceiver
 import com.example.data.preferences.ThemeMode
+import androidx.compose.material.icons.filled.HourglassBottom
+import androidx.compose.material.icons.filled.Psychology
+import com.example.ui.common.CognitivePassphraseSetupDialog
 import com.example.ui.common.CheatProtectionAuthDialog
 import com.example.ui.common.CheatProtectionSetupDialog
 import com.example.ui.common.PendingLooseningAction
@@ -75,6 +81,9 @@ fun SettingsScreen(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
     val isInvincibleModeEnabled by viewModel.isInvincibleModeEnabled.collectAsStateWithLifecycle()
+    val reclaimedCommitment by viewModel.reclaimedCommitment.collectAsStateWithLifecycle()
+    val cognitivePassphrase by viewModel.cognitivePassphrase.collectAsStateWithLifecycle()
+    val emergencyBreaksRemaining by viewModel.emergencyBreaksRemaining.collectAsStateWithLifecycle()
 
     var hasAccessibility by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
@@ -84,6 +93,7 @@ fun SettingsScreen(
     var showSetupDialog by remember { mutableStateOf(false) }
     var showCheatEnableDialog by remember { mutableStateOf(false) }
     var showInvincibleConfirmDialog by remember { mutableStateOf(false) }
+    var showCognitivePassphraseDialog by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     DisposableEffect(lifecycleOwner) {
@@ -165,6 +175,17 @@ fun SettingsScreen(
         )
     }
 
+    if (showCognitivePassphraseDialog) {
+        CognitivePassphraseSetupDialog(
+            initialPassphrase = cognitivePassphrase,
+            onSavePassphrase = { newPhrase ->
+                viewModel.setCognitivePassphrase(newPhrase)
+                showCognitivePassphraseDialog = false
+            },
+            onDismiss = { showCognitivePassphraseDialog = false }
+        )
+    }
+
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(
             action = action,
@@ -231,6 +252,184 @@ fun SettingsScreen(
                         onClick = { viewModel.setThemeMode(ThemeMode.DARK) },
                         testTag = "theme_dark_option"
                     )
+                }
+            }
+        }
+
+        // Section: Cognitive Rewiring & Behavioral Mechanics
+        item {
+            Text(
+                text = "Cognitive Rewiring & Behavioral Mechanics",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("cognitive_rewiring_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 1. Reflective Bypass Sentence
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Psychology,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Reflective Passphrase Setup",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Manually typed verbatim to bypass blocks",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "\"$cognitivePassphrase\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = { showCognitivePassphraseDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("configure_passphrase_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Configure / Practice Passphrase")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    androidx.compose.material3.HorizontalDivider()
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // 2. The Emergency Failsafe System
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.HourglassBottom,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "The Emergency Failsafe System",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "$emergencyBreaksRemaining of 3 breaks remaining this week",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (emergencyBreaksRemaining > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "• 10-Minute Hard Cap: 3 breaks per 7-day cycle.\n• The Phantom Cutoff: Zero visual countdown timers.\n• The Abrupt Snapback: Immediate lock restoration at 10:00:00.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 18.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    androidx.compose.material3.HorizontalDivider()
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // 3. Reclaimed Intention
+                    Text(
+                        text = "What You Are Reclaiming",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Subtly injected into friction overlays and quick HUD toasts:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("My Time", "My Focus", "My Discipline").forEach { choice ->
+                            val isSel = choice == reclaimedCommitment
+                            Surface(
+                                onClick = { viewModel.setReclaimedCommitment(choice) },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = choice,
+                                    color = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -340,13 +539,13 @@ fun SettingsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Invincible Mode (Uninstall Protection)",
+                                    text = "Strict Mode (Device Administrator)",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = if (isInvincibleModeEnabled) "Active • OS settings blocked" else "Disabled • Device admin not active",
+                                    text = if (isInvincibleModeEnabled) "Active • Device Admin active (anti-uninstall barrier)" else "Disabled • Device Admin privileges inactive",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

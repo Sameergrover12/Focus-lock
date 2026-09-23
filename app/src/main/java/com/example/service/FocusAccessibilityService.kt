@@ -53,6 +53,8 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var isMasterEnabled = true
     @Volatile private var isInvincibleModeEnabled = false
     @Volatile private var todayUsageCache = mapOf<String, Int>()
+    @Volatile private var activeEmergencyBreakUntil = 0L
+    @Volatile private var cachedReclaimedCommitment: String? = null
 
     // Pre-indexed O(1) structures updated on background thread (Dispatchers.Default)
     @Volatile private var blockedAppsByPackage = mapOf<String, BlockedApp>()
@@ -221,8 +223,34 @@ class FocusAccessibilityService : AccessibilityService() {
             prefRepo.isInvincibleModeEnabled.collect { isInvincibleModeEnabled = it }
         }
         serviceScope.launch(Dispatchers.IO) {
+            prefRepo.activeEmergencyBreakUntil.collect { until ->
+                activeEmergencyBreakUntil = until
+                scheduleEmergencySnapback(until)
+            }
+        }
+        serviceScope.launch(Dispatchers.IO) {
+            prefRepo.reclaimedCommitment.collect { cachedReclaimedCommitment = it }
+        }
+        serviceScope.launch(Dispatchers.IO) {
             repo.getTodayUsageLogs().collect { logs ->
                 todayUsageCache = logs.associate { it.packageName to it.minutesUsed }
+            }
+        }
+    }
+
+    private var snapbackJob: Job? = null
+
+    private fun scheduleEmergencySnapback(until: Long) {
+        snapbackJob?.cancel()
+        val delayMs = until - System.currentTimeMillis()
+        if (delayMs > 0) {
+            snapbackJob = serviceScope.launch(Dispatchers.Default) {
+                delay(delayMs)
+                // The Abrupt Snapback: Terminating access immediately with no warning, toast messages, or extension options
+                val currentPkg = currentForegroundPackage
+                if (!currentPkg.isNullOrEmpty() && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
+                    checkForegroundPackage(currentPkg)
+                }
             }
         }
     }
@@ -469,7 +497,7 @@ class FocusAccessibilityService : AccessibilityService() {
     private var lastSettingsTamperTime = 0L
 
     private fun showQuickFeedback(customMessage: String? = null) {
-        val message = customMessage ?: MotivationLibrary.getRandomQuickFeedback()
+        val message = customMessage ?: MotivationLibrary.getRandomQuickFeedback(cachedReclaimedCommitment)
         Handler(Looper.getMainLooper()).post {
             try {
                 Toast.makeText(
@@ -659,6 +687,13 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun checkForegroundPackage(pkgName: String) {
         if (pkgName == packageName) return
+
+        // 0. The Emergency Failsafe System: 10-Minute Hard Cap
+        // If an active 10-minute emergency break is currently running, bypass the block.
+        // Once the 10 minutes elapse, the break expires silently and access is terminated immediately (The Abrupt Snapback).
+        if (System.currentTimeMillis() < activeEmergencyBreakUntil) {
+            return
+        }
 
         // Debounce to prevent multiple triggers in short succession
         val now = SystemClock.uptimeMillis()

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
@@ -364,6 +365,62 @@ fun DashboardScreen(
         }
 
         item {
+            Card(
+                onClick = { onNavigateToTab(1) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("analytics_dashboard_banner"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Insights,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Analytics Dashboard",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "7-Day screen time charts & focus drain breakdown",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "View Analytics",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -372,14 +429,14 @@ fun DashboardScreen(
                     title = "App Blocking",
                     count = "${blockedApps.size} blocked",
                     icon = Icons.Default.Apps,
-                    onClick = { onNavigateToTab(1) },
+                    onClick = { onNavigateToTab(2) },
                     modifier = Modifier.weight(1f)
                 )
                 DashboardStatCard(
                     title = "Screen Time",
                     count = "${screenLimits.size} limits",
                     icon = Icons.Default.HourglassTop,
-                    onClick = { onNavigateToTab(1) }, // Apps & limits tab
+                    onClick = { onNavigateToTab(2) }, // Apps & limits tab
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -394,14 +451,14 @@ fun DashboardScreen(
                     title = "App Groups",
                     count = "${groups.size} active",
                     icon = Icons.Default.Lock,
-                    onClick = { onNavigateToTab(2) },
+                    onClick = { onNavigateToTab(3) },
                     modifier = Modifier.weight(1f)
                 )
                 DashboardStatCard(
                     title = "Web & Keywords",
                     count = "${websites.size + keywords.size} rules",
                     icon = Icons.Default.Language,
-                    onClick = { onNavigateToTab(3) },
+                    onClick = { onNavigateToTab(4) },
                     modifier = Modifier.weight(1f)
                 )
             }

@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import com.example.receiver.FocusDeviceAdminReceiver
@@ -360,7 +361,13 @@ fun SettingsScreen(
                         }
                     } else if (emergencyBreaksRemaining > 0) {
                         Button(
-                            onClick = { showEmergencyBreakConfirmDialog = true },
+                            onClick = {
+                                if (!isInvincibleModeEnabled && !isCheatProtectionEnabled) {
+                                    Toast.makeText(context, "No active restrictions to break.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    showEmergencyBreakConfirmDialog = true
+                                }
+                            },
                             shape = RoundedCornerShape(10.dp),
                             colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF10B981),

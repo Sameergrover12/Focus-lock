@@ -81,9 +81,9 @@ fun SettingsScreen(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
     val isInvincibleModeEnabled by viewModel.isInvincibleModeEnabled.collectAsStateWithLifecycle()
-    val reclaimedCommitment by viewModel.reclaimedCommitment.collectAsStateWithLifecycle()
     val cognitivePassphrase by viewModel.cognitivePassphrase.collectAsStateWithLifecycle()
     val emergencyBreaksRemaining by viewModel.emergencyBreaksRemaining.collectAsStateWithLifecycle()
+    val activeEmergencyBreakUntil by viewModel.activeEmergencyBreakUntil.collectAsStateWithLifecycle()
 
     var hasAccessibility by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
@@ -92,7 +92,10 @@ fun SettingsScreen(
 
     var showStrictModeDialog by remember { mutableStateOf(false) }
     var showInvincibleConfirmDialog by remember { mutableStateOf(false) }
+    var showEmergencyBreakConfirmDialog by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
+
+    val isBreakActive = activeEmergencyBreakUntil > System.currentTimeMillis()
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -148,6 +151,30 @@ fun SettingsScreen(
             },
             dismissButton = {
                 OutlinedButton(onClick = { showInvincibleConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showEmergencyBreakConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmergencyBreakConfirmDialog = false },
+            title = { Text("Take Emergency Break (10m)") },
+            text = { Text("This will consume 1 of your 3 weekly emergency breaks for an immediate 10-minute window. All app and website blocking will be paused for exactly 10 minutes without countdowns or warnings. Do you wish to proceed?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showEmergencyBreakConfirmDialog = false
+                        viewModel.takeEmergencyBreak()
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981), contentColor = Color.Black)
+                ) {
+                    Text("Start Break (10m)", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showEmergencyBreakConfirmDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -224,10 +251,10 @@ fun SettingsScreen(
             }
         }
 
-        // Section: Cognitive Rewiring & Behavioral Mechanics
+        // Section: Emergency Failsafe System
         item {
             Text(
-                text = "Cognitive Rewiring & Behavioral Mechanics",
+                text = "Emergency Failsafe System",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Color.White
@@ -238,14 +265,13 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("cognitive_rewiring_card"),
+                    .testTag("emergency_failsafe_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0E11)),
                 border = BorderStroke(1.dp, Color(0xFF22262F)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    // 1. The Emergency Failsafe System
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -290,47 +316,90 @@ fun SettingsScreen(
                         lineHeight = 18.sp
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                     androidx.compose.material3.HorizontalDivider(color = Color(0xFF22262F))
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                    // 2. Reclaimed Intention
-                    Text(
-                        text = "What You Are Reclaiming",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Subtly injected into friction overlays and quick HUD toasts:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF9E9E9E)
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf("My Time", "My Focus", "My Discipline").forEach { choice ->
-                            val isSel = choice == reclaimedCommitment
-                            Surface(
-                                onClick = { viewModel.setReclaimedCommitment(choice) },
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (isSel) Color(0xFF10B981) else Color(0xFF141519),
-                                border = BorderStroke(1.dp, if (isSel) Color(0xFF10B981) else Color(0xFF22262F)),
-                                modifier = Modifier.weight(1f)
+                    if (isBreakActive) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF064E3B).copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(
-                                    text = choice,
-                                    color = if (isSel) Color.Black else Color.White,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp)
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Emergency Break Active (10m)",
+                                        color = Color(0xFF10B981),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "All app & website blocking is paused.",
+                                        color = Color(0xFFA7F3D0),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                Button(
+                                    onClick = { viewModel.endEmergencyBreakEarly() },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFE53935),
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.testTag("end_emergency_break_button")
+                                ) {
+                                    Text("End Early", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
+                        }
+                    } else if (emergencyBreaksRemaining > 0) {
+                        Button(
+                            onClick = { showEmergencyBreakConfirmDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF10B981),
+                                contentColor = Color.Black
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("take_emergency_break_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.HourglassBottom,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Take Emergency Break (10m)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = {},
+                            enabled = false,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                disabledContainerColor = Color(0xFF1E2024),
+                                disabledContentColor = Color(0xFF666666)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("take_emergency_break_button")
+                        ) {
+                            Text(
+                                text = "No Breaks Remaining",
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 13.sp
+                            )
                         }
                     }
                 }

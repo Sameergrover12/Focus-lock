@@ -170,6 +170,35 @@ class UserPreferencesRepository(private val context: Context) {
         return success
     }
 
+    suspend fun takeEmergencyBreak(): Boolean {
+        var success = false
+        val now = System.currentTimeMillis()
+
+        context.dataStore.edit { prefs ->
+            val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
+            val currentRemaining = if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
+                prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] = now
+                MAX_WEEKLY_EMERGENCY_BREAKS
+            } else {
+                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] ?: MAX_WEEKLY_EMERGENCY_BREAKS
+            }
+
+            if (currentRemaining > 0) {
+                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = currentRemaining - 1
+                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = now + EMERGENCY_BREAK_DURATION_MS
+                success = true
+            }
+        }
+
+        return success
+    }
+
+    suspend fun endEmergencyBreakEarly() {
+        context.dataStore.edit { prefs ->
+            prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = 0L
+        }
+    }
+
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.THEME_MODE] = mode.name

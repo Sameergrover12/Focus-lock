@@ -113,6 +113,18 @@ class FocusViewModel(
         return preferencesRepository.triggerEmergencyBreak(typedPhrase)
     }
 
+    fun takeEmergencyBreak() {
+        viewModelScope.launch {
+            preferencesRepository.takeEmergencyBreak()
+        }
+    }
+
+    fun endEmergencyBreakEarly() {
+        viewModelScope.launch {
+            preferencesRepository.endEmergencyBreakEarly()
+        }
+    }
+
     suspend fun isEmergencyBreakActive(): Boolean {
         return preferencesRepository.isEmergencyBreakActive()
     }

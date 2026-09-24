@@ -17,30 +17,18 @@ android {
     applicationId = "com.aistudio.focuslock.fclk"
     minSdk = 26
     targetSdk = 36
-    versionCode = System.getenv("BUILD_NUMBER")?.toIntOrNull()
+    val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+      ?: System.getenv("BUILD_NUMBER")?.toIntOrNull()
       ?: System.getenv("VERSION_CODE")?.toIntOrNull()
       ?: 1
-    versionName = "1.0.${System.getenv("BUILD_NUMBER") ?: System.getenv("VERSION_CODE") ?: "1"}"
+    versionCode = 1000 + runNumber
+    versionName = "1.0.$runNumber"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   signingConfigs {
-    create("release") {
-      val customKeystore = System.getenv("KEYSTORE_PATH")
-      val releaseKeystore = if (customKeystore != null && file(customKeystore).exists()) {
-        file(customKeystore)
-      } else if (file("${rootDir}/release.keystore").exists()) {
-        file("${rootDir}/release.keystore")
-      } else {
-        file("${rootDir}/debug.keystore")
-      }
-      storeFile = releaseKeystore
-      storePassword = System.getenv("STORE_PASSWORD") ?: "android"
-      keyAlias = System.getenv("KEY_ALIAS") ?: "androiddebugkey"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
-    }
-    create("debugConfig") {
+    getByName("debug") {
       storeFile = file("${rootDir}/debug.keystore")
       storePassword = "android"
       keyAlias = "androiddebugkey"
@@ -53,9 +41,9 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      signingConfig = signingConfigs.getByName("debug")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug { signingConfig = signingConfigs.getByName("debug") }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

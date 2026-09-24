@@ -57,6 +57,7 @@ jobs:
 
       - name: Build APKs with Auto-Increment Version Code
         env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
           BUILD_NUMBER: ${{ github.run_number }}
           VERSION_CODE: ${{ github.run_number }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}

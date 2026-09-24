@@ -17,13 +17,24 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Generate Deterministic Debug Keystore
+      - name: Setup Keystores for Persistent In-Place Updates
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 || secrets.RELEASE_KEYSTORE_BASE64 || secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          if [ -f "debug.keystore.base64" ]; then
-            echo "Restoring persistent debug.keystore from repository base64..."
+          mkdir -p ~/.android
+          if [ -n "$SIGNING_KEY_BASE64" ]; then
+            echo "Restoring persistent keystore from GitHub Secret..."
+            echo "$SIGNING_KEY_BASE64" | base64 -d > debug.keystore
+            echo "$SIGNING_KEY_BASE64" | base64 -d > release.keystore
+          elif [ -f "debug.keystore.base64" ]; then
+            echo "Restoring persistent keystore from repository debug.keystore.base64..."
             base64 -d debug.keystore.base64 > debug.keystore
+            cp debug.keystore release.keystore
+          elif [ -f "debug.keystore" ]; then
+            echo "Using existing debug.keystore from repository..."
+            cp debug.keystore release.keystore
           else
-            echo "Generating consistent debug.keystore via keytool..."
+            echo "Generating persistent debug keystore..."
             keytool -genkey -v \
               -keystore debug.keystore \
               -storepass android \
@@ -33,19 +44,24 @@ jobs:
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
+            cp debug.keystore release.keystore
           fi
-          mkdir -p ~/.android
           cp debug.keystore ~/.android/debug.keystore
           cp debug.keystore app/debug.keystore 2>/dev/null || true
+          cp release.keystore app/release.keystore 2>/dev/null || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Build APKs with Dynamic Version Code
+      - name: Build APKs with Auto-Increment Version Code
         env:
+          BUILD_NUMBER: ${{ github.run_number }}
           VERSION_CODE: ${{ github.run_number }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'androiddebugkey' }}
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x gradlew

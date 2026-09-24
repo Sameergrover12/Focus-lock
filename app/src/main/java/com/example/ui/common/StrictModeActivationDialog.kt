@@ -1,7 +1,6 @@
 package com.example.ui.common
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,28 +12,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,32 +35,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.utf16CodePoint
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.example.data.preferences.UserPreferencesRepository
 
 /**
- * High-Stakes Confirmation & Verification Dialog for Strict Mode / Cheating Protection.
+ * High-Stakes Confirmation Dialog for Strict Mode / Anti-Cheat Lock.
  *
- * Mandated Warning Text:
- * "Strict Mode activates irreversible friction. To modify locked features, disable restrictions,
- * or access emergency breaks, you will be required to type your exact reflective passphrase verbatim.
- * If you forget it, there is no bypass or reset."
+ * Enforces 600-1000 character minimum for cognitive friction passphrase.
  */
 @Composable
 fun StrictModeActivationDialog(
@@ -75,22 +53,15 @@ fun StrictModeActivationDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
     var candidatePhrase by remember {
         mutableStateOf(
-            if (initialPassphrase.isNotBlank()) initialPassphrase
-            else UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
+            if (initialPassphrase.isNotBlank() && initialPassphrase.length in 600..1000) initialPassphrase
+            else ""
         )
     }
-    var verificationInput by remember { mutableStateOf("") }
-    var pasteBlockedNotice by remember { mutableStateOf<String?>(null) }
 
     val trimmedCandidate = candidatePhrase.trim()
-    val isCandidateValid = trimmedCandidate.length >= 15
-    val isMatched = isCandidateValid && verificationInput.trim() == trimmedCandidate
-
-    val textToolbar = LocalTextToolbar.current
-    val noPasteToolbar = remember(textToolbar) { NoPasteTextToolbar(textToolbar) }
+    val isCandidateValid = trimmedCandidate.length in 600..1000
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -197,17 +168,17 @@ fun StrictModeActivationDialog(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Step 1: Define Passphrase
+                // Primary Passphrase Input Field
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "1. Define Your Reflective Passphrase",
+                        text = "Define Your Reflective Passphrase",
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Choose a meaningful statement of personal discipline (min 15 chars).",
+                        text = "Choose a meaningful statement of personal discipline (min 600 chars, max 1000).",
                         color = Color(0xFF888888),
                         fontSize = 11.sp
                     )
@@ -215,146 +186,84 @@ fun StrictModeActivationDialog(
 
                     OutlinedTextField(
                         value = candidatePhrase,
-                        onValueChange = {
-                            candidatePhrase = it
-                            verificationInput = "" // reset verification if candidate changes
+                        onValueChange = { input ->
+                            if (input.length <= 1000) {
+                                candidatePhrase = input
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("strict_mode_define_input"),
                         shape = RoundedCornerShape(10.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF10B981),
-                            unfocusedBorderColor = Color(0xFF22262F),
+                            focusedBorderColor = if (isCandidateValid) Color(0xFF10B981) else Color(0xFFE53935),
+                            unfocusedBorderColor = if (isCandidateValid) Color(0xFF10B981) else Color(0xFF22262F),
                             focusedContainerColor = Color(0xFF141519),
                             unfocusedContainerColor = Color(0xFF141519),
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White
                         ),
                         placeholder = {
-                            Text("Enter your reflective statement...", color = Color(0xFF555555))
+                            Text(
+                                "Enter your reflective statement of discipline (600 to 1000 characters)...",
+                                color = Color(0xFF555555),
+                                fontSize = 12.sp
+                            )
                         },
-                        minLines = 2,
-                        maxLines = 4
+                        minLines = 4,
+                        maxLines = 8
                     )
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                // Step 2: Verbatim Verification Test
-                Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "2. Verbatim Typing Verification",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
+                            text = "${candidatePhrase.length} / 1000",
+                            fontSize = 11.sp,
+                            color = if (isCandidateValid) Color(0xFF10B981) else if (candidatePhrase.isNotEmpty()) Color(0xFFEF5350) else Color(0xFF888888),
+                            fontWeight = if (isCandidateValid) FontWeight.Bold else FontWeight.Normal
                         )
-
-                        if (isMatched) {
-                            Surface(
-                                shape = CircleShape,
-                                color = Color(0xFF064E3B),
-                                modifier = Modifier.size(20.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Matched",
-                                        tint = Color(0xFF10B981),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            }
+                        if (candidatePhrase.isNotEmpty() && !isCandidateValid) {
+                            Text(
+                                text = "Need ${600 - candidatePhrase.length} more characters",
+                                fontSize = 11.sp,
+                                color = Color(0xFFEF5350),
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Type the exact phrase above manually to prove commitment. Copy-paste is disabled.",
-                        color = Color(0xFF888888),
-                        fontSize = 11.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                    CompositionLocalProvider(LocalTextToolbar provides noPasteToolbar) {
-                        OutlinedTextField(
-                            value = verificationInput,
-                            onValueChange = { incoming ->
-                                val filtered = filterOutPaste(
-                                    previousText = verificationInput,
-                                    newText = incoming,
-                                    context = context,
-                                    onPasteAttemptBlocked = {
-                                        pasteBlockedNotice = "Copy-paste disabled. Type character-by-character."
-                                    }
-                                )
-                                if (filtered != verificationInput) {
-                                    pasteBlockedNotice = null
-                                }
-                                verificationInput = filtered
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("strict_mode_verify_input")
-                                .onPreviewKeyEvent { keyEvent ->
-                                    if (keyEvent.type == KeyEventType.KeyDown) {
-                                        val isCtrlOrMeta = keyEvent.isCtrlPressed || keyEvent.isMetaPressed
-                                        if (isCtrlOrMeta && (keyEvent.key == Key.V ||
-                                                    keyEvent.utf16CodePoint == 'v'.code ||
-                                                    keyEvent.utf16CodePoint == 'V'.code)) {
-                                            pasteBlockedNotice = "Copy-paste (Ctrl+V) disabled."
-                                            true
-                                        } else false
-                                    } else false
-                                },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = if (isMatched) Color(0xFF10B981) else Color(0xFF22262F),
-                                unfocusedBorderColor = if (isMatched) Color(0xFF10B981) else Color(0xFF22262F),
-                                focusedContainerColor = Color(0xFF141519),
-                                unfocusedContainerColor = Color(0xFF141519),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White
-                            ),
-                            placeholder = {
-                                Text("Type the exact passphrase to verify...", color = Color(0xFF555555))
-                            },
-                            minLines = 2,
-                            maxLines = 4
-                        )
-                    }
-
-                    if (pasteBlockedNotice != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = pasteBlockedNotice ?: "",
-                            color = Color(0xFFEF5350),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
+                // Final Warning Box
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF2B0E0E),
+                    border = BorderStroke(1.dp, Color(0xFFE53935).copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "${verificationInput.length} / ${trimmedCandidate.length} characters",
-                            fontSize = 11.sp,
-                            color = Color(0xFF888888)
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Warning",
+                            tint = Color(0xFFEF5350),
+                            modifier = Modifier.size(18.dp)
                         )
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = if (isMatched) "✓ Exact Match Confirmed" else "Pending Match",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isMatched) Color(0xFF10B981) else Color(0xFFEF5350)
+                            text = "Note: You must remember this exact phrase verbatim. You will not be asked to confirm it, and there is no bypass or reset.",
+                            color = Color(0xFFFF8A80),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = 16.sp
                         )
                     }
                 }
@@ -383,11 +292,11 @@ fun StrictModeActivationDialog(
 
                     Button(
                         onClick = {
-                            if (isMatched) {
+                            if (isCandidateValid) {
                                 onConfirm(trimmedCandidate)
                             }
                         },
-                        enabled = isMatched,
+                        enabled = isCandidateValid,
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF10B981),

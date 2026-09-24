@@ -17,19 +17,28 @@ android {
     applicationId = "com.aistudio.focuslock.fclk"
     minSdk = 26
     targetSdk = 36
-    versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
-    versionName = "1.0"
+    versionCode = System.getenv("BUILD_NUMBER")?.toIntOrNull()
+      ?: System.getenv("VERSION_CODE")?.toIntOrNull()
+      ?: 1
+    versionName = "1.0.${System.getenv("BUILD_NUMBER") ?: System.getenv("VERSION_CODE") ?: "1"}"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      val customKeystore = System.getenv("KEYSTORE_PATH")
+      val releaseKeystore = if (customKeystore != null && file(customKeystore).exists()) {
+        file(customKeystore)
+      } else if (file("${rootDir}/release.keystore").exists()) {
+        file("${rootDir}/release.keystore")
+      } else {
+        file("${rootDir}/debug.keystore")
+      }
+      storeFile = releaseKeystore
+      storePassword = System.getenv("STORE_PASSWORD") ?: "android"
+      keyAlias = System.getenv("KEY_ALIAS") ?: "androiddebugkey"
+      keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -44,7 +53,7 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("debugConfig")
+      signingConfig = signingConfigs.getByName("release")
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }

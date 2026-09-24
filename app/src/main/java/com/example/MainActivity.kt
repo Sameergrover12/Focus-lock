@@ -123,8 +123,16 @@ fun MainFocusApp(viewModel: FocusViewModel) {
     var isViewingAnalytics by rememberSaveable { mutableStateOf(false) }
     val isMasterEnabled by viewModel.isMasterEnabled.collectAsStateWithLifecycle()
 
-    BackHandler(enabled = isViewingAnalytics) {
-        isViewingAnalytics = false
+    // System Back Button Routing:
+    // If viewing analytics, back returns to the previous screen.
+    // If on a secondary tab (Apps, Groups, WebWords, Settings), back returns to Home tab (Dashboard, index 0).
+    // If already on Home tab and not viewing analytics, BackHandler is disabled so system handles app exit normally.
+    BackHandler(enabled = isViewingAnalytics || currentTabIndex != 0) {
+        if (isViewingAnalytics) {
+            isViewingAnalytics = false
+        } else if (currentTabIndex != 0) {
+            currentTabIndex = 0
+        }
     }
 
     val tabs = remember {

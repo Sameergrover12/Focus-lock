@@ -59,6 +59,8 @@ class FocusRepository(private val focusDao: FocusDao) {
     // Blocked Apps
     val allBlockedApps: Flow<List<BlockedApp>> = focusDao.getAllBlockedApps()
     suspend fun getAllBlockedAppsSync(): List<BlockedApp> = focusDao.getAllBlockedAppsSync()
+    val allBlockedPackageNames: Flow<List<String>> = focusDao.getAllBlockedPackageNames()
+    suspend fun getAllBlockedPackageNamesSync(): List<String> = focusDao.getAllBlockedPackageNamesSync()
     suspend fun blockApp(packageName: String, appName: String) =
         focusDao.insertBlockedApp(BlockedApp(packageName = packageName, appName = appName))
     suspend fun unblockApp(packageName: String) = focusDao.deleteBlockedApp(packageName)

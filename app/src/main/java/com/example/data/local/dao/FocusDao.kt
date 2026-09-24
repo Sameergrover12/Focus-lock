@@ -31,6 +31,12 @@ interface FocusDao {
     @Query("SELECT * FROM blocked_apps")
     suspend fun getAllBlockedAppsSync(): List<BlockedApp>
 
+    @Query("SELECT packageName FROM blocked_apps")
+    fun getAllBlockedPackageNames(): Flow<List<String>>
+
+    @Query("SELECT packageName FROM blocked_apps")
+    suspend fun getAllBlockedPackageNamesSync(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBlockedApp(blockedApp: BlockedApp)
 

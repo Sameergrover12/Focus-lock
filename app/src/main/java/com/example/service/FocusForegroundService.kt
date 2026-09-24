@@ -56,6 +56,7 @@ class FocusForegroundService : Service() {
     private var screenOnLastWrittenMinutes = 0
     private var screenOnInitialized = false
     private var screenStateReceiver: BroadcastReceiver? = null
+    @Volatile private var blockedPackagesCache = setOf<String>()
 
     companion object {
         private const val TAG = "FocusForegroundService"
@@ -133,7 +134,11 @@ class FocusForegroundService : Service() {
         registerReceiver(screenStateReceiver, filter)
 
         serviceScope.launch {
-            (application as? FocusApplication)?.repository?.resetDailyLimitsIfNeeded()
+            val app = application as? FocusApplication ?: return@launch
+            app.repository.resetDailyLimitsIfNeeded()
+            app.repository.allBlockedPackageNames.collect { list ->
+                blockedPackagesCache = list.toSet()
+            }
         }
         startUsageTrackingLoop()
     }
@@ -265,7 +270,7 @@ class FocusForegroundService : Service() {
         val emergencyUntil = prefRepo.activeEmergencyBreakUntil.first()
         if (emergencyUntil > now) return
 
-        val isBlocked = repo.isAppBlocked(pkgName)
+        val isBlocked = blockedPackagesCache.contains(pkgName) || repo.isAppBlocked(pkgName)
 
         if (isBlocked) {
             lastFallbackBlockPackage = pkgName

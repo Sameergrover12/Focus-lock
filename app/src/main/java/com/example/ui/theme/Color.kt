@@ -2,12 +2,33 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Calm Sage & Charcoal Palette
-val SagePrimaryLight = Color(0xFF2D6A4F)
+// Pure AMOLED Palette & Glowing Emerald Green
+val AmoledBlack = Color(0xFF000000)
+val AmoledSurfacePitch = Color(0xFF0D0E11)
+val AmoledSurfaceSlate = Color(0xFF141519)
+val AmoledCard = Color(0xFF101216)
+val AmoledCardBorder = Color(0xFF22262F)
+
+// Glowing Emerald Green Accents
+val EmeraldPrimary = Color(0xFF10B981)
+val EmeraldGlow = Color(0xFF00E676)
+val EmeraldLight = Color(0xFF34D399)
+val EmeraldDark = Color(0xFF059669)
+val EmeraldContainer = Color(0xFF064E3B)
+val EmeraldOnContainer = Color(0xFFA7F3D0)
+val EmeraldBorder = Color(0xFF10B981)
+
+// High-contrast text colors
+val TextHighContrast = Color(0xFFFFFFFF)
+val TextMediumContrast = Color(0xFFF0F0F0)
+val TextLowContrast = Color(0xFF9E9E9E)
+
+// Light Palette (Fallback / Light Mode)
+val SagePrimaryLight = Color(0xFF10B981)
 val SageOnPrimaryLight = Color(0xFFFFFFFF)
-val SagePrimaryContainerLight = Color(0xFFD8F3DC)
-val SageOnPrimaryContainerLight = Color(0xFF081C15)
-val SageSecondaryLight = Color(0xFF52796F)
+val SagePrimaryContainerLight = Color(0xFFD1FAE5)
+val SageOnPrimaryContainerLight = Color(0xFF064E3B)
+val SageSecondaryLight = Color(0xFF059669)
 val SageOnSecondaryLight = Color(0xFFFFFFFF)
 val SageBackgroundLight = Color(0xFFFAFAF8)
 val SageSurfaceLight = Color(0xFFFFFFFF)
@@ -15,22 +36,3 @@ val SageSurfaceVariantLight = Color(0xFFEEF2EF)
 val SageOnSurfaceLight = Color(0xFF191C1A)
 val SageOnSurfaceVariantLight = Color(0xFF404944)
 val SageOutlineLight = Color(0xFFD4DBD6)
-
-val SagePrimaryDark = Color(0xFF74C69D)
-val SageOnPrimaryDark = Color(0xFF081C15)
-val SagePrimaryContainerDark = Color(0xFF1E3A2B)
-val SageOnPrimaryContainerDark = Color(0xFFD8F3DC)
-val SageSecondaryDark = Color(0xFF95D5B2)
-val SageOnSecondaryDark = Color(0xFF1B4332)
-val SageSecondaryContainerDark = Color(0xFF1E3A2B)
-val SageOnSecondaryContainerDark = Color(0xFF74C69D)
-val SageBackgroundDark = Color(0xFF0F1115)
-val SageSurfaceDark = Color(0xFF181B21)
-val SageSurfaceVariantDark = Color(0xFF22262F)
-val SageOnSurfaceDark = Color(0xFFE6E8EC)
-val SageOnSurfaceVariantDark = Color(0xFF9CA3AF)
-val SageOutlineDark = Color(0xFF2E3440)
-val SageErrorDark = Color(0xFFEF5350)
-val SageErrorContainerDark = Color(0xFF2C1517)
-val SageOnErrorDark = Color(0xFFFFFFFF)
-val SageOnErrorContainerDark = Color(0xFFFFB4AB)

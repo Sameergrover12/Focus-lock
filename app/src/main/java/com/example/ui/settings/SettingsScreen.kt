@@ -37,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -64,10 +65,9 @@ import com.example.receiver.FocusDeviceAdminReceiver
 import com.example.data.preferences.ThemeMode
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Psychology
-import com.example.ui.common.CognitivePassphraseSetupDialog
 import com.example.ui.common.CheatProtectionAuthDialog
-import com.example.ui.common.CheatProtectionSetupDialog
 import com.example.ui.common.PendingLooseningAction
+import com.example.ui.common.StrictModeActivationDialog
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
 
@@ -90,10 +90,8 @@ fun SettingsScreen(
     var hasOverlay by remember { mutableStateOf(PermissionHelper.canDrawOverlays(context)) }
     var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
 
-    var showSetupDialog by remember { mutableStateOf(false) }
-    var showCheatEnableDialog by remember { mutableStateOf(false) }
+    var showStrictModeDialog by remember { mutableStateOf(false) }
     var showInvincibleConfirmDialog by remember { mutableStateOf(false) }
-    var showCognitivePassphraseDialog by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     DisposableEffect(lifecycleOwner) {
@@ -120,24 +118,15 @@ fun SettingsScreen(
         }
     }
 
-    if (showCheatEnableDialog) {
-        AlertDialog(
-            onDismissRequest = { showCheatEnableDialog = false },
-            title = { Text("Enable Strict Protection?") },
-            text = { Text("Are you sure? Once enabled, you will not be able to disable this protection without manually typing a 600-character confirmation text. There is no easy way out.") },
-            confirmButton = {
-                Button(onClick = {
-                    showCheatEnableDialog = false
-                    showSetupDialog = true
-                }) {
-                    Text("I Understand & Enable")
-                }
+    if (showStrictModeDialog) {
+        StrictModeActivationDialog(
+            initialPassphrase = cognitivePassphrase,
+            onConfirm = { definedPassphrase ->
+                viewModel.setCognitivePassphrase(definedPassphrase)
+                viewModel.setCheatProtection(definedPassphrase)
+                showStrictModeDialog = false
             },
-            dismissButton = {
-                OutlinedButton(onClick = { showCheatEnableDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+            onDismiss = { showStrictModeDialog = false }
         )
     }
 
@@ -162,27 +151,6 @@ fun SettingsScreen(
                     Text("Cancel")
                 }
             }
-        )
-    }
-
-    if (showSetupDialog) {
-        CheatProtectionSetupDialog(
-            onConfirm = { pass ->
-                viewModel.setCheatProtection(pass)
-                showSetupDialog = false
-            },
-            onDismiss = { showSetupDialog = false }
-        )
-    }
-
-    if (showCognitivePassphraseDialog) {
-        CognitivePassphraseSetupDialog(
-            initialPassphrase = cognitivePassphrase,
-            onSavePassphrase = { newPhrase ->
-                viewModel.setCognitivePassphrase(newPhrase)
-                showCognitivePassphraseDialog = false
-            },
-            onDismiss = { showCognitivePassphraseDialog = false }
         )
     }
 
@@ -262,7 +230,7 @@ fun SettingsScreen(
                 text = "Cognitive Rewiring & Behavioral Mechanics",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
+                color = Color.White
             )
         }
 
@@ -272,11 +240,12 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .testTag("cognitive_rewiring_card"),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0E11)),
+                border = BorderStroke(1.dp, Color(0xFF22262F)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    // 1. Reflective Bypass Sentence
+                    // 1. The Emergency Failsafe System
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -284,80 +253,13 @@ fun SettingsScreen(
                         Surface(
                             modifier = Modifier.size(40.dp),
                             shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Psychology,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Reflective Passphrase Setup",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Manually typed verbatim to bypass blocks",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "\"$cognitivePassphrase\"",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedButton(
-                        onClick = { showCognitivePassphraseDialog = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("configure_passphrase_button"),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Configure / Practice Passphrase")
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    androidx.compose.material3.HorizontalDivider()
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // 2. The Emergency Failsafe System
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            modifier = Modifier.size(40.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer
+                            color = Color(0xFF10B981).copy(alpha = 0.15f)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.HourglassBottom,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.secondary,
+                                    tint = Color(0xFF10B981),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -368,12 +270,12 @@ fun SettingsScreen(
                                 text = "The Emergency Failsafe System",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = Color.White
                             )
                             Text(
                                 text = "$emergencyBreaksRemaining of 3 breaks remaining this week",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (emergencyBreaksRemaining > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                color = if (emergencyBreaksRemaining > 0) Color(0xFF10B981) else Color(0xFFEF5350),
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -384,28 +286,28 @@ fun SettingsScreen(
                     Text(
                         text = "• 10-Minute Hard Cap: 3 breaks per 7-day cycle.\n• The Phantom Cutoff: Zero visual countdown timers.\n• The Abrupt Snapback: Immediate lock restoration at 10:00:00.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF9E9E9E),
                         lineHeight = 18.sp
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
-                    androidx.compose.material3.HorizontalDivider()
+                    androidx.compose.material3.HorizontalDivider(color = Color(0xFF22262F))
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 3. Reclaimed Intention
+                    // 2. Reclaimed Intention
                     Text(
                         text = "What You Are Reclaiming",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = Color.White
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Subtly injected into friction overlays and quick HUD toasts:",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color(0xFF9E9E9E)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -416,12 +318,13 @@ fun SettingsScreen(
                             Surface(
                                 onClick = { viewModel.setReclaimedCommitment(choice) },
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                color = if (isSel) Color(0xFF10B981) else Color(0xFF141519),
+                                border = BorderStroke(1.dp, if (isSel) Color(0xFF10B981) else Color(0xFF22262F)),
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Text(
                                     text = choice,
-                                    color = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    color = if (isSel) Color.Black else Color.White,
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                                     textAlign = TextAlign.Center,
@@ -437,10 +340,10 @@ fun SettingsScreen(
         // Section: Cheat Protection Lock (Change 4)
         item {
             Text(
-                text = "Cheat Protection",
+                text = "Cheating Protection & Strict Mode",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
+                color = Color.White
             )
         }
 
@@ -451,12 +354,13 @@ fun SettingsScreen(
                     .testTag("cheat_protection_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = Color(0xFF0D0E11)
                 ),
-                border = if (isCheatProtectionEnabled) {
-                    BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
-                } else null,
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                border = BorderStroke(
+                    1.dp,
+                    if (isCheatProtectionEnabled) Color(0xFF10B981) else Color(0xFF22262F)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -471,13 +375,13 @@ fun SettingsScreen(
                             Surface(
                                 modifier = Modifier.size(40.dp),
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error.copy(alpha = 0.15f) else MaterialTheme.colorScheme.primaryContainer
+                                color = if (isCheatProtectionEnabled) Color(0xFF064E3B) else Color(0xFF141519)
                             ) {
-                                androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+                                Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Lock,
                                         contentDescription = null,
-                                        tint = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                        tint = if (isCheatProtectionEnabled) Color(0xFF10B981) else Color(0xFFB0B0B0),
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -485,15 +389,15 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = "Cheat Protection Lock",
+                                    text = "Strict Mode / Anti-Cheat Lock",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                    color = Color.White
                                 )
                                 Text(
-                                    text = if (isCheatProtectionEnabled) "Active • Passphrase required to loosen rules" else "Disabled • Rules can be changed freely",
+                                    text = if (isCheatProtectionEnabled) "Active • Verbatim passphrase required to loosen" else "Disabled • Rules can be changed freely",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = if (isCheatProtectionEnabled) Color(0xFF10B981) else Color(0xFF9E9E9E)
                                 )
                             }
                         }
@@ -502,19 +406,21 @@ fun SettingsScreen(
                             checked = isCheatProtectionEnabled,
                             onCheckedChange = { willEnable ->
                                 if (willEnable) {
-                                    showCheatEnableDialog = true
+                                    showStrictModeDialog = true
                                 } else {
                                     pendingCheatAction = PendingLooseningAction(
-                                        title = "Disable Cheat Protection",
-                                        description = "Disabling Cheat Protection allows all blocking rules and limits to be modified or removed freely without entering the passphrase.",
+                                        title = "Disable Strict Mode",
+                                        description = "Disabling Strict Mode allows all rules and limits to be modified freely. Enter your reflective passphrase verbatim to authorize.",
                                         onAuthorized = { viewModel.disableCheatProtection() }
                                     )
                                 }
                             },
                             modifier = Modifier.testTag("cheat_protection_switch"),
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.onError,
-                                checkedTrackColor = MaterialTheme.colorScheme.error
+                                checkedThumbColor = Color(0xFF10B981),
+                                checkedTrackColor = Color(0xFF064E3B),
+                                uncheckedThumbColor = Color(0xFF888888),
+                                uncheckedTrackColor = Color(0xFF1E2024)
                             )
                         )
                     }

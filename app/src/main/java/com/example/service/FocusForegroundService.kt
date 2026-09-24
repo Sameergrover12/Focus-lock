@@ -23,6 +23,9 @@ import com.example.R
 import com.example.data.repository.FocusRepository
 import com.example.focusapp.util.MotivationLibrary
 import com.example.util.ScreenTimeHelper
+import com.example.util.PermissionHelper
+import com.example.ui.blocked.BlockedActivity
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -204,12 +207,12 @@ class FocusForegroundService : Service() {
 
             var loopCounter = 0
             while (isActive) {
-                delay(5000) // Poll every 5 seconds
+                delay(1000) // Fast 1-second polling loop for reliable foreground monitoring
                 loopCounter++
                 checkMidnightReset()
 
-                // Every 2 minutes (24 * 5s), reconcile full-day usage with UsageStatsManager
-                if (loopCounter % 24 == 0) {
+                // Every 2 minutes (120 * 1s), reconcile full-day usage with UsageStatsManager
+                if (loopCounter % 120 == 0) {
                     try {
                         val app = application as? FocusApplication
                         app?.repository?.syncUsageStatsFromSystem(applicationContext)
@@ -228,11 +231,67 @@ class FocusForegroundService : Service() {
                 }
 
                 // Accumulate true device screen-on duration (non-overlapping real time)
-                accumulateScreenOnTime(5)
+                accumulateScreenOnTime(1)
 
                 val currentPkg = detectCurrentForegroundPackage()
                 if (currentPkg != null && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
-                    accumulateForegroundUsage(currentPkg, 5)
+                    accumulateForegroundUsage(currentPkg, 1)
+
+                    // Secondary fallback enforcement if AccessibilityService is temporarily inactive
+                    if (!FocusAccessibilityService.isServiceRunning.value) {
+                        checkFallbackEnforcement(currentPkg)
+                    }
+                }
+            }
+        }
+    }
+
+    private var lastFallbackBlockPackage: String? = null
+    private var lastFallbackBlockTime: Long = 0L
+
+    private suspend fun checkFallbackEnforcement(pkgName: String) {
+        val now = System.currentTimeMillis()
+        if (pkgName == lastFallbackBlockPackage && now - lastFallbackBlockTime < 4000) {
+            return
+        }
+
+        val app = application as? FocusApplication ?: return
+        val prefRepo = app.preferencesRepository
+        val repo = app.repository
+
+        val isMaster = prefRepo.isMasterEnabled.first()
+        if (!isMaster) return
+
+        val emergencyUntil = prefRepo.activeEmergencyBreakUntil.first()
+        if (emergencyUntil > now) return
+
+        val isBlocked = repo.isAppBlocked(pkgName)
+
+        if (isBlocked) {
+            lastFallbackBlockPackage = pkgName
+            lastFallbackBlockTime = now
+            val quote = MotivationLibrary.getRandomFullScreenQuote()
+            if (PermissionHelper.canDrawOverlays(this)) {
+                com.example.ui.overlay.OverlayManager.showOverlay(
+                    context = this,
+                    title = pkgName,
+                    reason = "This app is restricted by Focus Lock.",
+                    type = BlockedActivity.TYPE_APP,
+                    quote = quote
+                )
+            } else {
+                try {
+                    val intent = Intent(this, BlockedActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra(BlockedActivity.EXTRA_TITLE, pkgName)
+                        putExtra(BlockedActivity.EXTRA_REASON, "This app is restricted by Focus Lock.")
+                        putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_APP)
+                        putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
+                        putExtra(BlockedActivity.EXTRA_QUOTE, quote)
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Fallback block launch failed", e)
                 }
             }
         }

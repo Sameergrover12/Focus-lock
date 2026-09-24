@@ -38,6 +38,9 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
 
+import com.example.ui.overlay.OverlayManager
+import com.example.util.PermissionHelper
+
 class FocusAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -958,25 +961,35 @@ class FocusAccessibilityService : AccessibilityService() {
             lastBlockedTime = now
             lastBlockedPackage = pkgName
 
-            // 1. Force-collapse floating windows, PiP, and split-screens at the OS level
-            performGlobalAction(GLOBAL_ACTION_HOME)
+            val quote = MotivationLibrary.getRandomFullScreenQuote()
 
-            // 2. Launch full-screen card displaying randomized quote (Category A)
-            try {
-                val intent = Intent(this@FocusAccessibilityService, BlockedActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra(BlockedActivity.EXTRA_TITLE, title)
-                    putExtra(BlockedActivity.EXTRA_REASON, reason)
-                    putExtra(BlockedActivity.EXTRA_TYPE, type)
-                    putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
-                    putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
-                    putExtra(BlockedActivity.EXTRA_QUOTE, MotivationLibrary.getRandomFullScreenQuote())
+            // If Display Over Other Apps permission is granted, draw WindowManager overlay
+            if (PermissionHelper.canDrawOverlays(this@FocusAccessibilityService)) {
+                OverlayManager.showOverlay(
+                    context = this@FocusAccessibilityService,
+                    title = title,
+                    reason = reason,
+                    type = type,
+                    quote = quote,
+                    nextWindow = nextWindow
+                )
+            } else {
+                // Fallback: Launch full-screen BlockedActivity displaying quote and 4-second pattern interrupt
+                try {
+                    val intent = Intent(this@FocusAccessibilityService, BlockedActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra(BlockedActivity.EXTRA_TITLE, title)
+                        putExtra(BlockedActivity.EXTRA_REASON, reason)
+                        putExtra(BlockedActivity.EXTRA_TYPE, type)
+                        putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
+                        putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+                        putExtra(BlockedActivity.EXTRA_QUOTE, quote)
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch BlockedActivity", e)
                 }
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to launch BlockedActivity", e)
             }
         }
     }

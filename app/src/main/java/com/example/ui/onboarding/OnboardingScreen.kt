@@ -36,10 +36,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Visibility
@@ -92,12 +95,18 @@ fun OnboardingScreen(
 
     var hasAccessibility by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
+    var hasOverlay by remember { mutableStateOf(PermissionHelper.canDrawOverlays(context)) }
+    var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
+    var hasNotification by remember { mutableStateOf(PermissionHelper.isNotificationPermissionGranted(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasAccessibility = PermissionHelper.isAccessibilityServiceEnabled(context)
                 hasUsageStats = PermissionHelper.isUsageStatsPermissionGranted(context)
+                hasOverlay = PermissionHelper.canDrawOverlays(context)
+                hasBattery = PermissionHelper.isBatteryOptimizationIgnored(context)
+                hasNotification = PermissionHelper.isNotificationPermissionGranted(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -155,7 +164,7 @@ fun OnboardingScreen(
                                 .height(4.dp)
                                 .width(if (isSelected) 24.dp else 8.dp)
                                 .background(
-                                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.25f),
+                                    color = if (isSelected) Color(0xFF10B981) else Color.White.copy(alpha = 0.25f),
                                     shape = CircleShape
                                 )
                         )
@@ -202,10 +211,16 @@ fun OnboardingScreen(
                     )
                     3 -> TransparencyPactScreen(
                         isActive = pagerState.currentPage == 3,
-                        hasAccessibility = hasAccessibility,
                         hasUsageStats = hasUsageStats,
+                        hasAccessibility = hasAccessibility,
+                        hasOverlay = hasOverlay,
+                        hasBattery = hasBattery,
+                        hasNotification = hasNotification,
+                        onOpenUsageStats = { PermissionHelper.openUsageAccessSettings(context) },
                         onOpenAccessibility = { PermissionHelper.openAccessibilitySettings(context) },
-                        onOpenUsageStats = { PermissionHelper.openUsageAccessSettings(context) }
+                        onOpenOverlay = { PermissionHelper.openOverlaySettings(context) },
+                        onOpenBattery = { PermissionHelper.openBatteryOptimizationSettings(context) },
+                        onOpenNotification = { PermissionHelper.openNotificationSettings(context) }
                     )
                 }
             }
@@ -539,19 +554,21 @@ private fun InteractiveCommitmentScreen(
 
 /**
  * Screen 4: The Transparency Pact (Google Play Prominent Disclosure)
- * Headline: "We need teeth to fight back."
- * Body:
- * - Usage Access: To detect the exact millisecond a restricted app is launched.
- * - Accessibility Service: To read screen text for blocked keywords and draw the full-screen intervention overlay.
- * Privacy Promise: "Everything operates strictly on your local device. We do not track or export your data."
+ * Full 5-permission deck with interactive status cards.
  */
 @Composable
 private fun TransparencyPactScreen(
     isActive: Boolean,
-    hasAccessibility: Boolean,
     hasUsageStats: Boolean,
+    hasAccessibility: Boolean,
+    hasOverlay: Boolean,
+    hasBattery: Boolean,
+    hasNotification: Boolean,
+    onOpenUsageStats: () -> Unit,
     onOpenAccessibility: () -> Unit,
-    onOpenUsageStats: () -> Unit
+    onOpenOverlay: () -> Unit,
+    onOpenBattery: () -> Unit,
+    onOpenNotification: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -561,7 +578,7 @@ private fun TransparencyPactScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top
     ) {
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         AnimatedVisibility(
             visible = isActive,
@@ -571,47 +588,86 @@ private fun TransparencyPactScreen(
                 Text(
                     text = "We need teeth to fight back.",
                     color = Color.White,
-                    fontSize = 26.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
                     letterSpacing = (-0.5).sp,
                     modifier = Modifier.testTag("transparency_headline")
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "To dismantle habit loops and block compulsive bypasses, Focus Lock requires specific Android system permissions.",
+                    text = "To dismantle habit loops and reliably enforce focus friction, Focus Lock requires 5 system permissions.",
                     color = Color(0xFFAAAAAA),
                     fontSize = 13.sp,
-                    lineHeight = 20.sp,
+                    lineHeight = 19.sp,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Permission 1: Usage Access
+                // 1. Usage Access
                 TransparencyDisclosureCard(
-                    title = "Usage Access",
-                    disclosure = "To detect the exact millisecond a restricted app is launched.",
+                    title = "1. Usage Access",
+                    disclosure = "To detect active foreground apps in real time.",
                     icon = Icons.Default.DataUsage,
                     isGranted = hasUsageStats,
-                    actionLabel = if (hasUsageStats) "Enabled" else "Grant Usage Access",
+                    actionLabel = "Grant Usage Access",
                     onAction = onOpenUsageStats,
                     testTag = "disclosure_usage_access"
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Permission 2: Accessibility Service
+                // 2. Accessibility Service
                 TransparencyDisclosureCard(
-                    title = "Accessibility Service",
-                    disclosure = "To read screen text for blocked keywords and draw the full-screen intervention overlay.",
+                    title = "2. Accessibility Service",
+                    disclosure = "To intercept restricted screen events and draw the full-screen barrier.",
                     icon = Icons.Default.Visibility,
                     isGranted = hasAccessibility,
-                    actionLabel = if (hasAccessibility) "Enabled" else "Grant Accessibility",
+                    actionLabel = "Grant Accessibility",
                     onAction = onOpenAccessibility,
                     testTag = "disclosure_accessibility"
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 3. Display Over Other Apps
+                TransparencyDisclosureCard(
+                    title = "3. Display Over Other Apps",
+                    disclosure = "Required to immediately render overlays over third-party applications.",
+                    icon = Icons.Default.Layers,
+                    isGranted = hasOverlay,
+                    actionLabel = "Grant Overlay Access",
+                    onAction = onOpenOverlay,
+                    testTag = "disclosure_overlay"
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 4. Battery Optimization Bypass
+                TransparencyDisclosureCard(
+                    title = "4. Battery Optimization Bypass",
+                    disclosure = "Prevents aggressive OEM background task killers from stopping the blocker service.",
+                    icon = Icons.Default.BatteryChargingFull,
+                    isGranted = hasBattery,
+                    actionLabel = "Bypass Battery Limits",
+                    onAction = onOpenBattery,
+                    testTag = "disclosure_battery"
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 5. Post Notifications
+                TransparencyDisclosureCard(
+                    title = "5. Post Notifications",
+                    disclosure = "Ensures foreground service notifications run reliably without silent termination.",
+                    icon = Icons.Default.Notifications,
+                    isGranted = hasNotification,
+                    actionLabel = "Enable Notifications",
+                    onAction = onOpenNotification,
+                    testTag = "disclosure_notifications"
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -619,8 +675,8 @@ private fun TransparencyPactScreen(
                 // Privacy Promise Card
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = Color(0xFF141414),
-                    border = BorderStroke(1.dp, Color(0xFF262626)),
+                    color = Color(0xFF0D0E11),
+                    border = BorderStroke(1.dp, Color(0xFF22262F)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("privacy_promise_card")
@@ -632,7 +688,7 @@ private fun TransparencyPactScreen(
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = Color(0xFF10B981),
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(14.dp))
@@ -653,6 +709,8 @@ private fun TransparencyPactScreen(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -669,67 +727,78 @@ private fun TransparencyDisclosureCard(
     testTag: String
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF0F0F0F),
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF0D0E11),
         border = BorderStroke(
-            1.dp,
-            if (isGranted) Color(0xFF2E7D32) else Color(0xFF333333)
+            width = if (isGranted) 1.5.dp else 1.dp,
+            color = if (isGranted) Color(0xFF10B981) else Color(0xFF22262F)
         ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag(testTag)
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = if (isGranted) Color(0xFF81C784) else Color.White,
-                        modifier = Modifier.size(22.dp)
+                        tint = if (isGranted) Color(0xFF10B981) else Color(0xFFB0B0B0),
+                        modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = title,
                         color = Color.White,
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
                 if (isGranted) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = "Granted",
-                        tint = Color(0xFF81C784),
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFF064E3B),
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Granted",
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = disclosure,
-                color = Color(0xFFB0B0B0),
-                fontSize = 13.sp,
-                lineHeight = 19.sp
+                color = Color(0xFF9E9E9E),
+                fontSize = 12.sp,
+                lineHeight = 18.sp
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (!isGranted) {
                 OutlinedButton(
                     onClick = onAction,
-                    shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color(0xFF1A1A1A),
-                        contentColor = Color.White
+                        containerColor = Color(0xFF141519),
+                        contentColor = Color(0xFF10B981)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -742,18 +811,18 @@ private fun TransparencyDisclosureCard(
             } else {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(vertical = 4.dp)
+                    modifier = Modifier.padding(vertical = 2.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = null,
-                        tint = Color(0xFF81C784),
+                        tint = Color(0xFF10B981),
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Permission Configured",
-                        color = Color(0xFF81C784),
+                        text = "Configured & Active",
+                        color = Color(0xFF10B981),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )

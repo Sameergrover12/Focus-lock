@@ -45,7 +45,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.FocusApplication
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.focusapp.util.MotivationLibrary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class BlockedActivity : ComponentActivity() {
@@ -84,6 +87,8 @@ class BlockedActivity : ComponentActivity() {
         const val TYPE_GROUP_BUDGET = "type_group_budget"
         const val TYPE_INVINCIBLE_TAMPER = "type_invincible_tamper"
     }
+
+    private var allowManualDismiss = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,9 +111,11 @@ class BlockedActivity : ComponentActivity() {
             finish()
         }
 
-        // Tapping back also acknowledges and returns to home screen
+        // Tapping back during the 4-second pattern interrupt is disabled
         onBackPressedDispatcher.addCallback(this) {
-            returnToHome()
+            if (allowManualDismiss) {
+                returnToHome()
+            }
         }
 
         setContent {
@@ -128,11 +135,13 @@ class BlockedActivity : ComponentActivity() {
                 breaksRemaining = breaksRemaining,
                 cognitivePassphrase = cognitivePassphrase,
                 onGoHome = returnToHome,
+                onPatternInterruptPassed = {
+                    allowManualDismiss = true
+                },
                 onActivateEmergencyBreak = { phrase ->
                     prefRepo?.triggerEmergencyBreak(phrase) ?: false
                 },
                 onEmergencyBreakActivated = {
-                    // Close BlockedActivity to let user use their emergency break
                     finish()
                 }
             )
@@ -150,10 +159,28 @@ fun BlockedScreen(
     cognitivePassphrase: String = UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE,
     nextWindow: String? = null,
     onGoHome: () -> Unit = {},
+    onPatternInterruptPassed: () -> Unit = {},
     onActivateEmergencyBreak: suspend (String) -> Boolean = { false },
     onEmergencyBreakActivated: () -> Unit = {}
 ) {
     var showEmergencyDialog by remember { mutableStateOf(false) }
+    var secondsRemaining by remember { mutableIntStateOf(4) }
+    var canDismissManually by remember { mutableStateOf(false) }
+
+    // 4-Second Pattern Interrupt: Forces user to read the quote for exactly 4 seconds
+    LaunchedEffect(Unit) {
+        for (i in 4 downTo 1) {
+            secondsRemaining = i
+            delay(1000)
+        }
+        secondsRemaining = 0
+        canDismissManually = true
+        onPatternInterruptPassed()
+        // If user hasn't opened emergency dialog to type passphrase, auto-eject to Home
+        if (!showEmergencyDialog) {
+            onGoHome()
+        }
+    }
 
     // Parse quote body and attribution if separated by newline
     val parts = remember(quote) {
@@ -187,16 +214,16 @@ fun BlockedScreen(
     ) {
         // Top context badge
         Surface(
-            color = Color(0xFF141414),
+            color = Color(0xFF0D0E11),
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, Color(0xFF262626)),
+            border = BorderStroke(1.dp, Color(0xFF22262F)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp)
         ) {
             Text(
                 text = badgeLabel,
-                color = Color(0xFFAAAAAA),
+                color = Color(0xFF10B981),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
@@ -213,7 +240,7 @@ fun BlockedScreen(
         ) {
             Text(
                 text = "“",
-                color = Color.White.copy(alpha = 0.3f),
+                color = Color(0xFF10B981).copy(alpha = 0.45f),
                 fontSize = 68.sp,
                 fontWeight = FontWeight.Bold,
                 lineHeight = 48.sp,
@@ -238,7 +265,7 @@ fun BlockedScreen(
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
                     text = quoteAuthor,
-                    color = Color(0xFF888888),
+                    color = Color(0xFFAAAAAA),
                     fontSize = 14.sp,
                     fontStyle = FontStyle.Italic,
                     fontWeight = FontWeight.Normal,
@@ -249,39 +276,68 @@ fun BlockedScreen(
             }
         }
 
-        // Bottom Controls: Primary Acknowledge + Emergency Failsafe
+        // Bottom Controls: Pattern Interrupt friction countdown / Acknowledge + Emergency Failsafe
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Bottom subtle "Acknowledge & Return" button
-            OutlinedButton(
-                onClick = onGoHome,
-                shape = RoundedCornerShape(27.dp),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color(0xFF141414),
-                    contentColor = Color.White
-                ),
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .heightIn(min = 52.dp)
-                    .testTag("acknowledge_return_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "Acknowledge & Return",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.5.sp
-                )
+            if (!canDismissManually) {
+                // 4-Second friction state: manual bypass disabled
+                Surface(
+                    color = Color(0xFF0D0E11),
+                    shape = RoundedCornerShape(27.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .heightIn(min = 52.dp)
+                        .testTag("friction_countdown_badge")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 14.dp, horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "Absorbing pattern interrupt (${secondsRemaining}s)...",
+                            color = Color(0xFF10B981),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.4.sp
+                        )
+                    }
+                }
+            } else {
+                // Enabled after 4 seconds
+                OutlinedButton(
+                    onClick = onGoHome,
+                    shape = RoundedCornerShape(27.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color(0xFF141519),
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .heightIn(min = 52.dp)
+                        .testTag("acknowledge_return_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Acknowledge & Return",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))

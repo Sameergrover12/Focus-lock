@@ -43,6 +43,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -200,7 +202,18 @@ fun MainFocusApp(viewModel: FocusViewModel) {
         },
         bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF000000),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .drawBehind {
+                        // Subtle 1dp top border using semi-transparent emerald for physical separation
+                        drawLine(
+                            color = Color(0x3322C55E),
+                            start = Offset(0f, 0f),
+                            end = Offset(size.width, 0f),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                    },
+                containerColor = Color(0xCC0D120F),
                 tonalElevation = 0.dp
             ) {
                 tabs.forEach { tab ->
@@ -213,11 +226,13 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                             isViewingAnalytics = false
                             currentTabIndex = tab.routeIndex
                         },
-                        modifier = Modifier.testTag(tab.testTag),
+                        modifier = Modifier
+                            .testTag(tab.testTag)
+                            .padding(vertical = 4.dp),
                         colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = Color(0xFF064E3B),
-                            selectedIconColor = Color(0xFF10B981),
-                            selectedTextColor = Color(0xFF10B981),
+                            indicatorColor = Color(0xFF064E3B).copy(alpha = 0.85f),
+                            selectedIconColor = Color(0xFF22C55E),
+                            selectedTextColor = Color(0xFF22C55E),
                             unselectedIconColor = Color(0xFF757575),
                             unselectedTextColor = Color(0xFF757575)
                         )

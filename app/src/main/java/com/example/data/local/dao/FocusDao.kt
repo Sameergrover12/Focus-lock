@@ -180,9 +180,19 @@ interface FocusDao {
     @Query("SELECT screenOnMinutes FROM daily_screen_time WHERE date = :date")
     suspend fun getScreenOnMinutesForDateSync(date: String): Int?
 
-    @Query("SELECT * FROM daily_screen_time ORDER BY date DESC LIMIT 7")
+    @Query("SELECT * FROM daily_screen_time ORDER BY date DESC LIMIT 30")
     fun getRecentDailyScreenTimes(): Flow<List<DailyScreenTime>>
+
+    @Query("SELECT * FROM daily_screen_time ORDER BY date DESC LIMIT 30")
+    suspend fun getRecentDailyScreenTimesSync(): List<DailyScreenTime>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateScreenOnTime(item: DailyScreenTime)
+
+    // FIFO Pruning: keep at most 30 days of records
+    @Query("DELETE FROM daily_screen_time WHERE date NOT IN (SELECT date FROM (SELECT date FROM daily_screen_time ORDER BY date DESC LIMIT 30))")
+    suspend fun pruneOldDailyScreenTimes()
+
+    @Query("DELETE FROM daily_usage_logs WHERE date NOT IN (SELECT date FROM (SELECT DISTINCT date FROM daily_usage_logs ORDER BY date DESC LIMIT 30))")
+    suspend fun pruneOldDailyUsageLogs()
 }

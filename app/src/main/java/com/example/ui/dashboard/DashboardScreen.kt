@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -175,11 +176,11 @@ fun DashboardScreen(
                     .testTag("master_switch_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isMasterEnabled) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    }
+                    containerColor = Color(0xFF000000)
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (isMasterEnabled) Color(0xFF22C55E) else Color(0xFF22262F)
                 )
             ) {
                 Row(
@@ -194,15 +195,20 @@ fun DashboardScreen(
                             modifier = Modifier
                                 .size(44.dp)
                                 .background(
-                                    color = if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    color = if (isMasterEnabled) Color(0x2222C55E) else Color(0xFF141519),
                                     shape = CircleShape
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isMasterEnabled) Color(0x6622C55E) else Color(0xFF262626),
+                                    CircleShape
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = if (isMasterEnabled) Icons.Default.Shield else Icons.Default.Block,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimary,
+                                tint = if (isMasterEnabled) Color(0xFF22C55E) else Color(0xFF757575),
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -212,12 +218,12 @@ fun DashboardScreen(
                                 text = if (isMasterEnabled) "Focus Protection ON" else "Protection Paused",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = Color.White
                             )
                             Text(
                                 text = if (isMasterEnabled) "Enforcing 5 control rules" else "Rules temporarily bypassed",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = Color(0xFFAAAAAA)
                             )
                         }
                     }
@@ -236,8 +242,10 @@ fun DashboardScreen(
                             }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary
+                            checkedThumbColor = Color(0xFF000000),
+                            checkedTrackColor = Color(0xFF22C55E),
+                            uncheckedThumbColor = Color(0xFF757575),
+                            uncheckedTrackColor = Color(0xFF1A1D23)
                         )
                     )
                 }
@@ -310,14 +318,6 @@ fun DashboardScreen(
                         style = MaterialTheme.typography.displayMedium,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "Tap to view full screen time breakdown and drain spectrum",
-                        fontSize = 12.sp,
-                        color = Color(0xFF757575)
                     )
                 }
             }

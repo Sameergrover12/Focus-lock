@@ -153,7 +153,17 @@ class FocusRepository(private val focusDao: FocusDao) {
         }
 
     val recentDailyScreenTimes: Flow<List<DailyScreenTime>> = focusDao.getRecentDailyScreenTimes()
+    suspend fun getRecentDailyScreenTimesSync(): List<DailyScreenTime> = focusDao.getRecentDailyScreenTimesSync()
     val allRecentUsageLogs: Flow<List<DailyUsageLog>> = focusDao.getAllRecentUsageLogs()
+
+    suspend fun pruneHistoricalData() {
+        try {
+            focusDao.pruneOldDailyScreenTimes()
+            focusDao.pruneOldDailyUsageLogs()
+        } catch (e: Exception) {
+            android.util.Log.e("FocusRepository", "Error pruning historical data", e)
+        }
+    }
 
     suspend fun getUsageLogSync(packageName: String, date: String = getTodayDateString()): DailyUsageLog? =
         focusDao.getUsageLog(packageName, date)
@@ -188,6 +198,7 @@ class FocusRepository(private val focusDao: FocusDao) {
     suspend fun updateDeviceScreenOnTime(minutes: Int, date: String = getTodayDateString()) {
         val sanitized = maxOf(0, minutes)
         focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = date, screenOnMinutes = sanitized))
+        pruneHistoricalData()
     }
 
     /**

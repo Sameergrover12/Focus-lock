@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -201,6 +202,14 @@ class FocusViewModel(
         initialValue = emptyList()
     )
 
+    val monthlyAverageScreenTimeMinutes: StateFlow<Double> = repository.recentDailyScreenTimes.map { list ->
+        if (list.isEmpty()) 0.0 else list.map { it.screenOnMinutes }.average()
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0.0
+    )
+
     val allRecentUsageLogs: StateFlow<List<DailyUsageLog>> = repository.allRecentUsageLogs.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -236,6 +245,7 @@ class FocusViewModel(
         viewModelScope.launch {
             repository.resetDailyLimitsIfNeeded()
             repository.syncUsageStatsFromSystem(getApplication())
+            repository.pruneHistoricalData()
         }
     }
 

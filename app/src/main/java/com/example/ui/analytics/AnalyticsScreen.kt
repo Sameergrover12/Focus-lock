@@ -6,6 +6,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TrendingDown
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -92,6 +95,7 @@ fun AnalyticsScreen(
     val recentScreenTimes by viewModel.recentDailyScreenTimes.collectAsStateWithLifecycle()
     val reclaimedCommitment by viewModel.reclaimedCommitment.collectAsStateWithLifecycle()
     val blockedApps by viewModel.blockedApps.collectAsStateWithLifecycle()
+    val monthlyAverageMinutes by viewModel.monthlyAverageScreenTimeMinutes.collectAsStateWithLifecycle()
 
     val totalMins = (totalMinutesToday ?: 0).coerceAtLeast(0)
     val blockedPackageSet = remember(blockedApps) { blockedApps.map { it.packageName }.toSet() }
@@ -117,47 +121,18 @@ fun AnalyticsScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Back Navigation Header (if opened as drill-down)
-        if (onNavigateBack != null) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.testTag("analytics_back_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Return to Dashboard",
-                            tint = Color.White
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Analytics & Usage Distribution",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        // 1. Hero Focus Drain Header
+        // 1. Hero Focus Drain Header with 30-day Comparison Metric
         item {
             AnalyticsHeroCard(
                 totalMinutes = totalMins,
-                reclaimedCommitment = reclaimedCommitment
+                reclaimedCommitment = reclaimedCommitment,
+                monthlyAverageMinutes = monthlyAverageMinutes
             )
         }
 
-        // 2. 7-Day Screen Time Bar Chart
+        // 2. 30-Day Screen Time Usage Trend (Horizontally Scrollable)
         item {
-            ScreenTimeBarChartCard(
+            MonthlyUsageTrendCard(
                 recentScreenTimes = recentScreenTimes,
                 todayMinutes = totalMins
             )
@@ -261,7 +236,8 @@ fun AnalyticsScreen(
 @Composable
 private fun AnalyticsHeroCard(
     totalMinutes: Int,
-    reclaimedCommitment: String
+    reclaimedCommitment: String,
+    monthlyAverageMinutes: Double = 0.0
 ) {
     val hours = totalMinutes / 60
     val mins = totalMinutes % 60
@@ -270,10 +246,16 @@ private fun AnalyticsHeroCard(
     // Assume 16 waking hours (960 min)
     val percentOfWakingDay = ((totalMinutes.toFloat() / 960f) * 100f).coerceIn(0f, 100f).toInt()
 
+    val monthlyAvgInt = monthlyAverageMinutes.toInt()
+    val hasMonthlyHistory = monthlyAvgInt > 0
+    val diffPercent = if (hasMonthlyHistory) {
+        (((totalMinutes - monthlyAvgInt).toFloat() / monthlyAvgInt.toFloat()) * 100).toInt()
+    } else 0
+
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0F0F0F),
-        border = BorderStroke(1.dp, Color(0xFF262626)),
+        color = Color(0xFF0D0E11),
+        border = BorderStroke(1.dp, Color(0xFF22262F)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("analytics_hero_card")
@@ -288,7 +270,7 @@ private fun AnalyticsHeroCard(
                     Icon(
                         imageVector = Icons.Default.HourglassTop,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = Color(0xFF10B981),
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -303,8 +285,8 @@ private fun AnalyticsHeroCard(
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF1E1E1E),
-                    border = BorderStroke(1.dp, Color(0xFF333333))
+                    color = Color(0xFF141519),
+                    border = BorderStroke(1.dp, Color(0xFF22262F))
                 ) {
                     Text(
                         text = "Reclaiming: $reclaimedCommitment",
@@ -340,6 +322,58 @@ private fun AnalyticsHeroCard(
                 )
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Actionable Insight: Today vs 30-Day Monthly Average
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (hasMonthlyHistory) {
+                    if (diffPercent <= 0) {
+                        Icon(
+                            imageVector = Icons.Default.TrendingDown,
+                            contentDescription = null,
+                            tint = Color(0xFF22C55E),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "↓ ${kotlin.math.abs(diffPercent)}% vs Monthly Average",
+                            color = Color(0xFF22C55E),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.TrendingUp,
+                            contentDescription = null,
+                            tint = Color(0xFFEF5350),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "↑ ${diffPercent}% vs Monthly Average",
+                            color = Color(0xFFEF5350),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = Color(0xFF10B981),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "• 30-Day baseline tracking active",
+                        color = Color(0xFF9E9E9E),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(14.dp))
 
             // Progress bar
@@ -348,8 +382,8 @@ private fun AnalyticsHeroCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp),
-                color = if (percentOfWakingDay > 30) Color(0xFFEF5350) else Color.White,
-                trackColor = Color(0xFF222222),
+                color = if (percentOfWakingDay > 30) Color(0xFFEF5350) else Color(0xFF10B981),
+                trackColor = Color(0xFF22262F),
                 strokeCap = StrokeCap.Round
             )
         }
@@ -357,41 +391,68 @@ private fun AnalyticsHeroCard(
 }
 
 /**
- * 7-Day Screen Time Bar Chart rendered directly using Compose Canvas
+ * 30-Day Screen Time Usage Trend with horizontal scrolling and interactive day inspection
  */
 @Composable
-private fun ScreenTimeBarChartCard(
+private fun MonthlyUsageTrendCard(
     recentScreenTimes: List<DailyScreenTime>,
     todayMinutes: Int
 ) {
-    // Generate data points for the past 7 days
-    val calendar = Calendar.getInstance()
     val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-    val dayLabelFormat = SimpleDateFormat("EEE", Locale.getDefault())
+    val dayMonthFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+    val dayNumFormat = SimpleDateFormat("d", Locale.getDefault())
+    val weekdayFormat = SimpleDateFormat("EE", Locale.getDefault())
 
-    val past7Days = remember(recentScreenTimes, todayMinutes) {
+    val past30Days = remember(recentScreenTimes, todayMinutes) {
         val list = mutableListOf<DayBarData>()
         val screenTimeMap = recentScreenTimes.associate { it.date to it.screenOnMinutes }
 
-        for (i in 6 downTo 0) {
+        for (i in 29 downTo 0) {
             val cal = Calendar.getInstance()
             cal.add(Calendar.DAY_OF_YEAR, -i)
             val dateStr = dateFormat.format(cal.time)
-            val dayLabel = dayLabelFormat.format(cal.time).uppercase()
+            val dayNum = dayNumFormat.format(cal.time)
+            val weekday = weekdayFormat.format(cal.time).uppercase()
+            val fullLabel = dayMonthFormat.format(cal.time)
             val mins = if (i == 0) todayMinutes else (screenTimeMap[dateStr] ?: 0)
-            list.add(DayBarData(label = dayLabel, date = dateStr, minutes = mins, isToday = (i == 0)))
+            list.add(
+                DayBarData(
+                    label = weekday,
+                    dayNumber = dayNum,
+                    fullDate = fullLabel,
+                    date = dateStr,
+                    minutes = mins,
+                    isToday = (i == 0)
+                )
+            )
         }
         list
     }
 
-    val maxMinutes = remember(past7Days) {
-        past7Days.maxOfOrNull { it.minutes }?.coerceAtLeast(60) ?: 60
+    val maxMinutes = remember(past30Days) {
+        past30Days.maxOfOrNull { it.minutes }?.coerceAtLeast(60) ?: 60
+    }
+
+    val avgMinutes = remember(past30Days) {
+        val daysWithUsage = past30Days.filter { it.minutes > 0 }
+        if (daysWithUsage.isNotEmpty()) {
+            daysWithUsage.map { it.minutes }.average().toInt()
+        } else {
+            past30Days.map { it.minutes }.average().toInt()
+        }
+    }
+
+    var selectedDay by remember { mutableStateOf<DayBarData?>(null) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        scrollState.scrollTo(scrollState.maxValue)
     }
 
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0F0F0F),
-        border = BorderStroke(1.dp, Color(0xFF262626)),
+        color = Color(0xFF0D0E11),
+        border = BorderStroke(1.dp, Color(0xFF22262F)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("screen_time_chart_card")
@@ -402,82 +463,145 @@ private fun ScreenTimeBarChartCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "7-Day Usage History",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                val avgMinutes = past7Days.map { it.minutes }.average().toInt()
-                val avgHours = avgMinutes / 60
-                val avgM = avgMinutes % 60
-                Text(
-                    text = "Avg: ${if (avgHours > 0) "${avgHours}h " else ""}${avgM}m/day",
-                    color = Color(0xFF888888),
-                    fontSize = 12.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Bar Chart Canvas
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(130.dp)
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val canvasWidth = size.width
-                    val canvasHeight = size.height
-                    val bottomPadding = 24.dp.toPx()
-                    val chartHeight = canvasHeight - bottomPadding
-
-                    val barCount = past7Days.size
-                    val slotWidth = canvasWidth / barCount
-                    val barWidth = slotWidth * 0.42f
-
-                    // Draw baseline
-                    drawLine(
-                        color = Color(0xFF222222),
-                        start = Offset(0f, chartHeight),
-                        end = Offset(canvasWidth, chartHeight),
-                        strokeWidth = 1.dp.toPx()
+                Column {
+                    Text(
+                        text = "30-Day Usage Trend",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
                     )
-
-                    past7Days.forEachIndexed { index, day ->
-                        val ratio = (day.minutes.toFloat() / maxMinutes.toFloat()).coerceIn(0.04f, 1f)
-                        val barHeight = chartHeight * ratio
-                        val xOffset = index * slotWidth + (slotWidth - barWidth) / 2f
-                        val yOffset = chartHeight - barHeight
-
-                        val barColor = if (day.isToday) Color.White else Color(0xFF444444)
-
-                        // Draw bar pill
-                        drawRoundRect(
-                            color = barColor,
-                            topLeft = Offset(xOffset, yOffset),
-                            size = Size(barWidth, barHeight),
-                            cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Swipe to review monthly history",
+                        color = Color(0xFF757575),
+                        fontSize = 11.sp
+                    )
                 }
 
-                // Row of labels below canvas
+                val avgHours = avgMinutes / 60
+                val avgM = avgMinutes % 60
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF141519),
+                    border = BorderStroke(1.dp, Color(0xFF22262F))
+                ) {
+                    Text(
+                        text = "30D Avg: ${if (avgHours > 0) "${avgHours}h " else ""}${avgM}m/day",
+                        color = Color(0xFF10B981),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            if (selectedDay != null) {
+                Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .align(Alignment.BottomCenter),
-                    horizontalArrangement = Arrangement.SpaceAround
+                        .background(Color(0xFF141519), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    past7Days.forEach { day ->
+                    Text(
+                        text = selectedDay?.fullDate.orEmpty(),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    val sMins = selectedDay?.minutes ?: 0
+                    val sHours = sMins / 60
+                    val sRemMins = sMins % 60
+                    Text(
+                        text = if (sHours > 0) "${sHours}h ${sRemMins}m screen dwell" else "${sRemMins}m screen dwell",
+                        color = Color(0xFF10B981),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Horizontally Scrollable 30-Day Bar Chart
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(scrollState)
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                past30Days.forEach { day ->
+                    val isSelected = selectedDay?.date == day.date
+                    val ratio = (day.minutes.toFloat() / maxMinutes.toFloat()).coerceIn(0.05f, 1f)
+
+                    Column(
+                        modifier = Modifier
+                            .width(36.dp)
+                            .clickable {
+                                selectedDay = if (selectedDay?.date == day.date) null else day
+                            },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Bar Canvas
+                        Box(
+                            modifier = Modifier
+                                .width(36.dp)
+                                .height(110.dp),
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val canvasWidth = size.width
+                                val canvasHeight = size.height
+                                val barWidth = 14.dp.toPx()
+                                val barHeight = canvasHeight * ratio
+                                val xOffset = (canvasWidth - barWidth) / 2f
+                                val yOffset = canvasHeight - barHeight
+
+                                val barColor = when {
+                                    day.isToday -> Color(0xFF22C55E)
+                                    isSelected -> Color(0xFF10B981)
+                                    day.minutes > avgMinutes -> Color(0xFFEF9A9A)
+                                    day.minutes > 0 -> Color(0xFF4B5563)
+                                    else -> Color(0xFF1F242D)
+                                }
+
+                                drawRoundRect(
+                                    color = barColor,
+                                    topLeft = Offset(xOffset, yOffset),
+                                    size = Size(barWidth, barHeight),
+                                    cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+                                )
+
+                                if (day.isToday) {
+                                    // Subtle emerald highlight indicator
+                                    drawCircle(
+                                        color = Color(0xFF22C55E),
+                                        radius = 3.dp.toPx(),
+                                        center = Offset(canvasWidth / 2f, yOffset - 6.dp.toPx())
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Day number & weekday label
                         Text(
-                            text = day.label,
-                            color = if (day.isToday) Color.White else Color(0xFF666666),
+                            text = day.dayNumber,
+                            color = if (day.isToday) Color(0xFF22C55E) else if (isSelected) Color.White else Color(0xFF9E9E9E),
                             fontSize = 10.sp,
-                            fontWeight = if (day.isToday) FontWeight.Bold else FontWeight.Normal,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.weight(1f)
+                            fontWeight = if (day.isToday || isSelected) FontWeight.Bold else FontWeight.Normal,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = day.label.take(1),
+                            color = if (day.isToday) Color(0xFF22C55E) else Color(0xFF616161),
+                            fontSize = 9.sp,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -488,6 +612,8 @@ private fun ScreenTimeBarChartCard(
 
 private data class DayBarData(
     val label: String,
+    val dayNumber: String,
+    val fullDate: String,
     val date: String,
     val minutes: Int,
     val isToday: Boolean

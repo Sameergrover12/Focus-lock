@@ -45,21 +45,21 @@ import com.example.util.PermissionHelper
 class FocusAccessibilityService : AccessibilityService() {
 
     private var serviceJob = SupervisorJob()
-    private var serviceScope = CoroutineScope(serviceJob + Dispatchers.Default)
+    private var serviceScope = CoroutineScope(serviceJob + Dispatchers.IO)
     private var periodicScanJob: Job? = null
     private val ruleCollectionJobs = mutableListOf<Job>()
 
     private fun ensureActiveScope(): CoroutineScope {
         if (!serviceJob.isActive) {
             serviceJob = SupervisorJob()
-            serviceScope = CoroutineScope(serviceJob + Dispatchers.Default)
+            serviceScope = CoroutineScope(serviceJob + Dispatchers.IO)
         }
         return serviceScope
     }
 
     // Local cached in-memory rules for fast checks
+    @Volatile private var cachedBlockedPackages: Set<String> = emptySet()
     @Volatile private var blockedAppsCache = listOf<BlockedApp>()
-    @Volatile private var blockedPackagesSet = setOf<String>()
     @Volatile private var screenLimitsCache = listOf<ScreenTimeLimit>()
     @Volatile private var groupsCache = listOf<AppGroup>()
     @Volatile private var groupAppsCache = listOf<GroupApp>()
@@ -118,8 +118,27 @@ class FocusAccessibilityService : AccessibilityService() {
         lastEvaluatedPackage = null
         Log.d(TAG, "FocusAccessibilityService connected")
 
-        ensureActiveScope()
+        val scope = ensureActiveScope()
         configureServiceInfo()
+
+        // Inside onServiceConnected(), launch a coroutine that collects the Flow<List<String>>
+        // from the Room Database and updates cachedBlockedPackages in local memory
+        val app = application as? FocusApplication
+        if (app != null) {
+            scope.launch {
+                try {
+                    val initial = app.repository.getAllBlockedPackageNamesSync()
+                    cachedBlockedPackages = initial.toSet()
+                    Log.d(TAG, "Initial cachedBlockedPackages size: ${cachedBlockedPackages.size}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed initial sync read of blocked packages", e)
+                }
+                app.repository.allBlockedPackageNames.collect { list ->
+                    cachedBlockedPackages = list.toSet()
+                    Log.d(TAG, "Updated cachedBlockedPackages: ${cachedBlockedPackages.size} packages")
+                }
+            }
+        }
 
         // Start listening to database changes to maintain warm memory caches
         observeDatabaseRules()
@@ -207,10 +226,10 @@ class FocusAccessibilityService : AccessibilityService() {
             ruleCollectionJobs.clear()
 
             // Immediate synchronous pre-load on IO to populate cache instantly
-            scope.launch(Dispatchers.IO) {
+            scope.launch {
                 try {
                     val syncPackages = repo.getAllBlockedPackageNamesSync()
-                    blockedPackagesSet = syncPackages.toSet()
+                    cachedBlockedPackages = syncPackages.toSet()
                     val syncApps = repo.getAllBlockedAppsSync()
                     blockedAppsCache = syncApps
                     blockedAppsByPackage = syncApps.associateBy { it.packageName }
@@ -221,23 +240,23 @@ class FocusAccessibilityService : AccessibilityService() {
             }
 
             // Stream 1: Dedicated Flow<List<String>> of blocked package names
-            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
+            ruleCollectionJobs += scope.launch {
                 repo.allBlockedPackageNames.collect { packageNames ->
                     val set = packageNames.toSet()
-                    blockedPackagesSet = set
+                    cachedBlockedPackages = set
                     Log.d(TAG, "Flow update allBlockedPackageNames: ${set.size} packages")
                 }
             }
 
             // Stream 2: Full BlockedApp entities stream
-            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
+            ruleCollectionJobs += scope.launch {
                 repo.allBlockedApps.collect { list ->
                     blockedAppsCache = list
                     val map = list.associateBy { it.packageName }
                     val set = list.map { it.packageName }.toSet()
                     withContext(Dispatchers.Default) {
                         blockedAppsByPackage = map
-                        blockedPackagesSet = set
+                        cachedBlockedPackages = set
                     }
                     Log.d(TAG, "Flow update allBlockedApps: ${list.size} apps")
                 }
@@ -453,41 +472,53 @@ class FocusAccessibilityService : AccessibilityService() {
         if (event == null) return
         if (!isMasterEnabled) return
 
+        // -------------------------------------------------------------------------
+        // 1. INSTANT INTERCEPTION LOGIC (RAM-ONLY):
+        // Only react to AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED for app blocking
+        // -------------------------------------------------------------------------
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val packageName = event.packageName?.toString() ?: return
+            val className = event.className?.toString() ?: ""
+
+            // Exclude our own app and BlockedActivity itself
+            if (packageName == this.packageName || className.contains("BlockedActivity")) {
+                currentForegroundPackage = this.packageName
+                FocusForegroundService.onForegroundPackageChanged(this.packageName)
+                return
+            }
+
+            // Emergency break 10-minute check in memory
+            if (System.currentTimeMillis() < activeEmergencyBreakUntil) {
+                currentForegroundPackage = packageName
+                FocusForegroundService.onForegroundPackageChanged(packageName)
+                return
+            }
+
+            // Perform an instant, RAM-only check:
+            if (cachedBlockedPackages.contains(packageName)) {
+                triggerBlockScreen(packageName)
+                return
+            }
+
+            // Secondary check: screen time limits or groups if package is restricted
+            if (isPackageRestricted(packageName)) {
+                checkForegroundPackage(packageName)
+                return
+            }
+
+            currentForegroundPackage = packageName
+            FocusForegroundService.onForegroundPackageChanged(packageName)
+        }
+
         val myPackageName = packageName
         val eventPkg = event.packageName?.toString()
         val className = event.className?.toString() ?: ""
         val eventType = event.eventType
 
-        // Exclude BlockedActivity explicitly (do not scan or block the block screen itself)
-        if (className.contains("BlockedActivity")) {
+        if (className.contains("BlockedActivity") || eventPkg == myPackageName) {
             currentForegroundPackage = myPackageName
             FocusForegroundService.onForegroundPackageChanged(myPackageName)
             return
-        }
-
-        // Fast-path: Focus Lock itself is in foreground
-        if (eventPkg == myPackageName) {
-            currentForegroundPackage = myPackageName
-            FocusForegroundService.onForegroundPackageChanged(myPackageName)
-            return
-        }
-
-        // -------------------------------------------------------------------------
-        // CRITICAL INSTANT INTERCEPT FOR TYPE_WINDOW_STATE_CHANGED:
-        // Catches restricted package moving to foreground with zero delay
-        // -------------------------------------------------------------------------
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            !eventPkg.isNullOrEmpty() &&
-            eventPkg != myPackageName &&
-            !isSystemOverlay(eventPkg)
-        ) {
-            currentForegroundPackage = eventPkg
-            FocusForegroundService.onForegroundPackageChanged(eventPkg)
-
-            if (isPackageRestricted(eventPkg)) {
-                checkForegroundPackage(eventPkg)
-                return
-            }
         }
 
         // -------------------------------------------------------------------------
@@ -502,8 +533,8 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Offload window traversal, visible package collection, blocking checks, focus evaluation,
-        // and text scanning to background thread (Dispatchers.Default) to eliminate UI thread jitter!
+        // Offload window traversal, visible package collection, and text scanning
+        // to background thread (Dispatchers.Default) to eliminate UI thread jitter!
         serviceScope.launch(Dispatchers.Default) {
             handleEventInBackground(eventPkg, eventType)
         }
@@ -805,7 +836,7 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun isPackageRestricted(pkgName: String): Boolean {
-        if (blockedPackagesSet.contains(pkgName) || blockedAppsByPackage.containsKey(pkgName)) {
+        if (cachedBlockedPackages.contains(pkgName) || blockedAppsByPackage.containsKey(pkgName)) {
             return true
         }
         val limit = screenLimitsByPackage[pkgName]
@@ -848,14 +879,8 @@ class FocusAccessibilityService : AccessibilityService() {
 
         // 1. Hard Blocked Apps (O(1) instant map or set lookup)
         val hardBlocked = blockedAppsByPackage[pkgName]
-        if (hardBlocked != null || blockedPackagesSet.contains(pkgName)) {
-            val title = hardBlocked?.appName ?: getAppNameFromPackage(pkgName)
-            executeBlock(
-                pkgName = pkgName,
-                title = title,
-                reason = "This app is in your blocked apps list.",
-                type = BlockedActivity.TYPE_APP
-            )
+        if (hardBlocked != null || cachedBlockedPackages.contains(pkgName)) {
+            triggerBlockScreen(pkgName)
             return
         }
 
@@ -1086,6 +1111,32 @@ class FocusAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun triggerBlockScreen(packageName: String) {
+        val now = SystemClock.uptimeMillis()
+        if (lastBlockedPackage == packageName && now - lastBlockedTime < 1000) {
+            return
+        }
+        lastBlockedPackage = packageName
+        lastBlockedTime = now
+
+        try {
+            val intent = Intent(this, BlockedActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                putExtra("BLOCKED_PACKAGE", packageName)
+                putExtra(BlockedActivity.EXTRA_PACKAGE, packageName)
+                putExtra(BlockedActivity.EXTRA_TITLE, getAppNameFromPackage(packageName))
+                putExtra(BlockedActivity.EXTRA_REASON, "This app is in your blocked apps list.")
+                putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_APP)
+                putExtra(BlockedActivity.EXTRA_QUOTE, MotivationLibrary.getRandomFullScreenQuote())
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch BlockedActivity for $packageName", e)
+        }
+    }
+
     private fun executeBlock(
         pkgName: String,
         title: String,
@@ -1093,47 +1144,34 @@ class FocusAccessibilityService : AccessibilityService() {
         type: String,
         nextWindow: String? = null
     ) {
-        serviceScope.launch(Dispatchers.Main) {
-            if (pkgName == packageName) return@launch
+        if (pkgName == packageName) return
 
-            val now = SystemClock.uptimeMillis()
-            if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1500) {
-                return@launch
+        val now = SystemClock.uptimeMillis()
+        if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1000) {
+            return
+        }
+
+        lastBlockedTime = now
+        lastBlockedPackage = pkgName
+
+        val quote = MotivationLibrary.getRandomFullScreenQuote()
+
+        try {
+            val intent = Intent(this, BlockedActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                putExtra("BLOCKED_PACKAGE", pkgName)
+                putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
+                putExtra(BlockedActivity.EXTRA_TITLE, title)
+                putExtra(BlockedActivity.EXTRA_REASON, reason)
+                putExtra(BlockedActivity.EXTRA_TYPE, type)
+                putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+                putExtra(BlockedActivity.EXTRA_QUOTE, quote)
             }
-
-            lastBlockedTime = now
-            lastBlockedPackage = pkgName
-
-            val quote = MotivationLibrary.getRandomFullScreenQuote()
-
-            // If Display Over Other Apps permission is granted, draw WindowManager overlay
-            if (PermissionHelper.canDrawOverlays(this@FocusAccessibilityService)) {
-                OverlayManager.showOverlay(
-                    context = this@FocusAccessibilityService,
-                    title = title,
-                    reason = reason,
-                    type = type,
-                    quote = quote,
-                    nextWindow = nextWindow
-                )
-            } else {
-                // Fallback: Launch full-screen BlockedActivity displaying quote and 4-second pattern interrupt
-                try {
-                    val intent = Intent(this@FocusAccessibilityService, BlockedActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        putExtra(BlockedActivity.EXTRA_TITLE, title)
-                        putExtra(BlockedActivity.EXTRA_REASON, reason)
-                        putExtra(BlockedActivity.EXTRA_TYPE, type)
-                        putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
-                        putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
-                        putExtra(BlockedActivity.EXTRA_QUOTE, quote)
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to launch BlockedActivity", e)
-                }
-            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch BlockedActivity for $pkgName", e)
         }
     }
 

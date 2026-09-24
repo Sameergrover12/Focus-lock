@@ -94,8 +94,9 @@ class BlockedActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Restricted"
-        val reason = intent.getStringExtra(EXTRA_REASON) ?: ""
+        val blockedPkg = intent.getStringExtra("BLOCKED_PACKAGE") ?: intent.getStringExtra(EXTRA_PACKAGE)
+        val title = intent.getStringExtra(EXTRA_TITLE) ?: blockedPkg ?: "Restricted"
+        val reason = intent.getStringExtra(EXTRA_REASON) ?: "This application is in your blocked apps list."
         val type = intent.getStringExtra(EXTRA_TYPE) ?: TYPE_APP
         val quote = intent.getStringExtra(EXTRA_QUOTE) ?: MotivationLibrary.getRandomFullScreenQuote()
 

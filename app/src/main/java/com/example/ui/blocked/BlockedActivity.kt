@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -158,6 +159,19 @@ class BlockedActivity : ComponentActivity() {
                 homeIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                 startActivity(homeIntent)
             }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+
+        // If the user taps the background app, this blocking activity loses focus.
+        // Instantly force the device back to the Home Screen.
+        if (!hasFocus) {
+            val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            homeIntent.addCategory(android.content.Intent.CATEGORY_HOME)
+            homeIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            startActivity(homeIntent)
         }
     }
 }
@@ -408,13 +422,25 @@ fun EmergencyFailsafeDialog(
 
     val isMatch = typedInput.trim() == expectedPassphrase.trim()
 
-    Dialog(onDismissRequest = onDismiss) {
+    BackHandler(onBack = onDismiss)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = Color(0xFF0F0F0F),
             border = BorderStroke(1.dp, Color(0xFF262626)),
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null
+                ) {}
                 .testTag("emergency_failsafe_dialog")
         ) {
             Column(

@@ -148,6 +148,18 @@ class BlockedActivity : ComponentActivity() {
             )
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            if (isInMultiWindowMode || isInPictureInPictureMode) {
+                val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+                homeIntent.addCategory(android.content.Intent.CATEGORY_HOME)
+                homeIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                startActivity(homeIntent)
+            }
+        }
+    }
 }
 
 @Composable

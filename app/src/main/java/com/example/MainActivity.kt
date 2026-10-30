@@ -161,7 +161,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                             text = "Analytics & Dwell",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onBackground
                         )
                     } else {
                         Row(
@@ -172,14 +172,14 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                                 text = "Focus Lock",
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.titleLarge,
-                                color = Color.White
+                                color = MaterialTheme.colorScheme.onBackground
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
                                     .background(
-                                        color = if (isMasterEnabled) Color(0xFF10B981) else Color(0xFFEF5350),
+                                        color = if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                         shape = CircleShape
                                     )
                             )
@@ -187,7 +187,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                             Text(
                                 text = if (isMasterEnabled) "Active" else "Paused",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF9E9E9E),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 11.sp
                             )
                         }

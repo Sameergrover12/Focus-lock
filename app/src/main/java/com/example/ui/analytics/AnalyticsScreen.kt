@@ -116,7 +116,7 @@ fun AnalyticsScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF000000))
+            .background(MaterialTheme.colorScheme.background)
             .testTag("analytics_screen"),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -159,14 +159,14 @@ fun AnalyticsScreen(
             ) {
                 Text(
                     text = "Top Attention Drainers",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
                 )
                 if (sortedLogs.isNotEmpty()) {
                     Text(
                         text = "${sortedLogs.size} tracked apps",
-                        color = Color(0xFF888888),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
                 }
@@ -177,8 +177,8 @@ fun AnalyticsScreen(
             item {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = Color(0xFF0F0F0F),
-                    border = BorderStroke(1.dp, Color(0xFF262626)),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -190,20 +190,20 @@ fun AnalyticsScreen(
                         Icon(
                             imageVector = Icons.Default.Insights,
                             contentDescription = null,
-                            tint = Color(0xFF555555),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(36.dp)
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = "No Usage Logged Yet Today",
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "As you use apps throughout the day, the engine will measure exact foreground dwell time.",
-                            color = Color(0xFF888888),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
                         )
@@ -254,8 +254,8 @@ private fun AnalyticsHeroCard(
 
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0D0E11),
-        border = BorderStroke(1.dp, Color(0xFF22262F)),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("analytics_hero_card")
@@ -270,13 +270,13 @@ private fun AnalyticsHeroCard(
                     Icon(
                         imageVector = Icons.Default.HourglassTop,
                         contentDescription = null,
-                        tint = Color(0xFF10B981),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "TOTAL SCREEN DWELL",
-                        color = Color(0xFFAAAAAA),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp
@@ -285,12 +285,12 @@ private fun AnalyticsHeroCard(
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF141519),
-                    border = BorderStroke(1.dp, Color(0xFF22262F))
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
                 ) {
                     Text(
                         text = "Reclaiming: $reclaimedCommitment",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -307,7 +307,7 @@ private fun AnalyticsHeroCard(
             ) {
                 Text(
                     text = timeDisplay,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 38.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-0.5).sp
@@ -315,7 +315,7 @@ private fun AnalyticsHeroCard(
 
                 Text(
                     text = "$percentOfWakingDay% of daylight hours",
-                    color = if (percentOfWakingDay > 25) Color(0xFFEF9A9A) else Color(0xFF888888),
+                    color = if (percentOfWakingDay > 25) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(bottom = 6.dp)
@@ -333,13 +333,13 @@ private fun AnalyticsHeroCard(
                         Icon(
                             imageVector = Icons.Default.TrendingDown,
                             contentDescription = null,
-                            tint = Color(0xFF22C55E),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "↓ ${kotlin.math.abs(diffPercent)}% vs Monthly Average",
-                            color = Color(0xFF22C55E),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -347,13 +347,13 @@ private fun AnalyticsHeroCard(
                         Icon(
                             imageVector = Icons.Default.TrendingUp,
                             contentDescription = null,
-                            tint = Color(0xFFEF5350),
+                            tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "↑ ${diffPercent}% vs Monthly Average",
-                            color = Color(0xFFEF5350),
+                            color = MaterialTheme.colorScheme.error,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -362,13 +362,13 @@ private fun AnalyticsHeroCard(
                     Icon(
                         imageVector = Icons.Default.Shield,
                         contentDescription = null,
-                        tint = Color(0xFF10B981),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "• 30-Day baseline tracking active",
-                        color = Color(0xFF9E9E9E),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
                 }
@@ -382,8 +382,8 @@ private fun AnalyticsHeroCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp),
-                color = if (percentOfWakingDay > 30) Color(0xFFEF5350) else Color(0xFF10B981),
-                trackColor = Color(0xFF22262F),
+                color = if (percentOfWakingDay > 30) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 strokeCap = StrokeCap.Round
             )
         }
@@ -449,10 +449,17 @@ private fun MonthlyUsageTrendCard(
         scrollState.scrollTo(scrollState.maxValue)
     }
 
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val errorColor = MaterialTheme.colorScheme.error
+    val outlineColor = MaterialTheme.colorScheme.outline
+    val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant
+
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0D0E11),
-        border = BorderStroke(1.dp, Color(0xFF22262F)),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("screen_time_chart_card")
@@ -466,14 +473,14 @@ private fun MonthlyUsageTrendCard(
                 Column {
                     Text(
                         text = "30-Day Usage Trend",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "Swipe to review monthly history",
-                        color = Color(0xFF757575),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp
                     )
                 }
@@ -482,12 +489,12 @@ private fun MonthlyUsageTrendCard(
                 val avgM = avgMinutes % 60
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF141519),
-                    border = BorderStroke(1.dp, Color(0xFF22262F))
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
                 ) {
                     Text(
                         text = "30D Avg: ${if (avgHours > 0) "${avgHours}h " else ""}${avgM}m/day",
-                        color = Color(0xFF10B981),
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -500,14 +507,14 @@ private fun MonthlyUsageTrendCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF141519), RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = selectedDay?.fullDate.orEmpty(),
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -516,7 +523,7 @@ private fun MonthlyUsageTrendCard(
                     val sRemMins = sMins % 60
                     Text(
                         text = if (sHours > 0) "${sHours}h ${sRemMins}m screen dwell" else "${sRemMins}m screen dwell",
-                        color = Color(0xFF10B981),
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -562,11 +569,11 @@ private fun MonthlyUsageTrendCard(
                                 val yOffset = canvasHeight - barHeight
 
                                 val barColor = when {
-                                    day.isToday -> Color(0xFF22C55E)
-                                    isSelected -> Color(0xFF10B981)
-                                    day.minutes > avgMinutes -> Color(0xFFEF9A9A)
-                                    day.minutes > 0 -> Color(0xFF4B5563)
-                                    else -> Color(0xFF1F242D)
+                                    day.isToday -> primaryColor
+                                    isSelected -> primaryColor
+                                    day.minutes > avgMinutes -> errorColor
+                                    day.minutes > 0 -> outlineColor
+                                    else -> surfaceVariantColor
                                 }
 
                                 drawRoundRect(
@@ -577,9 +584,9 @@ private fun MonthlyUsageTrendCard(
                                 )
 
                                 if (day.isToday) {
-                                    // Subtle emerald highlight indicator
+                                    // Subtle primary highlight indicator
                                     drawCircle(
-                                        color = Color(0xFF22C55E),
+                                        color = primaryColor,
                                         radius = 3.dp.toPx(),
                                         center = Offset(canvasWidth / 2f, yOffset - 6.dp.toPx())
                                     )
@@ -592,14 +599,14 @@ private fun MonthlyUsageTrendCard(
                         // Day number & weekday label
                         Text(
                             text = day.dayNumber,
-                            color = if (day.isToday) Color(0xFF22C55E) else if (isSelected) Color.White else Color(0xFF9E9E9E),
+                            color = if (day.isToday) primaryColor else if (isSelected) onSurfaceColor else onSurfaceVariantColor,
                             fontSize = 10.sp,
                             fontWeight = if (day.isToday || isSelected) FontWeight.Bold else FontWeight.Normal,
                             textAlign = TextAlign.Center
                         )
                         Text(
                             text = day.label.take(1),
-                            color = if (day.isToday) Color(0xFF22C55E) else Color(0xFF616161),
+                            color = if (day.isToday) primaryColor else onSurfaceVariantColor.copy(alpha = 0.7f),
                             fontSize = 9.sp,
                             textAlign = TextAlign.Center
                         )
@@ -637,21 +644,21 @@ private fun FocusDrainSpectrumCard(
 
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0F0F0F),
-        border = BorderStroke(1.dp, Color(0xFF262626)),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
                 text = "Focus Drain Distribution",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Share of screen time absorbed by primary applications:",
-                color = Color(0xFF888888),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
 
@@ -662,7 +669,7 @@ private fun FocusDrainSpectrumCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(10.dp)
-                    .background(Color(0xFF1E1E1E), RoundedCornerShape(5.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp))
             ) {
                 topApps.forEachIndexed { idx, app ->
                     val weight = (app.minutesUsed.toFloat() / totalMinutes).coerceIn(0.01f, 1f)
@@ -695,7 +702,7 @@ private fun FocusDrainSpectrumCard(
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
                             text = "${app.appName} ($percent%)",
-                            color = Color(0xFFCCCCCC),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -723,9 +730,9 @@ private fun AppDrainItemCard(
     val durationText = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
 
     val severityColor = when {
-        percentOfTotal >= 35 -> Color(0xFFEF5350)
+        percentOfTotal >= 35 -> MaterialTheme.colorScheme.error
         percentOfTotal >= 20 -> Color(0xFFFFB74D)
-        else -> Color(0xFF888888)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
     val severityLabel = when {
@@ -736,8 +743,8 @@ private fun AppDrainItemCard(
 
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF0F0F0F),
-        border = BorderStroke(1.dp, if (isBlocked) Color(0xFF442222) else Color(0xFF222222)),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, if (isBlocked) MaterialTheme.colorScheme.error.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("app_drain_card_${log.packageName}")
@@ -750,7 +757,7 @@ private fun AppDrainItemCard(
                 // Rank number
                 Text(
                     text = "#$rank",
-                    color = Color(0xFF666666),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.width(28.dp)
@@ -771,14 +778,14 @@ private fun AppDrainItemCard(
                 } else {
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF1E1E1E),
+                        color = MaterialTheme.colorScheme.primaryContainer,
                         modifier = Modifier.size(38.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Android,
                                 contentDescription = null,
-                                tint = Color.White,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -790,7 +797,7 @@ private fun AppDrainItemCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = log.appName.ifBlank { log.packageName },
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -813,7 +820,7 @@ private fun AppDrainItemCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "$percentOfTotal% of daily focus",
-                            color = Color(0xFF888888),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp
                         )
                     }
@@ -824,7 +831,7 @@ private fun AppDrainItemCard(
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
                         text = durationText,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -832,8 +839,8 @@ private fun AppDrainItemCard(
                     Surface(
                         onClick = onRestrictClick,
                         shape = RoundedCornerShape(12.dp),
-                        color = if (isBlocked) Color(0xFF3B1818) else Color(0xFF1E1E1E),
-                        border = BorderStroke(1.dp, if (isBlocked) Color(0xFFEF5350) else Color(0xFF333333)),
+                        color = if (isBlocked) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f) else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, if (isBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline),
                         modifier = Modifier.testTag("restrict_app_${log.packageName}")
                     ) {
                         Row(
@@ -843,13 +850,13 @@ private fun AppDrainItemCard(
                             Icon(
                                 imageVector = if (isBlocked) Icons.Default.Shield else Icons.Default.Block,
                                 contentDescription = null,
-                                tint = if (isBlocked) Color(0xFFEF5350) else Color(0xFFCCCCCC),
+                                tint = if (isBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(12.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = if (isBlocked) "Blocked" else "Restrict",
-                                color = if (isBlocked) Color(0xFFEF5350) else Color(0xFFCCCCCC),
+                                color = if (isBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -867,7 +874,7 @@ private fun AppDrainItemCard(
                     .fillMaxWidth()
                     .height(4.dp),
                 color = severityColor,
-                trackColor = Color(0xFF1C1C1C),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 strokeCap = StrokeCap.Round
             )
         }

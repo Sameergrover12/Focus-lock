@@ -22,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -69,8 +70,8 @@ fun StrictModeActivationDialog(
     ) {
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF0D0E11),
-            border = BorderStroke(1.dp, Color(0xFFE53935).copy(alpha = 0.8f)),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.8f)),
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .padding(16.dp)
@@ -94,14 +95,14 @@ fun StrictModeActivationDialog(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFFE53935).copy(alpha = 0.2f),
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
                             modifier = Modifier.size(38.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
                                     contentDescription = null,
-                                    tint = Color(0xFFEF5350),
+                                    tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -110,13 +111,13 @@ fun StrictModeActivationDialog(
                         Column {
                             Text(
                                 text = "Activate Strict Mode",
-                                color = Color.White,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = "Irreversible friction safeguard",
-                                color = Color(0xFFAAAAAA),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 12.sp
                             )
                         }
@@ -129,7 +130,7 @@ fun StrictModeActivationDialog(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Cancel",
-                            tint = Color(0xFF888888)
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -139,8 +140,8 @@ fun StrictModeActivationDialog(
                 // High-Stakes Contextual Warning Box
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF200B0B),
-                    border = BorderStroke(1.dp, Color(0xFFE53935).copy(alpha = 0.5f)),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -150,7 +151,7 @@ fun StrictModeActivationDialog(
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = "Warning",
-                            tint = Color(0xFFEF5350),
+                            tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier
                                 .size(20.dp)
                                 .padding(top = 2.dp)
@@ -158,7 +159,7 @@ fun StrictModeActivationDialog(
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Strict Mode activates irreversible friction. To modify locked features, disable restrictions, or access emergency breaks, you will be required to type your exact reflective passphrase verbatim. If you forget it, there is no bypass or reset.",
-                            color = Color(0xFFFFCDD2),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
                             fontSize = 12.sp,
                             lineHeight = 18.sp,
                             fontWeight = FontWeight.Medium
@@ -172,14 +173,14 @@ fun StrictModeActivationDialog(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = "Define Your Reflective Passphrase",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Choose a meaningful statement of personal discipline (min 600 chars, max 1000).",
-                        color = Color(0xFF888888),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -196,17 +197,17 @@ fun StrictModeActivationDialog(
                             .testTag("strict_mode_define_input"),
                         shape = RoundedCornerShape(10.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = if (isCandidateValid) Color(0xFF10B981) else Color(0xFFE53935),
-                            unfocusedBorderColor = if (isCandidateValid) Color(0xFF10B981) else Color(0xFF22262F),
-                            focusedContainerColor = Color(0xFF141519),
-                            unfocusedContainerColor = Color(0xFF141519),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
+                            focusedBorderColor = if (isCandidateValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            unfocusedBorderColor = if (isCandidateValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                         ),
                         placeholder = {
                             Text(
                                 "Enter your reflective statement of discipline (600 to 1000 characters)...",
-                                color = Color(0xFF555555),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                 fontSize = 12.sp
                             )
                         },
@@ -224,14 +225,14 @@ fun StrictModeActivationDialog(
                         Text(
                             text = "${candidatePhrase.length} / 1000",
                             fontSize = 11.sp,
-                            color = if (isCandidateValid) Color(0xFF10B981) else if (candidatePhrase.isNotEmpty()) Color(0xFFEF5350) else Color(0xFF888888),
+                            color = if (isCandidateValid) MaterialTheme.colorScheme.primary else if (candidatePhrase.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = if (isCandidateValid) FontWeight.Bold else FontWeight.Normal
                         )
                         if (candidatePhrase.isNotEmpty() && !isCandidateValid) {
                             Text(
                                 text = "Need ${600 - candidatePhrase.length} more characters",
                                 fontSize = 11.sp,
-                                color = Color(0xFFEF5350),
+                                color = MaterialTheme.colorScheme.error,
                                 fontWeight = FontWeight.Medium
                             )
                         }
@@ -243,8 +244,8 @@ fun StrictModeActivationDialog(
                 // Final Warning Box
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = Color(0xFF2B0E0E),
-                    border = BorderStroke(1.dp, Color(0xFFE53935).copy(alpha = 0.6f)),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -254,13 +255,13 @@ fun StrictModeActivationDialog(
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = "Warning",
-                            tint = Color(0xFFEF5350),
+                            tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Note: You must remember this exact phrase verbatim. You will not be asked to confirm it, and there is no bypass or reset.",
-                            color = Color(0xFFFF8A80),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             lineHeight = 16.sp
@@ -278,10 +279,10 @@ fun StrictModeActivationDialog(
                     OutlinedButton(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, Color(0xFF22262F)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color(0xFF141519),
-                            contentColor = Color.White
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier
                             .weight(1f)
@@ -299,10 +300,10 @@ fun StrictModeActivationDialog(
                         enabled = isCandidateValid,
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF10B981),
-                            contentColor = Color.Black,
-                            disabledContainerColor = Color(0xFF22262F),
-                            disabledContentColor = Color(0xFF555555)
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         ),
                         modifier = Modifier
                             .weight(1.3f)

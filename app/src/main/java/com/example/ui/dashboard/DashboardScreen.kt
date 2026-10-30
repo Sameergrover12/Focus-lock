@@ -176,11 +176,11 @@ fun DashboardScreen(
                     .testTag("master_switch_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF000000)
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
                 border = BorderStroke(
                     1.dp,
-                    if (isMasterEnabled) Color(0xFF22C55E) else Color(0xFF22262F)
+                    if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
                 )
             ) {
                 Row(
@@ -195,12 +195,12 @@ fun DashboardScreen(
                             modifier = Modifier
                                 .size(44.dp)
                                 .background(
-                                    color = if (isMasterEnabled) Color(0x2222C55E) else Color(0xFF141519),
+                                    color = if (isMasterEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
                                     shape = CircleShape
                                 )
                                 .border(
                                     1.dp,
-                                    if (isMasterEnabled) Color(0x6622C55E) else Color(0xFF262626),
+                                    if (isMasterEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline,
                                     CircleShape
                                 ),
                             contentAlignment = Alignment.Center
@@ -208,7 +208,7 @@ fun DashboardScreen(
                             Icon(
                                 imageVector = if (isMasterEnabled) Icons.Default.Shield else Icons.Default.Block,
                                 contentDescription = null,
-                                tint = if (isMasterEnabled) Color(0xFF22C55E) else Color(0xFF757575),
+                                tint = if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -218,12 +218,12 @@ fun DashboardScreen(
                                 text = if (isMasterEnabled) "Focus Protection ON" else "Protection Paused",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = if (isMasterEnabled) "Enforcing 5 control rules" else "Rules temporarily bypassed",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFAAAAAA)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -242,10 +242,10 @@ fun DashboardScreen(
                             }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF000000),
-                            checkedTrackColor = Color(0xFF22C55E),
-                            uncheckedThumbColor = Color(0xFF757575),
-                            uncheckedTrackColor = Color(0xFF1A1D23)
+                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     )
                 }
@@ -265,8 +265,8 @@ fun DashboardScreen(
                     .clickable { onNavigateToAnalytics() }
                     .testTag("total_screen_dwell_card"),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0E11)),
-                border = BorderStroke(1.dp, Color(0xFF22262F)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
@@ -279,7 +279,7 @@ fun DashboardScreen(
                             Icon(
                                 imageVector = Icons.Default.HourglassTop,
                                 contentDescription = null,
-                                tint = Color(0xFF10B981),
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
@@ -287,7 +287,7 @@ fun DashboardScreen(
                                 text = "TOTAL SCREEN DWELL",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF9E9E9E),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 letterSpacing = 1.sp
                             )
                         }
@@ -299,13 +299,13 @@ fun DashboardScreen(
                                 text = "Detailed Distribution",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF10B981)
+                                color = MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = "View Detailed Analytics",
-                                tint = Color(0xFF10B981),
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -317,7 +317,7 @@ fun DashboardScreen(
                         text = timeString,
                         style = MaterialTheme.typography.displayMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -491,6 +491,7 @@ private fun DashboardStatCard(
             .testTag("dashboard_card_${title.lowercase().replace(" ", "_")}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -555,6 +556,7 @@ private fun AppUsageHistoryItem(
             .testTag("usage_log_${log.packageName}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {

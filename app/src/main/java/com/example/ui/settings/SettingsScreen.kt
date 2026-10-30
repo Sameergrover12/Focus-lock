@@ -176,7 +176,10 @@ fun SettingsScreen(
                         showEmergencyBreakConfirmDialog = false
                         viewModel.takeEmergencyBreak()
                     },
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981), contentColor = Color.Black)
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
                 ) {
                     Text("Start Break (10m)", fontWeight = FontWeight.Bold)
                 }
@@ -321,7 +324,7 @@ fun SettingsScreen(
                 text = "Emergency Failsafe System",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White
+                color = MaterialTheme.colorScheme.primary
             )
         }
 
@@ -331,9 +334,9 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .testTag("emergency_failsafe_card"),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0E11)),
-                border = BorderStroke(1.dp, Color(0xFF22262F)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -343,13 +346,13 @@ fun SettingsScreen(
                         Surface(
                             modifier = Modifier.size(40.dp),
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF10B981).copy(alpha = 0.15f)
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.HourglassBottom,
                                     contentDescription = null,
-                                    tint = Color(0xFF10B981),
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -360,12 +363,12 @@ fun SettingsScreen(
                                 text = "The Emergency Failsafe System",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "$emergencyBreaksRemaining of 3 breaks remaining this week",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (emergencyBreaksRemaining > 0) Color(0xFF10B981) else Color(0xFFEF5350),
+                                color = if (emergencyBreaksRemaining > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -376,19 +379,19 @@ fun SettingsScreen(
                     Text(
                         text = "• 10-Minute Hard Cap: 3 breaks per 7-day cycle.\n• The Phantom Cutoff: Zero visual countdown timers.\n• The Abrupt Snapback: Immediate lock restoration at 10:00:00.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF9E9E9E),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
-                    androidx.compose.material3.HorizontalDivider(color = Color(0xFF22262F))
+                    androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
                     Spacer(modifier = Modifier.height(14.dp))
 
                     if (isBreakActive) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF064E3B).copy(alpha = 0.5f),
-                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -399,13 +402,13 @@ fun SettingsScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = "Emergency Break Active (10m)",
-                                        color = Color(0xFF10B981),
+                                        color = MaterialTheme.colorScheme.primary,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
                                         text = "All app & website blocking is paused.",
-                                        color = Color(0xFFA7F3D0),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                                         fontSize = 11.sp
                                     )
                                 }
@@ -413,8 +416,8 @@ fun SettingsScreen(
                                     onClick = { viewModel.endEmergencyBreakEarly() },
                                     shape = RoundedCornerShape(8.dp),
                                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFE53935),
-                                        contentColor = Color.White
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError
                                     ),
                                     modifier = Modifier.testTag("end_emergency_break_button")
                                 ) {
@@ -433,8 +436,8 @@ fun SettingsScreen(
                             },
                             shape = RoundedCornerShape(10.dp),
                             colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF10B981),
-                                contentColor = Color.Black
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -458,8 +461,8 @@ fun SettingsScreen(
                             enabled = false,
                             shape = RoundedCornerShape(10.dp),
                             colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                disabledContainerColor = Color(0xFF1E2024),
-                                disabledContentColor = Color(0xFF666666)
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -482,7 +485,7 @@ fun SettingsScreen(
                 text = "Cheating Protection & Strict Mode",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White
+                color = MaterialTheme.colorScheme.primary
             )
         }
 
@@ -493,13 +496,13 @@ fun SettingsScreen(
                     .testTag("cheat_protection_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF0D0E11)
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
                 border = BorderStroke(
                     1.dp,
-                    if (isCheatProtectionEnabled) Color(0xFF10B981) else Color(0xFF22262F)
+                    if (isCheatProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
                 ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -514,13 +517,13 @@ fun SettingsScreen(
                             Surface(
                                 modifier = Modifier.size(40.dp),
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isCheatProtectionEnabled) Color(0xFF064E3B) else Color(0xFF141519)
+                                color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Lock,
                                         contentDescription = null,
-                                        tint = if (isCheatProtectionEnabled) Color(0xFF10B981) else Color(0xFFB0B0B0),
+                                        tint = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -531,12 +534,12 @@ fun SettingsScreen(
                                     text = "Strict Mode / Anti-Cheat Lock",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = if (isCheatProtectionEnabled) "Active • Verbatim passphrase required to loosen" else "Disabled • Rules can be changed freely",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (isCheatProtectionEnabled) Color(0xFF10B981) else Color(0xFF9E9E9E)
+                                    color = if (isCheatProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -556,10 +559,10 @@ fun SettingsScreen(
                             },
                             modifier = Modifier.testTag("cheat_protection_switch"),
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF10B981),
-                                checkedTrackColor = Color(0xFF064E3B),
-                                uncheckedThumbColor = Color(0xFF888888),
-                                uncheckedTrackColor = Color(0xFF1E2024)
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                             )
                         )
                     }
@@ -574,7 +577,7 @@ fun SettingsScreen(
                     
                     if (isCheatProtectionEnabled) {
                         Spacer(modifier = Modifier.height(16.dp))
-                        androidx.compose.material3.HorizontalDivider()
+                        androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
                         Spacer(modifier = Modifier.height(16.dp))
                         
                         Row(
@@ -638,13 +641,13 @@ fun SettingsScreen(
                     .testTag("clock_tamper_protection_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF0D0E11)
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
                 border = BorderStroke(
                     1.dp,
-                    if (isClockTamperProtectionEnabled) Color(0xFF10B981) else Color(0xFF22262F)
+                    if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
                 ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -659,13 +662,13 @@ fun SettingsScreen(
                             Surface(
                                 modifier = Modifier.size(40.dp),
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isClockTamperProtectionEnabled) Color(0xFF064E3B) else Color(0xFF141519)
+                                color = if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Security,
                                         contentDescription = null,
-                                        tint = if (isClockTamperProtectionEnabled) Color(0xFF10B981) else Color(0xFFB0B0B0),
+                                        tint = if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -676,12 +679,12 @@ fun SettingsScreen(
                                     text = "Clock Tamper Protection",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = if (isClockTamperProtectionEnabled) "Active • Monitored via hardware CPU uptime" else "Disabled • System clock untracked",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (isClockTamperProtectionEnabled) Color(0xFF10B981) else Color(0xFF9E9E9E)
+                                    color = if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -705,10 +708,10 @@ fun SettingsScreen(
                             },
                             modifier = Modifier.testTag("clock_tamper_protection_switch"),
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF10B981),
-                                checkedTrackColor = Color(0xFF064E3B),
-                                uncheckedThumbColor = Color(0xFF888888),
-                                uncheckedTrackColor = Color(0xFF1E2024)
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                             )
                         )
                     }
@@ -717,8 +720,8 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF7F1D1D).copy(alpha = 0.5f),
-                            border = BorderStroke(1.dp, Color(0xFFEF5350)),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -728,13 +731,13 @@ fun SettingsScreen(
                                 Icon(
                                     imageVector = Icons.Default.Warning,
                                     contentDescription = null,
-                                    tint = Color(0xFFEF5350),
+                                    tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Clock drift detected! Rules are running on hardware True Time.",
-                                    color = Color(0xFFFCA5A5),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium
                                 )
@@ -747,7 +750,7 @@ fun SettingsScreen(
                     Text(
                         text = "• 100% Offline: Anchors wall clock against hardware elapsedRealtime (zero internet needed).\n• Reboots Protected: Monotonic time progression guarantees time cannot be rolled back.\n• Date & Time Lock: System date/time settings are blocked during active sessions.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF9E9E9E),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
                     )
                 }
@@ -769,6 +772,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -804,7 +808,8 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(14.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                    )
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -850,6 +855,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {

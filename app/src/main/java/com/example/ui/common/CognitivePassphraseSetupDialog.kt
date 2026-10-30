@@ -79,8 +79,8 @@ fun CognitivePassphraseSetupDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF0F0F0F),
-            border = BorderStroke(1.dp, Color(0xFF262626)),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("cognitive_passphrase_setup_dialog")
@@ -101,13 +101,13 @@ fun CognitivePassphraseSetupDialog(
                         Icon(
                             imageVector = Icons.Default.Psychology,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Reflective Passphrase Setup",
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -119,7 +119,7 @@ fun CognitivePassphraseSetupDialog(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = Color(0xFF888888),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -130,8 +130,8 @@ fun CognitivePassphraseSetupDialog(
                 // Severe Warning Box (MANDATORY REQUIREMENT)
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF2A1010),
-                    border = BorderStroke(1.dp, Color(0xFF802020)),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("passphrase_severe_warning")
@@ -143,7 +143,7 @@ fun CognitivePassphraseSetupDialog(
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = null,
-                            tint = Color(0xFFEF5350),
+                            tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier
                                 .size(22.dp)
                                 .padding(top = 2.dp)
@@ -152,7 +152,7 @@ fun CognitivePassphraseSetupDialog(
                         Column {
                             Text(
                                 text = "CRITICAL WARNING",
-                                color = Color(0xFFEF5350),
+                                color = MaterialTheme.colorScheme.error,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.sp
@@ -160,7 +160,7 @@ fun CognitivePassphraseSetupDialog(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "You must remember this exact phrase, including all punctuation and capitalization. There is no 'Forgot Password' button. If you forget it, you will be entirely locked out of emergency breaks and settings.",
-                                color = Color(0xFFFFCDD2),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp,
                                 fontWeight = FontWeight.Medium
@@ -174,7 +174,7 @@ fun CognitivePassphraseSetupDialog(
                 // Step 1: Candidate Phrase Definition
                 Text(
                     text = "Step 1: Choose Your Reflective Sentence",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.fillMaxWidth()
@@ -182,7 +182,7 @@ fun CognitivePassphraseSetupDialog(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "A sobering statement to confront when dopamine cravings hit:",
-                    color = Color(0xFF888888),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -196,12 +196,12 @@ fun CognitivePassphraseSetupDialog(
                         .testTag("candidate_passphrase_input"),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color(0xFF141414),
-                        unfocusedContainerColor = Color(0xFF111111),
-                        focusedBorderColor = Color.White,
-                        unfocusedBorderColor = Color(0xFF333333),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                     ),
                     maxLines = 3
                 )
@@ -211,7 +211,7 @@ fun CognitivePassphraseSetupDialog(
                 // Step 2: Verification Test (MANDATORY REQUIREMENT)
                 Text(
                     text = "Step 2: Verification Test (Prove Memorization)",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.fillMaxWidth()
@@ -219,7 +219,7 @@ fun CognitivePassphraseSetupDialog(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Manually type the exact sentence above to prove you have committed it to memory. Copy-pasting is not permitted.",
-                    color = Color(0xFF888888),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
                     modifier = Modifier.fillMaxWidth()
@@ -245,7 +245,7 @@ fun CognitivePassphraseSetupDialog(
                     placeholder = {
                         Text(
                             "Type phrase from memory verbatim...",
-                            color = Color(0xFF555555),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             fontSize = 12.sp
                         )
                     },
@@ -254,12 +254,12 @@ fun CognitivePassphraseSetupDialog(
                         .testTag("verification_test_input"),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color(0xFF141414),
-                        unfocusedContainerColor = Color(0xFF111111),
-                        focusedBorderColor = if (isVerificationMatched) Color(0xFF81C784) else Color.White,
-                        unfocusedBorderColor = if (isVerificationMatched) Color(0xFF4CAF50) else Color(0xFF333333),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        focusedBorderColor = if (isVerificationMatched) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        unfocusedBorderColor = if (isVerificationMatched) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                     ),
                     maxLines = 3
                 )
@@ -268,7 +268,7 @@ fun CognitivePassphraseSetupDialog(
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = pasteBlockedNotice ?: "",
-                        color = Color(0xFFEF5350),
+                        color = MaterialTheme.colorScheme.error,
                         fontSize = 11.sp,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -284,13 +284,13 @@ fun CognitivePassphraseSetupDialog(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            tint = Color(0xFF81C784),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Verification test passed. Memorization confirmed.",
-                            color = Color(0xFF81C784),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -298,7 +298,7 @@ fun CognitivePassphraseSetupDialog(
                 } else if (verificationInput.isNotEmpty()) {
                     Text(
                         text = "Match progress: ${verificationInput.length} / ${candidatePhrase.trim().length} chars",
-                        color = Color(0xFF888888),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -316,8 +316,11 @@ fun CognitivePassphraseSetupDialog(
                             .weight(1f)
                             .testTag("cancel_passphrase_button"),
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Color(0xFF333333)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFCCCCCC))
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        )
                     ) {
                         Text("Cancel")
                     }
@@ -336,10 +339,10 @@ fun CognitivePassphraseSetupDialog(
                             .testTag("confirm_passphrase_button"),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black,
-                            disabledContainerColor = Color(0xFF222222),
-                            disabledContentColor = Color(0xFF555555)
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         )
                     ) {
                         Text("Confirm & Save", fontWeight = FontWeight.Bold)

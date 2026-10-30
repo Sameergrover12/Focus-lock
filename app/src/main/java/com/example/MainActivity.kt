@@ -79,10 +79,14 @@ class MainActivity : ComponentActivity() {
         FocusForegroundService.startService(this)
 
         setContent {
-            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
+            val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
             val isOnboardingComplete by viewModel.isOnboardingComplete.collectAsStateWithLifecycle()
 
-            FocusLockTheme(themeMode = themeMode) {
+            FocusLockTheme(
+                baseThemeMode = baseThemeMode,
+                secondaryPalette = secondaryPalette
+            ) {
                 if (!isOnboardingComplete) {
                     OnboardingScreen(
                         viewModel = viewModel,
@@ -198,30 +202,32 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Return to Dashboard",
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onBackground
                             )
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF000000)
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         },
         bottomBar = {
+            val navOutlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
             NavigationBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .drawBehind {
-                        // Subtle 1dp top border using semi-transparent emerald for physical separation
+                        // Subtle 1dp top border using palette outline for physical separation
                         drawLine(
-                            color = Color(0x3322C55E),
+                            color = navOutlineColor,
                             start = Offset(0f, 0f),
                             end = Offset(size.width, 0f),
                             strokeWidth = 1.dp.toPx()
                         )
                     },
-                containerColor = Color(0xCC0D120F),
+                containerColor = MaterialTheme.colorScheme.surface,
                 tonalElevation = 0.dp
             ) {
                 tabs.forEach { tab ->
@@ -238,11 +244,11 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                             .testTag(tab.testTag)
                             .padding(vertical = 4.dp),
                         colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = Color(0xFF064E3B).copy(alpha = 0.85f),
-                            selectedIconColor = Color(0xFF22C55E),
-                            selectedTextColor = Color(0xFF22C55E),
-                            unselectedIconColor = Color(0xFF757575),
-                            unselectedTextColor = Color(0xFF757575)
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     )
                 }
@@ -253,7 +259,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(Color(0xFF000000))
+                .background(MaterialTheme.colorScheme.background)
         ) {
             if (isViewingAnalytics) {
                 AnalyticsScreen(

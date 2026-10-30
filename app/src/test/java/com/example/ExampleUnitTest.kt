@@ -567,5 +567,65 @@ class ExampleUnitTest {
         // No previous exit (first run)
         assertFalse(com.example.util.SessionLimitHelper.shouldResetIdleSession(0L, cooldownSeconds, now))
     }
+
+    @Test
+    fun testTwoLayerThemeArchitecturePalettes() {
+        // Must contain all 12 palettes
+        val palettes = com.example.ui.theme.SecondaryThemePalette.entries
+        assertEquals(12, palettes.size)
+
+        // Default palette must be FOCUS_EMERALD
+        assertEquals(com.example.ui.theme.SecondaryThemePalette.FOCUS_EMERALD, palettes.first())
+
+        // Verify distinct display names
+        val names = palettes.map { it.displayName }.toSet()
+        assertEquals(12, names.size)
+
+        // Each palette must return 3 non-null preview dots for every base mode
+        com.example.ui.theme.BaseThemeMode.entries.forEach { mode ->
+            palettes.forEach { palette ->
+                val dots = palette.getPreviewDots(mode)
+                assertEquals(3, dots.size)
+            }
+        }
+    }
+
+    @Test
+    fun testBaseThemeModeResolution() {
+        assertEquals(com.example.ui.theme.BaseThemeMode.LIGHT, com.example.ui.theme.BaseThemeMode.LIGHT.resolve(isSystemInDark = true))
+        assertEquals(com.example.ui.theme.BaseThemeMode.LIGHT, com.example.ui.theme.BaseThemeMode.LIGHT.resolve(isSystemInDark = false))
+
+        assertEquals(com.example.ui.theme.BaseThemeMode.DARK, com.example.ui.theme.BaseThemeMode.DARK.resolve(isSystemInDark = false))
+        assertEquals(com.example.ui.theme.BaseThemeMode.DARK, com.example.ui.theme.BaseThemeMode.DARK.resolve(isSystemInDark = true))
+
+        assertEquals(com.example.ui.theme.BaseThemeMode.AMOLED, com.example.ui.theme.BaseThemeMode.AMOLED.resolve(isSystemInDark = false))
+        assertEquals(com.example.ui.theme.BaseThemeMode.AMOLED, com.example.ui.theme.BaseThemeMode.AMOLED.resolve(isSystemInDark = true))
+
+        // System Default resolution
+        assertEquals(com.example.ui.theme.BaseThemeMode.DARK, com.example.ui.theme.BaseThemeMode.SYSTEM_DEFAULT.resolve(isSystemInDark = true))
+        assertEquals(com.example.ui.theme.BaseThemeMode.LIGHT, com.example.ui.theme.BaseThemeMode.SYSTEM_DEFAULT.resolve(isSystemInDark = false))
+    }
+
+    @Test
+    fun testAmoledBaseModePureBlackBackground() {
+        val amoledScheme = com.example.ui.theme.getFocusColorScheme(
+            baseMode = com.example.ui.theme.BaseThemeMode.AMOLED,
+            palette = com.example.ui.theme.SecondaryThemePalette.FOCUS_EMERALD
+        )
+        // AMOLED background must be true pitch-black #000000
+        assertEquals(androidx.compose.ui.graphics.Color(0xFF000000), amoledScheme.background)
+        // High contrast text on dark background
+        assertEquals(androidx.compose.ui.graphics.Color(0xFFFFFFFF), amoledScheme.onBackground)
+    }
+
+    @Test
+    fun testNormalDarkBaseModeElevatedSurfaces() {
+        val darkScheme = com.example.ui.theme.getFocusColorScheme(
+            baseMode = com.example.ui.theme.BaseThemeMode.DARK,
+            palette = com.example.ui.theme.SecondaryThemePalette.FOCUS_EMERALD
+        )
+        // Dark mode background is deep charcoal slate, not #000000
+        assertTrue(darkScheme.background != androidx.compose.ui.graphics.Color(0xFF000000))
+    }
 }
 

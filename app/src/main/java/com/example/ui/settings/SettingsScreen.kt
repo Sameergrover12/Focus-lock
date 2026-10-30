@@ -1,6 +1,8 @@
 package com.example.ui.settings
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +81,8 @@ fun SettingsScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
+    val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
     val isInvincibleModeEnabled by viewModel.isInvincibleModeEnabled.collectAsStateWithLifecycle()
@@ -93,6 +97,7 @@ fun SettingsScreen(
     var hasOverlay by remember { mutableStateOf(PermissionHelper.canDrawOverlays(context)) }
     var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
 
+    var showThemesSheet by remember { mutableStateOf(false) }
     var showStrictModeDialog by remember { mutableStateOf(false) }
     var showInvincibleConfirmDialog by remember { mutableStateOf(false) }
     var showEmergencyBreakConfirmDialog by remember { mutableStateOf(false) }
@@ -192,6 +197,16 @@ fun SettingsScreen(
         )
     }
 
+    if (showThemesSheet) {
+        ThemesBottomSheet(
+            currentBaseMode = baseThemeMode,
+            currentPalette = secondaryPalette,
+            onSelectBaseMode = { viewModel.setBaseThemeMode(it) },
+            onSelectPalette = { viewModel.setSecondaryPalette(it) },
+            onDismiss = { showThemesSheet = false }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -208,10 +223,10 @@ fun SettingsScreen(
             )
         }
 
-        // Section: Appearance / Theme Mode
+        // Section: Themes & Appearance
         item {
             Text(
-                text = "Appearance",
+                text = "Appearance & Themes",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary
@@ -220,35 +235,81 @@ fun SettingsScreen(
 
         item {
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("themes_setting_card")
+                    .clickable { showThemesSheet = true },
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    ThemeOptionRow(
-                        title = "Follow System",
-                        description = "Matches device dark/light theme setting",
-                        icon = Icons.Default.SettingsBrightness,
-                        selected = themeMode == ThemeMode.SYSTEM,
-                        onClick = { viewModel.setThemeMode(ThemeMode.SYSTEM) },
-                        testTag = "theme_system_option"
-                    )
-                    ThemeOptionRow(
-                        title = "Light Theme",
-                        description = "Clean, high-contrast off-white palette",
-                        icon = Icons.Default.LightMode,
-                        selected = themeMode == ThemeMode.LIGHT,
-                        onClick = { viewModel.setThemeMode(ThemeMode.LIGHT) },
-                        testTag = "theme_light_option"
-                    )
-                    ThemeOptionRow(
-                        title = "Dark Theme",
-                        description = "Deep charcoal, comfortable for night focus",
-                        icon = Icons.Default.DarkMode,
-                        selected = themeMode == ThemeMode.DARK,
-                        onClick = { viewModel.setThemeMode(ThemeMode.DARK) },
-                        testTag = "theme_dark_option"
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        modifier = Modifier.size(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Palette,
+                                contentDescription = "Themes",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Themes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${baseThemeMode.displayName} • ${secondaryPalette.displayName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // 3 Color Preview Dots
+                    val dots = remember(secondaryPalette, baseThemeMode) {
+                        secondaryPalette.getPreviewDots(baseThemeMode)
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        dots.forEach { dotColor ->
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .background(dotColor, androidx.compose.foundation.shape.CircleShape)
+                                    .border(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                        androidx.compose.foundation.shape.CircleShape
+                                    )
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Open Themes",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }

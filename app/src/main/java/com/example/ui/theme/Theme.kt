@@ -3,63 +3,41 @@ package com.example.ui.theme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 import com.example.data.preferences.ThemeMode
 
-val LightFocusColorScheme: ColorScheme = lightColorScheme(
-    primary = SagePrimaryLight,
-    onPrimary = SageOnPrimaryLight,
-    primaryContainer = SagePrimaryContainerLight,
-    onPrimaryContainer = SageOnPrimaryContainerLight,
-    secondary = SageSecondaryLight,
-    onSecondary = SageOnSecondaryLight,
-    background = SageBackgroundLight,
-    onBackground = SageOnSurfaceLight,
-    surface = SageSurfaceLight,
-    onSurface = SageOnSurfaceLight,
-    surfaceVariant = SageSurfaceVariantLight,
-    onSurfaceVariant = SageOnSurfaceVariantLight,
-    outline = SageOutlineLight
+// Default legacy fallbacks
+val LightFocusColorScheme: ColorScheme = getFocusColorScheme(
+    BaseThemeMode.LIGHT,
+    SecondaryThemePalette.FOCUS_EMERALD
 )
 
-val DarkFocusColorScheme: ColorScheme = darkColorScheme(
-    primary = EmeraldPrimary,
-    onPrimary = AmoledBlack,
-    primaryContainer = EmeraldContainer,
-    onPrimaryContainer = EmeraldOnContainer,
-    secondary = EmeraldLight,
-    onSecondary = AmoledBlack,
-    secondaryContainer = Color(0xFF0A2E22),
-    onSecondaryContainer = EmeraldLight,
-    background = AmoledBlack, // Pure black #000000
-    onBackground = TextHighContrast,
-    surface = AmoledSurfacePitch, // Deep pitch-slate #0D0E11
-    onSurface = TextHighContrast,
-    surfaceVariant = AmoledSurfaceSlate, // #141519
-    onSurfaceVariant = TextLowContrast,
-    outline = AmoledCardBorder, // #22262F
-    outlineVariant = Color(0xFF1A1D24),
-    error = Color(0xFFEF4444),
-    errorContainer = Color(0xFF450A0A),
-    onError = Color(0xFFFFFFFF),
-    onErrorContainer = Color(0xFFFCA5A5)
+val DarkFocusColorScheme: ColorScheme = getFocusColorScheme(
+    BaseThemeMode.AMOLED,
+    SecondaryThemePalette.FOCUS_EMERALD
 )
 
+/**
+ * FocusLock 2-Layer Theme Provider:
+ * Layer 1: Base Mode (Light, Dark, AMOLED, or System Default)
+ * Layer 2: Secondary Color Palette (12 palettes)
+ */
 @Composable
 fun FocusLockTheme(
+    baseThemeMode: BaseThemeMode? = null,
+    secondaryPalette: SecondaryThemePalette = SecondaryThemePalette.FOCUS_EMERALD,
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     content: @Composable () -> Unit
 ) {
-    val isDark = when (themeMode) {
-        ThemeMode.LIGHT -> false
-        ThemeMode.DARK -> true
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-    }
+    val isSystemDark = isSystemInDarkTheme()
 
-    val colorScheme = if (isDark) DarkFocusColorScheme else LightFocusColorScheme
+    val resolvedBase = (baseThemeMode ?: when (themeMode) {
+        ThemeMode.LIGHT -> BaseThemeMode.LIGHT
+        ThemeMode.DARK -> BaseThemeMode.DARK
+        ThemeMode.SYSTEM -> BaseThemeMode.SYSTEM_DEFAULT
+    }).resolve(isSystemDark)
+
+    val colorScheme = getFocusColorScheme(resolvedBase, secondaryPalette)
 
     MaterialTheme(
         colorScheme = colorScheme,

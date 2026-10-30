@@ -43,6 +43,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,6 +68,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.FocusApplication
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.focusapp.util.MotivationLibrary
+import com.example.ui.theme.BaseThemeMode
+import com.example.ui.theme.FocusLockTheme
+import com.example.ui.theme.SecondaryThemePalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -124,6 +128,14 @@ class BlockedActivity : ComponentActivity() {
         }
 
         setContent {
+            val baseThemeMode by (prefRepo?.baseThemeMode?.collectAsStateWithLifecycle(
+                initialValue = prefRepo.getInitialBaseThemeMode()
+            ) ?: remember { mutableStateOf(BaseThemeMode.DARK) })
+
+            val secondaryPalette by (prefRepo?.secondaryPalette?.collectAsStateWithLifecycle(
+                initialValue = SecondaryThemePalette.FOCUS_EMERALD
+            ) ?: remember { mutableStateOf(SecondaryThemePalette.FOCUS_EMERALD) })
+
             val breaksRemaining by (prefRepo?.emergencyBreaksRemaining?.collectAsStateWithLifecycle(
                 initialValue = UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS
             ) ?: remember { mutableStateOf(UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS) })
@@ -132,25 +144,30 @@ class BlockedActivity : ComponentActivity() {
                 initialValue = UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
             ) ?: remember { mutableStateOf(UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE) })
 
-            BlockedScreen(
-                title = title,
-                reason = reason,
-                type = type,
-                quote = quote,
-                cooldownEndTime = cooldownEndTime,
-                breaksRemaining = breaksRemaining,
-                cognitivePassphrase = cognitivePassphrase,
-                onGoHome = returnToHome,
-                onPatternInterruptPassed = {
-                    allowManualDismiss = true
-                },
-                onActivateEmergencyBreak = { phrase ->
-                    prefRepo?.triggerEmergencyBreak(phrase) ?: false
-                },
-                onEmergencyBreakActivated = {
-                    finish()
-                }
-            )
+            FocusLockTheme(
+                baseThemeMode = baseThemeMode,
+                secondaryPalette = secondaryPalette
+            ) {
+                BlockedScreen(
+                    title = title,
+                    reason = reason,
+                    type = type,
+                    quote = quote,
+                    cooldownEndTime = cooldownEndTime,
+                    breaksRemaining = breaksRemaining,
+                    cognitivePassphrase = cognitivePassphrase,
+                    onGoHome = returnToHome,
+                    onPatternInterruptPassed = {
+                        allowManualDismiss = true
+                    },
+                    onActivateEmergencyBreak = { phrase ->
+                        prefRepo?.triggerEmergencyBreak(phrase) ?: false
+                    },
+                    onEmergencyBreakActivated = {
+                        finish()
+                    }
+                )
+            }
         }
     }
 
@@ -251,23 +268,23 @@ fun BlockedScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF000000))
+            .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding()
             .padding(horizontal = 28.dp, vertical = 24.dp)
             .testTag("blocked_black_interstitial")
     ) {
         // Top context badge
         Surface(
-            color = Color(0xFF0D0E11),
+            color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, Color(0xFF22262F)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp)
         ) {
             Text(
                 text = badgeLabel,
-                color = Color(0xFF10B981),
+                color = MaterialTheme.colorScheme.primary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,

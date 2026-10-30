@@ -16,6 +16,9 @@ import com.example.util.TimeIntegrityManager
 import java.security.MessageDigest
 import java.util.UUID
 
+import com.example.ui.theme.BaseThemeMode
+import com.example.ui.theme.SecondaryThemePalette
+
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "user_preferences")
 
 enum class ThemeMode {
@@ -35,6 +38,8 @@ class UserPreferencesRepository(private val context: Context) {
 
     private object PreferencesKeys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val BASE_THEME_MODE = stringPreferencesKey("base_theme_mode")
+        val SECONDARY_PALETTE = stringPreferencesKey("secondary_palette")
         val ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
         val MASTER_ENABLED = booleanPreferencesKey("master_enabled")
         val CHEAT_PROTECTION_ENABLED = booleanPreferencesKey("cheat_protection_enabled")
@@ -53,6 +58,34 @@ class UserPreferencesRepository(private val context: Context) {
         val EMERGENCY_BREAKS_REMAINING = intPreferencesKey("emergency_breaks_remaining")
         val EMERGENCY_BREAK_WEEK_START = longPreferencesKey("emergency_break_week_start")
         val ACTIVE_EMERGENCY_BREAK_UNTIL = longPreferencesKey("active_emergency_break_until")
+    }
+
+    fun getSystemBaseThemeMode(): BaseThemeMode {
+        val nightModeFlags = context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        return if (nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
+            BaseThemeMode.DARK
+        } else {
+            BaseThemeMode.LIGHT
+        }
+    }
+
+    fun getInitialBaseThemeMode(): BaseThemeMode = getSystemBaseThemeMode()
+
+    val baseThemeMode: Flow<BaseThemeMode> = context.dataStore.data.map { preferences ->
+        val saved = preferences[PreferencesKeys.BASE_THEME_MODE]
+            ?: preferences[PreferencesKeys.THEME_MODE]
+        when (saved) {
+            BaseThemeMode.LIGHT.name, "LIGHT" -> BaseThemeMode.LIGHT
+            BaseThemeMode.DARK.name, "DARK" -> BaseThemeMode.DARK
+            BaseThemeMode.AMOLED.name, "AMOLED" -> BaseThemeMode.AMOLED
+            BaseThemeMode.SYSTEM_DEFAULT.name, "SYSTEM" -> getSystemBaseThemeMode()
+            else -> getSystemBaseThemeMode()
+        }
+    }
+
+    val secondaryPalette: Flow<SecondaryThemePalette> = context.dataStore.data.map { preferences ->
+        val saved = preferences[PreferencesKeys.SECONDARY_PALETTE]
+        SecondaryThemePalette.entries.find { it.name == saved } ?: SecondaryThemePalette.FOCUS_EMERALD
     }
 
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { preferences ->
@@ -212,9 +245,32 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun setBaseThemeMode(mode: BaseThemeMode) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.BASE_THEME_MODE] = mode.name
+            preferences[PreferencesKeys.THEME_MODE] = when (mode) {
+                BaseThemeMode.LIGHT -> ThemeMode.LIGHT.name
+                BaseThemeMode.DARK -> ThemeMode.DARK.name
+                BaseThemeMode.AMOLED -> ThemeMode.DARK.name
+                BaseThemeMode.SYSTEM_DEFAULT -> ThemeMode.SYSTEM.name
+            }
+        }
+    }
+
+    suspend fun setSecondaryPalette(palette: SecondaryThemePalette) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.SECONDARY_PALETTE] = palette.name
+        }
+    }
+
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.THEME_MODE] = mode.name
+            preferences[PreferencesKeys.BASE_THEME_MODE] = when (mode) {
+                ThemeMode.LIGHT -> BaseThemeMode.LIGHT.name
+                ThemeMode.DARK -> BaseThemeMode.DARK.name
+                ThemeMode.SYSTEM -> BaseThemeMode.SYSTEM_DEFAULT.name
+            }
         }
     }
 

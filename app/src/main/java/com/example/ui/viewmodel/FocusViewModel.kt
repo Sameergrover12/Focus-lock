@@ -30,6 +30,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import com.example.ui.theme.BaseThemeMode
+import com.example.ui.theme.SecondaryThemePalette
+
 data class GroupWithAppDetails(
     val group: AppGroup,
     val memberPackages: List<String>,
@@ -43,6 +46,18 @@ class FocusViewModel(
 ) : AndroidViewModel(application) {
 
     // Theme & Onboarding & Master State
+    val baseThemeMode: StateFlow<BaseThemeMode> = preferencesRepository.baseThemeMode.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = preferencesRepository.getInitialBaseThemeMode()
+    )
+
+    val secondaryPalette: StateFlow<SecondaryThemePalette> = preferencesRepository.secondaryPalette.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = SecondaryThemePalette.FOCUS_EMERALD
+    )
+
     val themeMode: StateFlow<ThemeMode> = preferencesRepository.themeMode.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -283,6 +298,18 @@ class FocusViewModel(
     }
 
     // Settings actions
+    fun setBaseThemeMode(mode: BaseThemeMode) {
+        viewModelScope.launch {
+            preferencesRepository.setBaseThemeMode(mode)
+        }
+    }
+
+    fun setSecondaryPalette(palette: SecondaryThemePalette) {
+        viewModelScope.launch {
+            preferencesRepository.setSecondaryPalette(palette)
+        }
+    }
+
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             preferencesRepository.setThemeMode(mode)

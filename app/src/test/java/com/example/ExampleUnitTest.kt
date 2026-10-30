@@ -520,4 +520,52 @@ class ExampleUnitTest {
         assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage(null))
         assertFalse(com.example.service.ContentScanner.isHideAppsTargetPackage(""))
     }
+
+    @Test
+    fun testSessionLimitHelperFormatting() {
+        assertEquals("0s", com.example.util.SessionLimitHelper.formatHms(0))
+        assertEquals("45s", com.example.util.SessionLimitHelper.formatHms(45))
+        assertEquals("10m", com.example.util.SessionLimitHelper.formatHms(600))
+        assertEquals("1h", com.example.util.SessionLimitHelper.formatHms(3600))
+        assertEquals("1h 15m 30s", com.example.util.SessionLimitHelper.formatHms(4530))
+
+        assertEquals("45s", com.example.util.SessionLimitHelper.formatRemaining(45_000L))
+        assertEquals("10m 00s", com.example.util.SessionLimitHelper.formatRemaining(600_000L))
+        assertEquals("1h 30m 00s", com.example.util.SessionLimitHelper.formatRemaining(5_400_000L))
+
+        assertEquals(3665, com.example.util.SessionLimitHelper.toSeconds(1, 1, 5))
+        assertEquals(0, com.example.util.SessionLimitHelper.toSeconds(0, 0, 0))
+    }
+
+    @Test
+    fun testSessionLimitCooldownActiveAndRemaining() {
+        val now = 1_000_000L
+        val activeCooldownEnd = now + 120_000L // 2 mins in future
+        val expiredCooldownEnd = now - 50_000L  // 50s in past
+
+        assertTrue(com.example.util.SessionLimitHelper.isCooldownActive(activeCooldownEnd, now))
+        assertFalse(com.example.util.SessionLimitHelper.isCooldownActive(expiredCooldownEnd, now))
+        assertFalse(com.example.util.SessionLimitHelper.isCooldownActive(0L, now))
+
+        assertEquals(120_000L, com.example.util.SessionLimitHelper.getCooldownRemainingMs(activeCooldownEnd, now))
+        assertEquals(0L, com.example.util.SessionLimitHelper.getCooldownRemainingMs(expiredCooldownEnd, now))
+    }
+
+    @Test
+    fun testSessionIdleReset() {
+        val cooldownSeconds = 3600 // 1 hour cooldown
+        val now = 10_000_000L
+
+        // Left app 30 mins ago with partial session: DO NOT reset yet
+        val recentExit = now - (30 * 60 * 1000L)
+        assertFalse(com.example.util.SessionLimitHelper.shouldResetIdleSession(recentExit, cooldownSeconds, now))
+
+        // Left app 61 mins ago (>= cooldownDurationMs): MUST reset session timer
+        val longAgoExit = now - (61 * 60 * 1000L)
+        assertTrue(com.example.util.SessionLimitHelper.shouldResetIdleSession(longAgoExit, cooldownSeconds, now))
+
+        // No previous exit (first run)
+        assertFalse(com.example.util.SessionLimitHelper.shouldResetIdleSession(0L, cooldownSeconds, now))
+    }
 }
+

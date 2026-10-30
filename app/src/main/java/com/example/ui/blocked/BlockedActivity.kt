@@ -87,6 +87,8 @@ class BlockedActivity : ComponentActivity() {
         const val TYPE_GROUP_SCHEDULE = "type_group_schedule"
         const val TYPE_GROUP_BUDGET = "type_group_budget"
         const val TYPE_INVINCIBLE_TAMPER = "type_invincible_tamper"
+        const val TYPE_SESSION_COOLDOWN = "type_session_cooldown"
+        const val EXTRA_COOLDOWN_END_TIME = "extra_cooldown_end_time"
     }
 
     private var allowManualDismiss = false
@@ -100,6 +102,7 @@ class BlockedActivity : ComponentActivity() {
         val reason = intent.getStringExtra(EXTRA_REASON) ?: "This application is in your blocked apps list."
         val type = intent.getStringExtra(EXTRA_TYPE) ?: TYPE_APP
         val quote = intent.getStringExtra(EXTRA_QUOTE) ?: MotivationLibrary.getRandomFullScreenQuote()
+        val cooldownEndTime = intent.getLongExtra(EXTRA_COOLDOWN_END_TIME, 0L)
 
         val app = application as? FocusApplication
         val prefRepo = app?.preferencesRepository
@@ -134,6 +137,7 @@ class BlockedActivity : ComponentActivity() {
                 reason = reason,
                 type = type,
                 quote = quote,
+                cooldownEndTime = cooldownEndTime,
                 breaksRemaining = breaksRemaining,
                 cognitivePassphrase = cognitivePassphrase,
                 onGoHome = returnToHome,
@@ -182,6 +186,7 @@ fun BlockedScreen(
     reason: String = "",
     type: String = BlockedActivity.TYPE_APP,
     quote: String = MotivationLibrary.getRandomFullScreenQuote(),
+    cooldownEndTime: Long = 0L,
     breaksRemaining: Int = 3,
     cognitivePassphrase: String = UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE,
     nextWindow: String? = null,
@@ -193,6 +198,17 @@ fun BlockedScreen(
     var showEmergencyDialog by remember { mutableStateOf(false) }
     var secondsRemaining by remember { mutableIntStateOf(4) }
     var canDismissManually by remember { mutableStateOf(false) }
+
+    var remainingCooldownMs by remember(cooldownEndTime) {
+        mutableStateOf(maxOf(0L, cooldownEndTime - com.example.util.TimeIntegrityManager.getTrueTimeMillis()))
+    }
+
+    LaunchedEffect(cooldownEndTime) {
+        while (remainingCooldownMs > 0L) {
+            delay(1000)
+            remainingCooldownMs = maxOf(0L, cooldownEndTime - com.example.util.TimeIntegrityManager.getTrueTimeMillis())
+        }
+    }
 
     // 4-Second Pattern Interrupt: Forces user to read the quote for exactly 4 seconds
     LaunchedEffect(Unit) {
@@ -228,6 +244,7 @@ fun BlockedScreen(
         BlockedActivity.TYPE_SCREEN_TIME -> "SCREEN TIME LIMIT EXCEEDED"
         BlockedActivity.TYPE_GROUP_SCHEDULE -> "FOCUS SCHEDULE ACTIVE"
         BlockedActivity.TYPE_GROUP_BUDGET -> "GROUP BUDGET EXHAUSTED"
+        BlockedActivity.TYPE_SESSION_COOLDOWN -> "SESSION LIMIT • ON COOLDOWN"
         else -> "FOCUS RESTRICTION ACTIVE"
     }
 
@@ -265,6 +282,44 @@ fun BlockedScreen(
                 .fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            if (type == BlockedActivity.TYPE_SESSION_COOLDOWN) {
+                Surface(
+                    color = Color(0xFF141519),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth(0.92f)
+                        .padding(bottom = 14.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "SESSION COOLDOWN BREAK",
+                            color = Color(0xFF888888),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${com.example.util.SessionLimitHelper.formatRemaining(remainingCooldownMs)} remaining",
+                            color = Color(0xFF10B981),
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Session limit reached. Take a break before starting another session.",
+                            color = Color(0xFFCCCCCC),
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
             Text(
                 text = "“",
                 color = Color(0xFF10B981).copy(alpha = 0.45f),

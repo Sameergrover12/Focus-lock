@@ -73,6 +73,20 @@ class FocusViewModel(
         initialValue = false
     )
 
+    val isClockTamperProtectionEnabled: StateFlow<Boolean> = preferencesRepository.isClockTamperProtectionEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = true
+    )
+
+    val isClockTampered: StateFlow<Boolean> = com.example.util.TimeIntegrityManager.isClockTamperedFlow
+
+    fun setClockTamperProtectionEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setClockTamperProtectionEnabled(enabled)
+        }
+    }
+
     val reclaimedCommitment: StateFlow<String> = preferencesRepository.reclaimedCommitment.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -314,9 +328,14 @@ class FocusViewModel(
     }
 
     // Screen Time actions
-    fun setAppScreenLimit(packageName: String, limitMinutes: Int) {
+    fun setAppScreenLimit(
+        packageName: String,
+        limitMinutes: Int,
+        sessionLimitSeconds: Int = 0,
+        cooldownSeconds: Int = 0
+    ) {
         viewModelScope.launch {
-            repository.setScreenTimeLimit(packageName, limitMinutes)
+            repository.setScreenTimeLimit(packageName, limitMinutes, sessionLimitSeconds, cooldownSeconds)
         }
     }
 

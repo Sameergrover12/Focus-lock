@@ -27,7 +27,7 @@ import com.example.data.local.entity.ScreenTimeLimit
         DailyUsageLog::class,
         DailyScreenTime::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

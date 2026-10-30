@@ -13,9 +13,14 @@ data class BlockedApp(
 @Entity(tableName = "screen_time_limits")
 data class ScreenTimeLimit(
     @PrimaryKey val packageName: String,
-    val dailyLimitMinutes: Int,
+    val dailyLimitMinutes: Int = 0,
     val usedMinutesToday: Int = 0,
-    val lastResetDate: String // YYYY-MM-DD
+    val lastResetDate: String = "", // YYYY-MM-DD
+    val sessionLimitSeconds: Int = 0, // 0 = disabled, customizable in H/M/S
+    val cooldownSeconds: Int = 0, // break duration in seconds
+    val currentSessionUsedMs: Long = 0L,
+    val lastSessionExitTimestamp: Long = 0L,
+    val cooldownEndTimestamp: Long = 0L
 )
 
 @Entity(tableName = "app_groups")
@@ -29,7 +34,13 @@ data class AppGroup(
     val budgetEnabled: Boolean = false,
     val dailyBudgetMinutes: Int = 60,
     val usedMinutesToday: Int = 0,
-    val lastResetDate: String = "" // YYYY-MM-DD
+    val lastResetDate: String = "", // YYYY-MM-DD
+    val sessionLimitEnabled: Boolean = false,
+    val sessionLimitSeconds: Int = 0,
+    val cooldownSeconds: Int = 0,
+    val currentSessionUsedMs: Long = 0L,
+    val lastSessionExitTimestamp: Long = 0L,
+    val cooldownEndTimestamp: Long = 0L
 )
 
 @Entity(

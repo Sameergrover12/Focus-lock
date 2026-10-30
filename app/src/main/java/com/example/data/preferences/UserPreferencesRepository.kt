@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import com.example.util.TimeIntegrityManager
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -40,6 +41,7 @@ class UserPreferencesRepository(private val context: Context) {
         val CHEAT_PROTECTION_HASH = stringPreferencesKey("cheat_protection_hash")
         val CHEAT_PROTECTION_SALT = stringPreferencesKey("cheat_protection_salt")
         val INVINCIBLE_MODE_ENABLED = booleanPreferencesKey("invincible_mode_enabled")
+        val CLOCK_TAMPER_PROTECTION_ENABLED = booleanPreferencesKey("clock_tamper_protection_enabled")
         
         // Psychological Onboarding commitment
         val RECLAIMED_COMMITMENT = stringPreferencesKey("reclaimed_commitment")
@@ -77,6 +79,10 @@ class UserPreferencesRepository(private val context: Context) {
         preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: false
     }
 
+    val isClockTamperProtectionEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] ?: true
+    }
+
     val reclaimedCommitment: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.RECLAIMED_COMMITMENT] ?: "My Focus"
     }
@@ -86,7 +92,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     val emergencyBreaksRemaining: Flow<Int> = context.dataStore.data.map { preferences ->
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrueTimeMillis()
         val weekStart = preferences[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
         if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
             MAX_WEEKLY_EMERGENCY_BREAKS
@@ -97,6 +103,13 @@ class UserPreferencesRepository(private val context: Context) {
 
     val activeEmergencyBreakUntil: Flow<Long> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] ?: 0L
+    }
+
+    suspend fun setClockTamperProtectionEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = enabled
+        }
+        TimeIntegrityManager.setProtectionEnabled(enabled)
     }
 
     suspend fun setReclaimedCommitment(commitment: String) {
@@ -119,12 +132,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun isEmergencyBreakActive(): Boolean {
         val prefs = context.dataStore.data.first()
         val until = prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] ?: 0L
-        return System.currentTimeMillis() < until
+        return TimeIntegrityManager.getTrueTimeMillis() < until
     }
 
     suspend fun getEmergencyBreaksRemaining(): Int {
         val prefs = context.dataStore.data.first()
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrueTimeMillis()
         val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
         if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
             // Reset weekly allowance
@@ -149,7 +162,7 @@ class UserPreferencesRepository(private val context: Context) {
         }
 
         var success = false
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrueTimeMillis()
 
         context.dataStore.edit { prefs ->
             val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
@@ -172,7 +185,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun takeEmergencyBreak(): Boolean {
         var success = false
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrueTimeMillis()
 
         context.dataStore.edit { prefs ->
             val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L

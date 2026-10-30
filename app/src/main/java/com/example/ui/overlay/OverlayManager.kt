@@ -60,15 +60,20 @@ object OverlayManager {
 
     private var activeLifecycleOwner: OverlayLifecycleOwner? = null
 
+    fun isShowingOverlay(): Boolean = overlayView != null
+
     fun showOverlay(
         context: Context,
         title: String,
         reason: String,
         type: String = BlockedActivity.TYPE_APP,
         quote: String = MotivationLibrary.getRandomFullScreenQuote(),
-        nextWindow: String? = null
+        nextWindow: String? = null,
+        isAccessibilityOverlay: Boolean = false
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+        val useAccessibilityOverlay = isAccessibilityOverlay || context is android.accessibilityservice.AccessibilityService
+
+        if (!useAccessibilityOverlay && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
             // Cannot draw overlay directly; launch BlockedActivity as fallback
             launchBlockedActivity(context, title, reason, type, quote, nextWindow)
             return
@@ -80,7 +85,9 @@ object OverlayManager {
 
                 val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
 
-                val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val layoutType = if (useAccessibilityOverlay) {
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 } else {
                     @Suppress("DEPRECATION")

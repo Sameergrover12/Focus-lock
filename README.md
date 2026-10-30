@@ -13,6 +13,7 @@ It lets users block distracting apps and websites, set screen-time limits, creat
 ### 📱 App Control
 - **Hard Block** — Block selected applications completely during active protection.
 - **Screen Time Limits** — Set daily usage limits for individual apps.
+- **Session Limits & Cooldowns** — Configure maximum continuous session duration with mandatory cooldown breaks.
 - **App Usage Tracking** — Monitor today's screen time and application usage.
 
 ### 🌐 Web & Content Blocking
@@ -23,6 +24,7 @@ It lets users block distracting apps and websites, set screen-time limits, creat
 ### 👥 Groups & Scheduling
 - Create groups containing multiple applications.
 - Schedule groups for specific times and days.
+- Set shared daily time budgets and shared session cooldowns.
 - Create different focus schedules for studying, work, sleep, or breaks.
 - Run multiple control rules according to your schedule.
 

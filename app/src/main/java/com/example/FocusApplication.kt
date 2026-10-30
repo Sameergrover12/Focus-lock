@@ -18,6 +18,7 @@ class FocusApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        com.example.util.TimeIntegrityManager.init(this)
         createNotificationChannels()
     }
 

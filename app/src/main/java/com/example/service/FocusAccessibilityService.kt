@@ -41,6 +41,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 import com.example.ui.overlay.OverlayManager
 import com.example.util.PermissionHelper
+import com.example.util.TimeIntegrityManager
 
 class FocusAccessibilityService : AccessibilityService() {
 
@@ -67,6 +68,8 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var blockedKeywordsCache = listOf<BlockedKeyword>()
     @Volatile private var isMasterEnabled = true
     @Volatile private var isInvincibleModeEnabled = false
+    @Volatile private var isCheatProtectionEnabled = false
+    @Volatile private var isClockTamperProtectionEnabled = true
     @Volatile private var todayUsageCache = mapOf<String, Int>()
     @Volatile private var activeEmergencyBreakUntil = 0L
     @Volatile private var cachedReclaimedCommitment: String? = null
@@ -198,6 +201,26 @@ class FocusAccessibilityService : AccessibilityService() {
                 // Pauses immediately when screen is off
                 val isInteractive = powerManager?.isInteractive ?: true
                 if (!isInteractive) continue
+
+                // Bypass during active emergency break
+                if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
+                    continue
+                }
+
+                // 1. HARD FLOATING WINDOW SCAN: inspect all visible interactive windows for any blocked app
+                val blockedInWindow = withContext(Dispatchers.Main) {
+                    findBlockedPackageInVisibleWindows(currentForegroundPackage)
+                }
+                if (blockedInWindow != null) {
+                    withContext(Dispatchers.Main) {
+                        triggerBlockScreen(blockedInWindow)
+                    }
+                    continue
+                } else if (OverlayManager.isShowingOverlay()) {
+                    withContext(Dispatchers.Main) {
+                        OverlayManager.removeOverlay(this@FocusAccessibilityService)
+                    }
+                }
 
                 val currentPkg = currentForegroundPackage
                 // Pauses immediately when Focus Lock itself is foreground or system overlay
@@ -336,6 +359,16 @@ class FocusAccessibilityService : AccessibilityService() {
                 prefRepo.isInvincibleModeEnabled.collect { isInvincibleModeEnabled = it }
             }
 
+            // Cheat protection / Strict mode
+            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
+                prefRepo.isCheatProtectionEnabled.collect { isCheatProtectionEnabled = it }
+            }
+
+            // Clock tamper protection
+            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
+                prefRepo.isClockTamperProtectionEnabled.collect { isClockTamperProtectionEnabled = it }
+            }
+
             // Emergency break
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
                 prefRepo.activeEmergencyBreakUntil.collect { until ->
@@ -362,7 +395,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun scheduleEmergencySnapback(until: Long) {
         snapbackJob?.cancel()
-        val delayMs = until - System.currentTimeMillis()
+        val delayMs = until - TimeIntegrityManager.getTrueTimeMillis()
         if (delayMs > 0) {
             snapbackJob = serviceScope.launch(Dispatchers.Default) {
                 delay(delayMs)
@@ -437,9 +470,13 @@ class FocusAccessibilityService : AccessibilityService() {
      * Collects all packages visible on screen across all windows (base app, split-screen, floating windows).
      * Blocking enforcement MUST evaluate EVERY visible window, focused or not.
      */
+    /**
+     * Collects all packages visible on screen across all interactive windows (base app, split-screen, floating windows).
+     * Blocking enforcement MUST evaluate EVERY visible window, focused or not.
+     */
     private fun getAllVisiblePackages(eventPkg: String?): Set<String> {
-        val result = mutableSetOf<String>()
-        if (!eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg)) {
+        val result = LinkedHashSet<String>()
+        if (!eventPkg.isNullOrEmpty() && eventPkg != packageName && !isSystemOverlay(eventPkg)) {
             result.add(eventPkg)
         }
 
@@ -447,11 +484,10 @@ class FocusAccessibilityService : AccessibilityService() {
             val windowList = windows
             if (!windowList.isNullOrEmpty()) {
                 for (win in windowList) {
-                    if (win.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
-                        val pkg = win.root?.packageName?.toString()
-                        if (!pkg.isNullOrEmpty() && !isSystemOverlay(pkg)) {
-                            result.add(pkg)
-                        }
+                    val root = try { win.root } catch (e: Exception) { null }
+                    val pkg = root?.packageName?.toString()
+                    if (!pkg.isNullOrEmpty() && pkg != packageName && !isSystemOverlay(pkg)) {
+                        result.add(pkg)
                     }
                 }
             }
@@ -461,60 +497,62 @@ class FocusAccessibilityService : AccessibilityService() {
 
         val activeRoot = try { rootInActiveWindow } catch (e: Exception) { null }
         val activePkg = activeRoot?.packageName?.toString()
-        if (!activePkg.isNullOrEmpty() && !isSystemOverlay(activePkg)) {
+        if (!activePkg.isNullOrEmpty() && activePkg != packageName && !isSystemOverlay(activePkg)) {
             result.add(activePkg)
         }
 
         return result
     }
 
+    /**
+     * Inspects every visible window (via getWindows()) and active event package to detect any blocked app,
+     * including apps running in freeform floating or split-screen windows.
+     */
+    private fun findBlockedPackageInVisibleWindows(eventPkg: String?): String? {
+        val visiblePkgs = getAllVisiblePackages(eventPkg)
+        for (pkg in visiblePkgs) {
+            if (cachedBlockedPackages.contains(pkg) || blockedAppsByPackage.containsKey(pkg) || isPackageRestricted(pkg)) {
+                return pkg
+            }
+        }
+        return null
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (!isMasterEnabled) return
-
-        // -------------------------------------------------------------------------
-        // 1. INSTANT INTERCEPTION LOGIC (RAM-ONLY):
-        // Only react to AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED for app blocking
-        // -------------------------------------------------------------------------
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val packageName = event.packageName?.toString() ?: return
-            val className = event.className?.toString() ?: ""
-
-            // Exclude our own app and BlockedActivity itself
-            if (packageName == this.packageName || className.contains("BlockedActivity")) {
-                currentForegroundPackage = this.packageName
-                FocusForegroundService.onForegroundPackageChanged(this.packageName)
-                return
-            }
-
-            // Emergency break 10-minute check in memory
-            if (System.currentTimeMillis() < activeEmergencyBreakUntil) {
-                currentForegroundPackage = packageName
-                FocusForegroundService.onForegroundPackageChanged(packageName)
-                return
-            }
-
-            // Perform an instant, RAM-only check:
-            if (cachedBlockedPackages.contains(packageName)) {
-                triggerBlockScreen(packageName)
-                return
-            }
-
-            // Secondary check: screen time limits or groups if package is restricted
-            if (isPackageRestricted(packageName)) {
-                checkForegroundPackage(packageName)
-                return
-            }
-
-            currentForegroundPackage = packageName
-            FocusForegroundService.onForegroundPackageChanged(packageName)
-        }
 
         val myPackageName = packageName
         val eventPkg = event.packageName?.toString()
         val className = event.className?.toString() ?: ""
         val eventType = event.eventType
 
+        // 0. The Emergency Failsafe System: 10-Minute Hard Cap
+        if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
+            if (!eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) && eventPkg != myPackageName) {
+                currentForegroundPackage = eventPkg
+                FocusForegroundService.onForegroundPackageChanged(eventPkg)
+            }
+            return
+        }
+
+        // -------------------------------------------------------------------------
+        // 1. FLOATING WINDOW & MULTI-WINDOW BLOCKING ENFORCEMENT:
+        // Do not rely only on event.packageName or rootInActiveWindow. Also iterate
+        // through windows (via getWindows()) and inspect root?.packageName of every
+        // visible interactive window on screen.
+        // -------------------------------------------------------------------------
+        val blockedPkg = findBlockedPackageInVisibleWindows(eventPkg)
+        if (blockedPkg != null) {
+            if (cachedBlockedPackages.contains(blockedPkg) || blockedAppsByPackage.containsKey(blockedPkg)) {
+                triggerBlockScreen(blockedPkg)
+            } else {
+                checkForegroundPackage(blockedPkg)
+            }
+            return
+        }
+
+        // Exclude our own app and BlockedActivity itself
         if (className.contains("BlockedActivity") || eventPkg == myPackageName) {
             currentForegroundPackage = myPackageName
             FocusForegroundService.onForegroundPackageChanged(myPackageName)
@@ -522,7 +560,19 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // -------------------------------------------------------------------------
-        // 0. OS "HIDE APPS" TEXT INTERCEPTOR:
+        // 2. ANDROID DATE & TIME SETTINGS TAMPER INTERCEPTOR:
+        // Blocks user from accessing Date & Time settings while focus restrictions exist
+        // -------------------------------------------------------------------------
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        ) {
+            if (checkAndInterceptDateTimeSettings(event)) {
+                return
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // 3. OS "HIDE APPS" TEXT INTERCEPTOR:
         // Blocks user from accessing OEM Settings or Launcher "Hide Apps" loophole
         // -------------------------------------------------------------------------
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -538,6 +588,106 @@ class FocusAccessibilityService : AccessibilityService() {
         serviceScope.launch(Dispatchers.Default) {
             handleEventInBackground(eventPkg, eventType)
         }
+    }
+
+    private var lastDateTimeInterceptTime = 0L
+
+    private fun checkAndInterceptDateTimeSettings(event: AccessibilityEvent): Boolean {
+        if (!isMasterEnabled || !isClockTamperProtectionEnabled) return false
+
+        // Only enforce if any protection, schedule, or limit is active
+        val hasActiveRestrictions = isCheatProtectionEnabled ||
+                isInvincibleModeEnabled ||
+                cachedBlockedPackages.isNotEmpty() ||
+                screenLimitsCache.isNotEmpty() ||
+                groupsCache.any { it.scheduleEnabled || it.budgetEnabled }
+
+        if (!hasActiveRestrictions) return false
+
+        val eventPkg = event.packageName?.toString() ?: return false
+        if (eventPkg != "com.android.settings") return false
+
+        val className = event.className?.toString() ?: ""
+        var isDateTimeTarget = false
+
+        if (className.contains("DateTime", ignoreCase = true) ||
+            className.contains("DateAndTime", ignoreCase = true) ||
+            className.contains("TimeSettings", ignoreCase = true) ||
+            className.contains("ZonePicker", ignoreCase = true)
+        ) {
+            isDateTimeTarget = true
+        }
+
+        if (!isDateTimeTarget) {
+            for (cs in event.text) {
+                val t = cs?.toString() ?: continue
+                if (isDateTimeKeyword(t)) {
+                    isDateTimeTarget = true
+                    break
+                }
+            }
+        }
+
+        if (!isDateTimeTarget) {
+            val desc = event.contentDescription?.toString()
+            if (desc != null && isDateTimeKeyword(desc)) {
+                isDateTimeTarget = true
+            }
+        }
+
+        if (!isDateTimeTarget) {
+            val root = try { rootInActiveWindow } catch (e: Exception) { null }
+            if (root != null && root.packageName?.toString() == "com.android.settings") {
+                val targetQueries = listOf(
+                    "Date & time", "Date and time", "Set time", "Set date",
+                    "Automatic date & time", "Use network-provided time"
+                )
+                for (query in targetQueries) {
+                    val nodes = root.findAccessibilityNodeInfosByText(query)
+                    if (!nodes.isNullOrEmpty()) {
+                        for (node in nodes) {
+                            try { node.recycle() } catch (_: Exception) {}
+                        }
+                        isDateTimeTarget = true
+                        break
+                    }
+                }
+            }
+        }
+
+        if (isDateTimeTarget) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastDateTimeInterceptTime < 1500) {
+                return true
+            }
+            lastDateTimeInterceptTime = now
+
+            Log.w(TAG, "Date & Time settings intercepted! Forcefully ejecting user to protect true time.")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            performGlobalAction(GLOBAL_ACTION_BACK)
+
+            executeBlock(
+                pkgName = "com.android.settings",
+                title = "Date & Time Settings",
+                reason = "Date & Time settings are locked while Focus Protection is active to prevent clock tampering.",
+                type = BlockedActivity.TYPE_APP
+            )
+            return true
+        }
+
+        return false
+    }
+
+    private fun isDateTimeKeyword(text: String): Boolean {
+        val lower = text.lowercase().trim()
+        return lower == "date & time" ||
+                lower == "date and time" ||
+                lower == "set time" ||
+                lower == "set date" ||
+                lower == "automatic date & time" ||
+                lower == "use network-provided time" ||
+                lower.contains("datetime") ||
+                lower.contains("time zone")
     }
 
     /**
@@ -839,18 +989,27 @@ class FocusAccessibilityService : AccessibilityService() {
         if (cachedBlockedPackages.contains(pkgName) || blockedAppsByPackage.containsKey(pkgName)) {
             return true
         }
+        val trueNow = TimeIntegrityManager.getTrueTimeMillis()
         val limit = screenLimitsByPackage[pkgName]
-        if (limit != null && limit.dailyLimitMinutes > 0) {
-            val today = FocusRepository.getTodayDateString()
-            val todayUsed = todayUsageCache[pkgName]
-                ?: (if (limit.lastResetDate == today) limit.usedMinutesToday else 0)
-            if (todayUsed >= limit.dailyLimitMinutes) return true
+        if (limit != null) {
+            if (limit.cooldownEndTimestamp > trueNow) {
+                return true
+            }
+            if (limit.dailyLimitMinutes > 0) {
+                val today = TimeIntegrityManager.getTrueDateString()
+                val todayUsed = todayUsageCache[pkgName]
+                    ?: (if (limit.lastResetDate == today) limit.usedMinutesToday else 0)
+                if (todayUsed >= limit.dailyLimitMinutes) return true
+            }
         }
         val groupIdsForApp = groupIdsByPackage[pkgName]
         if (!groupIdsForApp.isNullOrEmpty()) {
-            val cal = Calendar.getInstance()
+            val cal = TimeIntegrityManager.getTrueCalendar()
             for (gId in groupIdsForApp) {
                 val group = groupsById[gId] ?: continue
+                if (group.sessionLimitEnabled && group.cooldownEndTimestamp > trueNow) {
+                    return true
+                }
                 if (GroupRuleEvaluator.isScheduleActive(group, cal) ||
                     GroupRuleEvaluator.isBudgetExhausted(group)
                 ) {
@@ -867,7 +1026,7 @@ class FocusAccessibilityService : AccessibilityService() {
         // 0. The Emergency Failsafe System: 10-Minute Hard Cap
         // If an active 10-minute emergency break is currently running, bypass the block.
         // Once the 10 minutes elapse, the break expires silently and access is terminated immediately (The Abrupt Snapback).
-        if (System.currentTimeMillis() < activeEmergencyBreakUntil) {
+        if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
             return
         }
 
@@ -884,10 +1043,43 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 2. Screen Time Limits (O(1) instant map lookup instead of linear scan)
+        val trueNow = TimeIntegrityManager.getTrueTimeMillis()
+
+        // 2. Session Cooldown Locks (Checked before standard daily limits)
         val limit = screenLimitsByPackage[pkgName]
+        if (limit != null && limit.cooldownEndTimestamp > trueNow) {
+            val remainingMs = limit.cooldownEndTimestamp - trueNow
+            executeBlock(
+                pkgName = pkgName,
+                title = getAppNameFromPackage(pkgName),
+                reason = "Session limit reached. Take a break (${com.example.util.SessionLimitHelper.formatRemaining(remainingMs)} remaining).",
+                type = BlockedActivity.TYPE_SESSION_COOLDOWN,
+                cooldownEndTime = limit.cooldownEndTimestamp
+            )
+            return
+        }
+
+        val groupIdsForApp = groupIdsByPackage[pkgName]
+        if (!groupIdsForApp.isNullOrEmpty()) {
+            for (gId in groupIdsForApp) {
+                val group = groupsById[gId] ?: continue
+                if (group.sessionLimitEnabled && group.cooldownEndTimestamp > trueNow) {
+                    val remainingMs = group.cooldownEndTimestamp - trueNow
+                    executeBlock(
+                        pkgName = pkgName,
+                        title = group.name,
+                        reason = "Group session limit reached. Break active across all apps (${com.example.util.SessionLimitHelper.formatRemaining(remainingMs)} remaining).",
+                        type = BlockedActivity.TYPE_SESSION_COOLDOWN,
+                        cooldownEndTime = group.cooldownEndTimestamp
+                    )
+                    return
+                }
+            }
+        }
+
+        // 3. Screen Time Limits (Daily limits)
         if (limit != null && limit.dailyLimitMinutes > 0) {
-            val today = FocusRepository.getTodayDateString()
+            val today = TimeIntegrityManager.getTrueDateString()
             val todayUsed = todayUsageCache[pkgName]
                 ?: (if (limit.lastResetDate == today) limit.usedMinutesToday else 0)
             if (todayUsed >= limit.dailyLimitMinutes) {
@@ -904,10 +1096,9 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 3. Group Rules (O(1) indexed lookups instead of list filtering)
-        val groupIdsForApp = groupIdsByPackage[pkgName]
+        // 4. Group Rules (O(1) indexed lookups instead of list filtering)
         if (!groupIdsForApp.isNullOrEmpty()) {
-            val cal = Calendar.getInstance()
+            val cal = TimeIntegrityManager.getTrueCalendar()
             for (gId in groupIdsForApp) {
                 val group = groupsById[gId] ?: continue
 
@@ -1119,22 +1310,35 @@ class FocusAccessibilityService : AccessibilityService() {
         lastBlockedPackage = packageName
         lastBlockedTime = now
 
-        try {
-            val intent = Intent(this, BlockedActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                putExtra("BLOCKED_PACKAGE", packageName)
-                putExtra(BlockedActivity.EXTRA_PACKAGE, packageName)
-                putExtra(BlockedActivity.EXTRA_TITLE, getAppNameFromPackage(packageName))
-                putExtra(BlockedActivity.EXTRA_REASON, "This app is in your blocked apps list.")
-                putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_APP)
-                putExtra(BlockedActivity.EXTRA_QUOTE, MotivationLibrary.getRandomFullScreenQuote())
+        // Step 1: Force the OS to collapse/minimize floating or split-screen windows
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        performGlobalAction(GLOBAL_ACTION_HOME)
+
+        val appTitle = getAppNameFromPackage(packageName)
+        val quote = MotivationLibrary.getRandomFullScreenQuote()
+
+        // Step 2: After a tiny 100ms delay, launch BlockedActivity with FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                val intent = Intent(this, BlockedActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                    putExtra("BLOCKED_PACKAGE", packageName)
+                    putExtra(BlockedActivity.EXTRA_PACKAGE, packageName)
+                    putExtra(BlockedActivity.EXTRA_TITLE, appTitle)
+                    putExtra(BlockedActivity.EXTRA_REASON, "This app is in your blocked apps list.")
+                    putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_APP)
+                    putExtra(BlockedActivity.EXTRA_QUOTE, quote)
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch BlockedActivity for $packageName", e)
             }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch BlockedActivity for $packageName", e)
-        }
+        }, 100L)
+
+        // Step 3: 250ms Hard failsafe against persistent pinned floating windows that stay on top
+        scheduleFloatingWindowFailsafe(packageName, appTitle, "This app is in your blocked apps list.", BlockedActivity.TYPE_APP, quote)
     }
 
     private fun executeBlock(
@@ -1142,7 +1346,8 @@ class FocusAccessibilityService : AccessibilityService() {
         title: String,
         reason: String,
         type: String,
-        nextWindow: String? = null
+        nextWindow: String? = null,
+        cooldownEndTime: Long = 0L
     ) {
         if (pkgName == packageName) return
 
@@ -1154,25 +1359,75 @@ class FocusAccessibilityService : AccessibilityService() {
         lastBlockedTime = now
         lastBlockedPackage = pkgName
 
+        // Step 1: Force the OS to collapse/minimize floating or split-screen windows
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        performGlobalAction(GLOBAL_ACTION_HOME)
+
         val quote = MotivationLibrary.getRandomFullScreenQuote()
 
-        try {
-            val intent = Intent(this, BlockedActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                putExtra("BLOCKED_PACKAGE", pkgName)
-                putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
-                putExtra(BlockedActivity.EXTRA_TITLE, title)
-                putExtra(BlockedActivity.EXTRA_REASON, reason)
-                putExtra(BlockedActivity.EXTRA_TYPE, type)
-                putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
-                putExtra(BlockedActivity.EXTRA_QUOTE, quote)
+        // Step 2: After a tiny 100ms delay, launch BlockedActivity with FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                val intent = Intent(this, BlockedActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                    putExtra("BLOCKED_PACKAGE", pkgName)
+                    putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
+                    putExtra(BlockedActivity.EXTRA_TITLE, title)
+                    putExtra(BlockedActivity.EXTRA_REASON, reason)
+                    putExtra(BlockedActivity.EXTRA_TYPE, type)
+                    putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+                    putExtra(BlockedActivity.EXTRA_QUOTE, quote)
+                    if (cooldownEndTime > 0L) {
+                        putExtra(BlockedActivity.EXTRA_COOLDOWN_END_TIME, cooldownEndTime)
+                    }
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch BlockedActivity for $pkgName", e)
             }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch BlockedActivity for $pkgName", e)
-        }
+        }, 100L)
+
+        // Step 3: 250ms Hard failsafe against persistent pinned floating windows that stay on top
+        scheduleFloatingWindowFailsafe(pkgName, title, reason, type, quote, nextWindow)
+    }
+
+    private fun scheduleFloatingWindowFailsafe(
+        pkgName: String,
+        title: String,
+        reason: String,
+        type: String,
+        quote: String,
+        nextWindow: String? = null
+    ) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            val stillBlocked = findBlockedPackageInVisibleWindows(null)
+            if (stillBlocked != null) {
+                Log.w(TAG, "Floating window ($stillBlocked) still on screen 250ms after block! Engaging persistent failsafe overlay.")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                performGlobalAction(GLOBAL_ACTION_HOME)
+
+                OverlayManager.showOverlay(
+                    context = this,
+                    title = title,
+                    reason = reason,
+                    type = type,
+                    quote = quote,
+                    nextWindow = nextWindow,
+                    isAccessibilityOverlay = true
+                )
+
+                // Re-check after another 250ms if user somehow kept pinned floating window alive
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val persistentBlocked = findBlockedPackageInVisibleWindows(null)
+                    if (persistentBlocked != null) {
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                    }
+                }, 250L)
+            }
+        }, 250L)
     }
 
     private fun getAppNameFromPackage(pkgName: String): String {

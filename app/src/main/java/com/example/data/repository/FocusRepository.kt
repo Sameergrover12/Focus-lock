@@ -69,22 +69,39 @@ class FocusRepository(private val focusDao: FocusDao) {
     // Screen Time Limits
     val allScreenTimeLimits: Flow<List<ScreenTimeLimit>> = focusDao.getAllScreenTimeLimits()
     suspend fun getAllScreenTimeLimitsSync(): List<ScreenTimeLimit> = focusDao.getAllScreenTimeLimitsSync()
-    suspend fun setScreenTimeLimit(packageName: String, dailyLimitMinutes: Int) {
+    suspend fun setScreenTimeLimit(
+        packageName: String,
+        dailyLimitMinutes: Int,
+        sessionLimitSeconds: Int = 0,
+        cooldownSeconds: Int = 0
+    ) {
         val today = getTodayDateString()
         // Single source of truth: enforce against the app's total daily usage counter
         val todayUsage = focusDao.getUsageLog(packageName, today)?.minutesUsed ?: 0
+        val existing = focusDao.getScreenTimeLimit(packageName)
         focusDao.insertOrUpdateScreenTimeLimit(
             ScreenTimeLimit(
                 packageName = packageName,
                 dailyLimitMinutes = dailyLimitMinutes,
                 usedMinutesToday = todayUsage,
-                lastResetDate = today
+                lastResetDate = today,
+                sessionLimitSeconds = sessionLimitSeconds,
+                cooldownSeconds = cooldownSeconds,
+                currentSessionUsedMs = existing?.currentSessionUsedMs ?: 0L,
+                lastSessionExitTimestamp = existing?.lastSessionExitTimestamp ?: 0L,
+                cooldownEndTimestamp = existing?.cooldownEndTimestamp ?: 0L
             )
         )
     }
     suspend fun removeScreenTimeLimit(packageName: String) = focusDao.deleteScreenTimeLimit(packageName)
     suspend fun updateScreenTimeUsage(packageName: String, usedMinutes: Int, date: String) =
         focusDao.updateScreenTimeUsage(packageName, usedMinutes, date)
+
+    suspend fun updateScreenTimeSessionState(packageName: String, usedMs: Long, exitTime: Long, cooldownEnd: Long) =
+        focusDao.updateScreenTimeSessionState(packageName, usedMs, exitTime, cooldownEnd)
+
+    suspend fun updateGroupSessionState(id: Long, usedMs: Long, exitTime: Long, cooldownEnd: Long) =
+        focusDao.updateGroupSessionState(id, usedMs, exitTime, cooldownEnd)
 
     suspend fun resetDailyLimitsIfNeeded() {
         val today = getTodayDateString()
@@ -93,12 +110,16 @@ class FocusRepository(private val focusDao: FocusDao) {
             if (limit.lastResetDate != today) {
                 val todayUsage = focusDao.getUsageLog(limit.packageName, today)?.minutesUsed ?: 0
                 focusDao.updateScreenTimeUsage(limit.packageName, todayUsage, today)
+                // At midnight daily reset, reset currentSessionUsedMs = 0L
+                focusDao.updateScreenTimeSessionState(limit.packageName, 0L, limit.lastSessionExitTimestamp, limit.cooldownEndTimestamp)
             }
         }
         val allGroups = focusDao.getAllGroupsSync()
         for (group in allGroups) {
             if (group.lastResetDate != today) {
                 focusDao.updateGroupUsage(group.id, 0, today)
+                // At midnight daily reset, reset currentSessionUsedMs = 0L
+                focusDao.updateGroupSessionState(group.id, 0L, group.lastSessionExitTimestamp, group.cooldownEndTimestamp)
             }
         }
     }

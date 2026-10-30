@@ -240,12 +240,20 @@ class FocusForegroundService : Service() {
 
                 val currentPkg = detectCurrentForegroundPackage()
                 if (currentPkg != null && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
+                    if (currentPkg != lastActivePkg) {
+                        onPackageFocusTransition(lastActivePkg, currentPkg)
+                        lastActivePkg = currentPkg
+                    }
                     accumulateForegroundUsage(currentPkg, 1)
+                    accumulateSessionUsage(currentPkg, 1)
 
                     // Secondary fallback enforcement if AccessibilityService is temporarily inactive
                     if (!FocusAccessibilityService.isServiceRunning.value) {
                         checkFallbackEnforcement(currentPkg)
                     }
+                } else if (lastActivePkg != null) {
+                    onPackageFocusTransition(lastActivePkg, null)
+                    lastActivePkg = null
                 }
             }
         }
@@ -494,6 +502,146 @@ class FocusForegroundService : Service() {
                     }
                 }
             }
+        }
+    }
+
+    private var lastActivePkg: String? = null
+
+    private suspend fun onPackageFocusTransition(fromPkg: String?, toPkg: String?) {
+        val app = application as? FocusApplication ?: return
+        val repo = app.repository
+        val now = com.example.util.TimeIntegrityManager.getTrueTimeMillis()
+
+        if (fromPkg != null) {
+            val limit = repo.getAllScreenTimeLimitsSync().firstOrNull { it.packageName == fromPkg }
+            if (limit != null && limit.sessionLimitSeconds > 0) {
+                repo.updateScreenTimeSessionState(
+                    packageName = fromPkg,
+                    usedMs = limit.currentSessionUsedMs,
+                    exitTime = now,
+                    cooldownEnd = limit.cooldownEndTimestamp
+                )
+            }
+            // Groups
+            val groupApps = repo.getAllGroupAppsSync()
+            val groupIds = groupApps.filter { it.packageName == fromPkg }.map { it.groupId }.distinct()
+            val allGroups = repo.getAllGroupsSync()
+            for (gId in groupIds) {
+                val group = allGroups.firstOrNull { it.id == gId }
+                if (group != null && group.sessionLimitEnabled) {
+                    repo.updateGroupSessionState(
+                        id = gId,
+                        usedMs = group.currentSessionUsedMs,
+                        exitTime = now,
+                        cooldownEnd = group.cooldownEndTimestamp
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun accumulateSessionUsage(pkgName: String, secondsToAdd: Int) {
+        val app = application as? FocusApplication ?: return
+        val repo = app.repository
+        val now = com.example.util.TimeIntegrityManager.getTrueTimeMillis()
+
+        // 1. Individual app session
+        val limits = repo.getAllScreenTimeLimitsSync()
+        var limit = limits.firstOrNull { it.packageName == pkgName }
+        if (limit != null && limit.sessionLimitSeconds > 0 && limit.cooldownSeconds > 0) {
+            // Check idle reset: if away >= cooldown duration, reset partial session
+            if (com.example.util.SessionLimitHelper.shouldResetIdleSession(limit.lastSessionExitTimestamp, limit.cooldownSeconds, now)) {
+                limit = limit.copy(currentSessionUsedMs = 0L, lastSessionExitTimestamp = 0L)
+                repo.updateScreenTimeSessionState(pkgName, 0L, 0L, limit.cooldownEndTimestamp)
+            }
+
+            if (limit.cooldownEndTimestamp > now) {
+                triggerSessionCooldownBlock(pkgName, limit.cooldownEndTimestamp - now, limit.cooldownEndTimestamp)
+            } else {
+                val newUsedMs = limit.currentSessionUsedMs + (secondsToAdd * 1000L)
+                val targetMs = limit.sessionLimitSeconds * 1000L
+                if (newUsedMs >= targetMs) {
+                    val cooldownEnd = now + (limit.cooldownSeconds * 1000L)
+                    repo.updateScreenTimeSessionState(pkgName, 0L, now, cooldownEnd)
+                    triggerSessionCooldownBlock(pkgName, limit.cooldownSeconds * 1000L, cooldownEnd)
+                } else {
+                    repo.updateScreenTimeSessionState(pkgName, newUsedMs, now, limit.cooldownEndTimestamp)
+                }
+            }
+        }
+
+        // 2. Shared Group session
+        val groupApps = repo.getAllGroupAppsSync()
+        val matchingGroupIds = groupApps.filter { it.packageName == pkgName }.map { it.groupId }.distinct()
+        if (matchingGroupIds.isNotEmpty()) {
+            val allGroups = repo.getAllGroupsSync()
+            for (gId in matchingGroupIds) {
+                var group = allGroups.firstOrNull { it.id == gId }
+                if (group != null && group.sessionLimitEnabled && group.sessionLimitSeconds > 0 && group.cooldownSeconds > 0) {
+                    // Check idle reset
+                    if (com.example.util.SessionLimitHelper.shouldResetIdleSession(group.lastSessionExitTimestamp, group.cooldownSeconds, now)) {
+                        group = group.copy(currentSessionUsedMs = 0L, lastSessionExitTimestamp = 0L)
+                        repo.updateGroupSessionState(gId, 0L, 0L, group.cooldownEndTimestamp)
+                    }
+
+                    if (group.cooldownEndTimestamp > now) {
+                        triggerSessionCooldownBlock(pkgName, group.cooldownEndTimestamp - now, group.cooldownEndTimestamp, group.name)
+                    } else {
+                        val newGroupUsedMs = group.currentSessionUsedMs + (secondsToAdd * 1000L)
+                        val targetGroupMs = group.sessionLimitSeconds * 1000L
+                        if (newGroupUsedMs >= targetGroupMs) {
+                            val cooldownEnd = now + (group.cooldownSeconds * 1000L)
+                            repo.updateGroupSessionState(gId, 0L, now, cooldownEnd)
+                            triggerSessionCooldownBlock(pkgName, group.cooldownSeconds * 1000L, cooldownEnd, group.name)
+                        } else {
+                            repo.updateGroupSessionState(gId, newGroupUsedMs, now, group.cooldownEndTimestamp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var lastSessionBlockPackage: String? = null
+    private var lastSessionBlockTime: Long = 0L
+
+    private fun triggerSessionCooldownBlock(
+        pkgName: String,
+        remainingMs: Long,
+        cooldownEnd: Long,
+        groupName: String? = null
+    ) {
+        val now = System.currentTimeMillis()
+        if (pkgName == lastSessionBlockPackage && now - lastSessionBlockTime < 1500) {
+            return
+        }
+        lastSessionBlockPackage = pkgName
+        lastSessionBlockTime = now
+
+        val quote = MotivationLibrary.getRandomFullScreenQuote()
+        val title = groupName ?: getAppMetadata(pkgName).first
+        val reason = if (groupName != null) {
+            "Group session limit reached for '$groupName'. Break active across all member apps."
+        } else {
+            "Session limit reached. Take a break before starting a new session."
+        }
+
+        try {
+            val intent = Intent(this, BlockedActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                putExtra("BLOCKED_PACKAGE", pkgName)
+                putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
+                putExtra(BlockedActivity.EXTRA_TITLE, title)
+                putExtra(BlockedActivity.EXTRA_REASON, reason)
+                putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_SESSION_COOLDOWN)
+                putExtra(BlockedActivity.EXTRA_QUOTE, quote)
+                putExtra(BlockedActivity.EXTRA_COOLDOWN_END_TIME, cooldownEnd)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch BlockedActivity for session cooldown", e)
         }
     }
 

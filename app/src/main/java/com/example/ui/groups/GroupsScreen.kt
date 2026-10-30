@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -56,6 +57,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -204,13 +207,16 @@ fun GroupsScreen(
                     (currentEdit.group.scheduleEnabled && !updatedGroup.scheduleEnabled) ||
                     (currentEdit.group.budgetEnabled && !updatedGroup.budgetEnabled) ||
                     (updatedGroup.dailyBudgetMinutes > currentEdit.group.dailyBudgetMinutes) ||
+                    (currentEdit.group.sessionLimitEnabled && !updatedGroup.sessionLimitEnabled) ||
+                    (currentEdit.group.sessionLimitEnabled && updatedGroup.sessionLimitSeconds > currentEdit.group.sessionLimitSeconds) ||
+                    (currentEdit.group.sessionLimitEnabled && updatedGroup.cooldownSeconds < currentEdit.group.cooldownSeconds) ||
                     currentEdit.memberPackages.any { it !in selectedPkgs }
                 )
 
                 if (isLoosening && isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
                         title = "Modify Group '${updatedGroup.name}'",
-                        description = "Changes will loosen restrictions, increase budget, disable the group, or remove protected member apps.",
+                        description = "Changes will loosen restrictions, increase budget or session duration, reduce cooldown, disable the group, or remove protected member apps.",
                         onAuthorized = {
                             viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
                         }
@@ -238,7 +244,13 @@ private fun GroupCard(
     val isBudgetExhausted = remember(group.budgetEnabled, group.dailyBudgetMinutes, group.usedMinutesToday) {
         GroupRuleEvaluator.isBudgetExhausted(group)
     }
-    val isCurrentlyBlocked = isScheduleActive || isBudgetExhausted
+    val isCooldownActive = remember(group.sessionLimitEnabled, group.cooldownEndTimestamp) {
+        group.sessionLimitEnabled && group.cooldownSeconds > 0 && group.cooldownEndTimestamp > com.example.util.TimeIntegrityManager.getTrueTimeMillis()
+    }
+    val remainingCooldownMs = remember(group.cooldownEndTimestamp) {
+        com.example.util.SessionLimitHelper.getCooldownRemainingMs(group.cooldownEndTimestamp)
+    }
+    val isCurrentlyBlocked = isScheduleActive || isBudgetExhausted || isCooldownActive
 
     Card(
         modifier = Modifier
@@ -272,12 +284,12 @@ private fun GroupCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                         ) {
                             Text(
-                                text = "LOCKED",
+                                text = if (isCooldownActive) "ON COOLDOWN" else "LOCKED",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary,
+                                color = if (isCooldownActive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
@@ -418,6 +430,32 @@ private fun GroupCard(
                     )
                 }
             }
+
+            // Rule 3: Session Limit & Cooldown
+            if (group.sessionLimitEnabled) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.HourglassBottom,
+                        contentDescription = null,
+                        tint = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isCooldownActive) {
+                            "On Cooldown (${com.example.util.SessionLimitHelper.formatRemaining(remainingCooldownMs)} remaining)"
+                        } else {
+                            "Shared Session: ${com.example.util.SessionLimitHelper.formatHms(group.sessionLimitSeconds)} (Cooldown: ${com.example.util.SessionLimitHelper.formatHms(group.cooldownSeconds)})"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isCooldownActive) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
         }
     }
 }
@@ -451,6 +489,25 @@ private fun EditGroupDialog(
 
     var budgetEnabled by remember { mutableStateOf(initialGroup.budgetEnabled) }
     var dailyBudgetMinutes by remember { mutableIntStateOf(if (initialGroup.dailyBudgetMinutes > 0) initialGroup.dailyBudgetMinutes else 60) }
+
+    var sessionLimitEnabled by remember { mutableStateOf(initialGroup.sessionLimitEnabled) }
+    var sessionHours by remember { mutableIntStateOf(initialGroup.sessionLimitSeconds / 3600) }
+    var sessionMins by remember { mutableIntStateOf((initialGroup.sessionLimitSeconds % 3600) / 60) }
+    var sessionSecs by remember { mutableIntStateOf(initialGroup.sessionLimitSeconds % 60) }
+
+    var cooldownHours by remember { mutableIntStateOf(initialGroup.cooldownSeconds / 3600) }
+    var cooldownMins by remember { mutableIntStateOf((initialGroup.cooldownSeconds % 3600) / 60) }
+    var cooldownSecs by remember { mutableIntStateOf(initialGroup.cooldownSeconds % 60) }
+
+    if (sessionLimitEnabled && sessionHours == 0 && sessionMins == 0 && sessionSecs == 0) {
+        sessionMins = 10
+    }
+    if (sessionLimitEnabled && cooldownHours == 0 && cooldownMins == 0 && cooldownSecs == 0) {
+        cooldownHours = 1
+    }
+
+    val totalSessionSeconds = com.example.util.SessionLimitHelper.toSeconds(sessionHours, sessionMins, sessionSecs)
+    val totalCooldownSeconds = com.example.util.SessionLimitHelper.toSeconds(cooldownHours, cooldownMins, cooldownSecs)
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -643,6 +700,85 @@ private fun EditGroupDialog(
                     }
                 }
 
+                // Rule 3: Session Limit & Cooldown
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Session Limit & Cooldown", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                    Text("Shared session timer and break cooldown for all apps in group", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(
+                                    checked = sessionLimitEnabled,
+                                    onCheckedChange = { sessionLimitEnabled = it; errorMessage = null },
+                                    modifier = Modifier.testTag("group_session_limit_switch")
+                                )
+                            }
+
+                            AnimatedVisibility(visible = sessionLimitEnabled) {
+                                Column(modifier = Modifier.padding(top = 12.dp)) {
+                                    Text(
+                                        text = "Session Duration (Max time before lockout):",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    GroupHmsInputRow(
+                                        hours = sessionHours,
+                                        minutes = sessionMins,
+                                        seconds = sessionSecs,
+                                        onHoursChange = { sessionHours = it },
+                                        onMinutesChange = { sessionMins = it },
+                                        onSecondsChange = { sessionSecs = it }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Text(
+                                        text = "Cooldown Duration (Required break time):",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    GroupHmsInputRow(
+                                        hours = cooldownHours,
+                                        minutes = cooldownMins,
+                                        seconds = cooldownSecs,
+                                        onHoursChange = { cooldownHours = it },
+                                        onMinutesChange = { cooldownMins = it },
+                                        onSecondsChange = { cooldownSecs = it }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surface
+                                    ) {
+                                        Text(
+                                            text = "Allowed: ${com.example.util.SessionLimitHelper.formatHms(totalSessionSeconds)} • Break: ${com.example.util.SessionLimitHelper.formatHms(totalCooldownSeconds)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (errorMessage != null) {
                     item {
                         Text(
@@ -660,8 +796,12 @@ private fun EditGroupDialog(
                                 errorMessage = "Please enter a group name"
                                 return@Button
                             }
-                            if (!scheduleEnabled && !budgetEnabled) {
-                                errorMessage = "Enable at least one rule (Schedule or Time Budget)"
+                            if (!scheduleEnabled && !budgetEnabled && !sessionLimitEnabled) {
+                                errorMessage = "Enable at least one rule (Schedule, Time Budget, or Session Limit)"
+                                return@Button
+                            }
+                            if (sessionLimitEnabled && (totalSessionSeconds <= 0 || totalCooldownSeconds <= 0)) {
+                                errorMessage = "Please enter valid session and cooldown durations"
                                 return@Button
                             }
                             if (selectedPackages.isEmpty()) {
@@ -676,7 +816,10 @@ private fun EditGroupDialog(
                                 scheduleEnd = scheduleEnd.trim(),
                                 daysOfWeek = daysOfWeek,
                                 budgetEnabled = budgetEnabled,
-                                dailyBudgetMinutes = dailyBudgetMinutes
+                                dailyBudgetMinutes = dailyBudgetMinutes,
+                                sessionLimitEnabled = sessionLimitEnabled,
+                                sessionLimitSeconds = if (sessionLimitEnabled) totalSessionSeconds else 0,
+                                cooldownSeconds = if (sessionLimitEnabled) totalCooldownSeconds else 0
                             )
                             onSave(updated, selectedPackages)
                         },
@@ -706,3 +849,59 @@ private fun EditGroupDialog(
         )
     }
 }
+
+@Composable
+private fun GroupHmsInputRow(
+    hours: Int,
+    minutes: Int,
+    seconds: Int,
+    onHoursChange: (Int) -> Unit,
+    onMinutesChange: (Int) -> Unit,
+    onSecondsChange: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedTextField(
+            value = if (hours > 0) hours.toString() else "",
+            onValueChange = { str ->
+                val v = str.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onHoursChange(v.coerceIn(0, 23))
+            },
+            label = { Text("Hours") },
+            placeholder = { Text("0") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            shape = RoundedCornerShape(10.dp)
+        )
+        OutlinedTextField(
+            value = if (minutes > 0) minutes.toString() else "",
+            onValueChange = { str ->
+                val v = str.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onMinutesChange(v.coerceIn(0, 59))
+            },
+            label = { Text("Mins") },
+            placeholder = { Text("0") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            shape = RoundedCornerShape(10.dp)
+        )
+        OutlinedTextField(
+            value = if (seconds > 0) seconds.toString() else "",
+            onValueChange = { str ->
+                val v = str.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onSecondsChange(v.coerceIn(0, 59))
+            },
+            label = { Text("Secs") },
+            placeholder = { Text("0") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            shape = RoundedCornerShape(10.dp)
+        )
+    }
+}
+

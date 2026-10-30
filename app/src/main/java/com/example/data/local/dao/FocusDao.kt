@@ -66,6 +66,12 @@ interface FocusDao {
     @Query("UPDATE screen_time_limits SET usedMinutesToday = :usedMinutes, lastResetDate = :date WHERE packageName = :packageName")
     suspend fun updateScreenTimeUsage(packageName: String, usedMinutes: Int, date: String)
 
+    @Query("UPDATE screen_time_limits SET currentSessionUsedMs = :usedMs, lastSessionExitTimestamp = :exitTime, cooldownEndTimestamp = :cooldownEnd WHERE packageName = :packageName")
+    suspend fun updateScreenTimeSessionState(packageName: String, usedMs: Long, exitTime: Long, cooldownEnd: Long)
+
+    @Query("UPDATE screen_time_limits SET currentSessionUsedMs = 0")
+    suspend fun resetAllScreenTimeSessionUsed()
+
 
     // --- Groups ---
     @Query("SELECT * FROM app_groups ORDER BY id DESC")
@@ -88,6 +94,12 @@ interface FocusDao {
 
     @Query("UPDATE app_groups SET usedMinutesToday = :usedMinutes, lastResetDate = :date WHERE id = :id")
     suspend fun updateGroupUsage(id: Long, usedMinutes: Int, date: String)
+
+    @Query("UPDATE app_groups SET currentSessionUsedMs = :usedMs, lastSessionExitTimestamp = :exitTime, cooldownEndTimestamp = :cooldownEnd WHERE id = :id")
+    suspend fun updateGroupSessionState(id: Long, usedMs: Long, exitTime: Long, cooldownEnd: Long)
+
+    @Query("UPDATE app_groups SET currentSessionUsedMs = 0")
+    suspend fun resetAllGroupSessionUsed()
 
 
     // --- Group Apps ---

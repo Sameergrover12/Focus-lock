@@ -82,6 +82,8 @@ fun SettingsScreen(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
     val isInvincibleModeEnabled by viewModel.isInvincibleModeEnabled.collectAsStateWithLifecycle()
+    val isClockTamperProtectionEnabled by viewModel.isClockTamperProtectionEnabled.collectAsStateWithLifecycle()
+    val isClockTampered by viewModel.isClockTampered.collectAsStateWithLifecycle()
     val cognitivePassphrase by viewModel.cognitivePassphrase.collectAsStateWithLifecycle()
     val emergencyBreaksRemaining by viewModel.emergencyBreaksRemaining.collectAsStateWithLifecycle()
     val activeEmergencyBreakUntil by viewModel.activeEmergencyBreakUntil.collectAsStateWithLifecycle()
@@ -563,6 +565,130 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // Section: Clock Tamper Protection Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("clock_tamper_protection_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF0D0E11)
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (isClockTamperProtectionEnabled) Color(0xFF10B981) else Color(0xFF22262F)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                modifier = Modifier.size(40.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isClockTamperProtectionEnabled) Color(0xFF064E3B) else Color(0xFF141519)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Security,
+                                        contentDescription = null,
+                                        tint = if (isClockTamperProtectionEnabled) Color(0xFF10B981) else Color(0xFFB0B0B0),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Clock Tamper Protection",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = if (isClockTamperProtectionEnabled) "Active • Monitored via hardware CPU uptime" else "Disabled • System clock untracked",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isClockTamperProtectionEnabled) Color(0xFF10B981) else Color(0xFF9E9E9E)
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = isClockTamperProtectionEnabled,
+                            onCheckedChange = { willEnable ->
+                                if (willEnable) {
+                                    viewModel.setClockTamperProtectionEnabled(true)
+                                } else {
+                                    if (isCheatProtectionEnabled) {
+                                        pendingCheatAction = PendingLooseningAction(
+                                            title = "Disable Clock Tamper Protection",
+                                            description = "Disabling clock tamper protection allows device time adjustments to affect schedules. Enter your verbatim passphrase to authorize.",
+                                            onAuthorized = { viewModel.setClockTamperProtectionEnabled(false) }
+                                        )
+                                    } else {
+                                        viewModel.setClockTamperProtectionEnabled(false)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.testTag("clock_tamper_protection_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF10B981),
+                                checkedTrackColor = Color(0xFF064E3B),
+                                uncheckedThumbColor = Color(0xFF888888),
+                                uncheckedTrackColor = Color(0xFF1E2024)
+                            )
+                        )
+                    }
+
+                    if (isClockTampered) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF7F1D1D).copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, Color(0xFFEF5350)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFEF5350),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Clock drift detected! Rules are running on hardware True Time.",
+                                    color = Color(0xFFFCA5A5),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "• 100% Offline: Anchors wall clock against hardware elapsedRealtime (zero internet needed).\n• Reboots Protected: Monotonic time progression guarantees time cannot be rolled back.\n• Date & Time Lock: System date/time settings are blocked during active sessions.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF9E9E9E),
+                        lineHeight = 18.sp
+                    )
                 }
             }
         }

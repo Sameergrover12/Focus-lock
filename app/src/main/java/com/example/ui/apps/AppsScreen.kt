@@ -211,7 +211,7 @@ fun AppsScreen(
                         ?: (if (limitEntity?.lastResetDate == todayDateStr) limitEntity.usedMinutesToday else 0)
                     AppScreenLimitRow(
                         app = app,
-                        limitMinutes = limitEntity?.dailyLimitMinutes ?: 0,
+                        limitEntity = limitEntity,
                         usedMinutes = actualUsedMinutes,
                         onConfigure = {
                             appToSetLimit = app
@@ -233,26 +233,38 @@ fun AppsScreen(
         TimeLimitDialog(
             app = targetApp,
             currentMinutes = currentLimit?.dailyLimitMinutes ?: 0,
+            currentSessionLimitSeconds = currentLimit?.sessionLimitSeconds ?: 0,
+            currentCooldownSeconds = currentLimit?.cooldownSeconds ?: 0,
             alreadyUsedTodayMinutes = usedToday,
             onDismiss = { appToSetLimit = null },
-            onSave = { minutes ->
-                val prevMinutes = currentLimit?.dailyLimitMinutes
-                if (prevMinutes != null && minutes > prevMinutes && isCheatProtectionEnabled) {
+            onSave = { dailyMinutes, sessionSeconds, cooldownSeconds ->
+                val prevDaily = currentLimit?.dailyLimitMinutes ?: 0
+                val prevSession = currentLimit?.sessionLimitSeconds ?: 0
+                val prevCooldown = currentLimit?.cooldownSeconds ?: 0
+
+                val isLoosening = (prevDaily > 0 && dailyMinutes > prevDaily) ||
+                    (prevSession > 0 && sessionSeconds == 0) ||
+                    (prevSession > 0 && sessionSeconds > prevSession) ||
+                    (prevCooldown > 0 && cooldownSeconds < prevCooldown)
+
+                if (isLoosening && isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
-                        title = "Increase Limit for ${targetApp.appName}",
-                        description = "Increasing daily limit from ${prevMinutes}m to ${minutes}m grants more daily screen time.",
-                        onAuthorized = { viewModel.setAppScreenLimit(targetApp.packageName, minutes) }
+                        title = "Loosen Limit for ${targetApp.appName}",
+                        description = "Increasing session time, daily allowance, or reducing break cooldown requires passphrase verification.",
+                        onAuthorized = { viewModel.setAppScreenLimit(targetApp.packageName, dailyMinutes, sessionSeconds, cooldownSeconds) }
                     )
                 } else {
-                    viewModel.setAppScreenLimit(targetApp.packageName, minutes)
+                    viewModel.setAppScreenLimit(targetApp.packageName, dailyMinutes, sessionSeconds, cooldownSeconds)
                 }
                 appToSetLimit = null
             },
             onRemove = {
-                if (isCheatProtectionEnabled) {
+                val prevDaily = currentLimit?.dailyLimitMinutes ?: 0
+                val prevSession = currentLimit?.sessionLimitSeconds ?: 0
+                if ((prevDaily > 0 || prevSession > 0) && isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
-                        title = "Remove Limit for ${targetApp.appName}",
-                        description = "Removing daily screen time limit allows unlimited usage of ${targetApp.appName}.",
+                        title = "Remove Limits for ${targetApp.appName}",
+                        description = "Removing time limits allows unrestricted access to ${targetApp.appName}.",
                         onAuthorized = { viewModel.removeAppScreenLimit(targetApp.packageName) }
                     )
                 } else {
@@ -320,29 +332,55 @@ private fun AppBlockRow(
 @Composable
 private fun AppScreenLimitRow(
     app: AppInfo,
-    limitMinutes: Int,
+    limitEntity: com.example.data.local.entity.ScreenTimeLimit?,
     usedMinutes: Int,
     onConfigure: () -> Unit
 ) {
-    val hasLimit = limitMinutes > 0
-    val (progress, limitStr, usedStr) = remember(limitMinutes, usedMinutes) {
-        val p = if (hasLimit) {
+    val limitMinutes = limitEntity?.dailyLimitMinutes ?: 0
+    val sessionLimitSeconds = limitEntity?.sessionLimitSeconds ?: 0
+    val cooldownSeconds = limitEntity?.cooldownSeconds ?: 0
+    val cooldownEndTimestamp = limitEntity?.cooldownEndTimestamp ?: 0L
+
+    val isCooldownActive = remember(cooldownEndTimestamp) {
+        com.example.util.SessionLimitHelper.isCooldownActive(cooldownEndTimestamp)
+    }
+    val remainingCooldownMs = remember(cooldownEndTimestamp) {
+        com.example.util.SessionLimitHelper.getCooldownRemainingMs(cooldownEndTimestamp)
+    }
+
+    val hasDailyLimit = limitMinutes > 0
+    val hasSessionLimit = sessionLimitSeconds > 0
+    val hasAnyLimit = hasDailyLimit || hasSessionLimit
+
+    val progress = remember(limitMinutes, usedMinutes) {
+        if (hasDailyLimit) {
             (usedMinutes.toFloat() / limitMinutes.toFloat()).coerceIn(0f, 1f)
         } else 0f
+    }
 
-        val lStr = if (hasLimit) {
+    val subtitleText = when {
+        isCooldownActive -> "On Cooldown (${com.example.util.SessionLimitHelper.formatRemaining(remainingCooldownMs)} remaining)"
+        hasDailyLimit && hasSessionLimit -> {
+            val dailyStr = if (limitMinutes >= 60) "${limitMinutes / 60}h ${limitMinutes % 60}m" else "${limitMinutes}m"
+            val sessionStr = com.example.util.SessionLimitHelper.formatHms(sessionLimitSeconds)
+            val cooldownStr = com.example.util.SessionLimitHelper.formatHms(cooldownSeconds)
+            "Daily: $dailyStr • Session: $sessionStr (Cooldown: $cooldownStr)"
+        }
+        hasDailyLimit -> {
             val h = limitMinutes / 60
             val m = limitMinutes % 60
-            if (h > 0) "${h}h ${m}m" else "${m}m"
-        } else "No limit"
-
-        val uStr = if (hasLimit) {
-            val h = usedMinutes / 60
-            val m = usedMinutes % 60
-            if (h > 0) "${h}h ${m}m" else "${m}m"
-        } else ""
-
-        Triple(p, lStr, uStr)
+            val lStr = if (h > 0) "${h}h ${m}m" else "${m}m"
+            val uH = usedMinutes / 60
+            val uM = usedMinutes % 60
+            val uStr = if (uH > 0) "${uH}h ${uM}m" else "${uM}m"
+            "$uStr / $lStr used today"
+        }
+        hasSessionLimit -> {
+            val sessionStr = com.example.util.SessionLimitHelper.formatHms(sessionLimitSeconds)
+            val cooldownStr = com.example.util.SessionLimitHelper.formatHms(cooldownSeconds)
+            "Session: $sessionStr (Cooldown: $cooldownStr)"
+        }
+        else -> "Tap to set daily or session limits"
     }
 
     Card(
@@ -371,13 +409,15 @@ private fun AppScreenLimitRow(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (hasLimit) "$usedStr / $limitStr used today" else "Tap to set daily limit",
+                        text = subtitleText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (hasLimit && usedMinutes >= limitMinutes) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
+                        color = when {
+                            isCooldownActive -> MaterialTheme.colorScheme.error
+                            hasDailyLimit && usedMinutes >= limitMinutes -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -387,11 +427,11 @@ private fun AppScreenLimitRow(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     modifier = Modifier.height(34.dp)
                 ) {
-                    Text(if (hasLimit) "Edit" else "Set Limit", style = MaterialTheme.typography.labelMedium)
+                    Text(if (hasAnyLimit) "Edit" else "Set Limit", style = MaterialTheme.typography.labelMedium)
                 }
             }
 
-            if (hasLimit) {
+            if (hasDailyLimit) {
                 Spacer(modifier = Modifier.height(10.dp))
                 LinearProgressIndicator(
                     progress = { progress },
@@ -408,25 +448,113 @@ private fun AppScreenLimitRow(
 }
 
 @Composable
+private fun HmsInputRow(
+    hours: Int,
+    minutes: Int,
+    seconds: Int,
+    onHoursChange: (Int) -> Unit,
+    onMinutesChange: (Int) -> Unit,
+    onSecondsChange: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedTextField(
+            value = if (hours > 0) hours.toString() else "",
+            onValueChange = { str ->
+                val v = str.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onHoursChange(v.coerceIn(0, 23))
+            },
+            label = { Text("Hours") },
+            placeholder = { Text("0") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            shape = RoundedCornerShape(10.dp)
+        )
+        OutlinedTextField(
+            value = if (minutes > 0) minutes.toString() else "",
+            onValueChange = { str ->
+                val v = str.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onMinutesChange(v.coerceIn(0, 59))
+            },
+            label = { Text("Mins") },
+            placeholder = { Text("0") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            shape = RoundedCornerShape(10.dp)
+        )
+        OutlinedTextField(
+            value = if (seconds > 0) seconds.toString() else "",
+            onValueChange = { str ->
+                val v = str.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onSecondsChange(v.coerceIn(0, 59))
+            },
+            label = { Text("Secs") },
+            placeholder = { Text("0") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            shape = RoundedCornerShape(10.dp)
+        )
+    }
+}
+
+@Composable
 private fun TimeLimitDialog(
     app: AppInfo,
     currentMinutes: Int,
+    currentSessionLimitSeconds: Int = 0,
+    currentCooldownSeconds: Int = 0,
     alreadyUsedTodayMinutes: Int,
     onDismiss: () -> Unit,
-    onSave: (Int) -> Unit,
+    onSave: (dailyMinutes: Int, sessionSeconds: Int, cooldownSeconds: Int) -> Unit,
     onRemove: () -> Unit
 ) {
+    var dailyLimitEnabled by remember {
+        mutableStateOf(currentMinutes > 0)
+    }
     var inputMinutesText by remember {
         mutableStateOf(if (currentMinutes > 0) currentMinutes.toString() else "60")
     }
 
-    val parsedMinutes = inputMinutesText.toIntOrNull() ?: 0
-    val isValid = parsedMinutes >= 1
+    var sessionLimitEnabled by remember {
+        mutableStateOf(currentSessionLimitSeconds > 0)
+    }
 
-    val liveReadout = remember(parsedMinutes) {
-        if (parsedMinutes >= 1) {
-            val h = parsedMinutes / 60
-            val m = parsedMinutes % 60
+    // Session duration H/M/S
+    var sessionHours by remember { mutableIntStateOf(currentSessionLimitSeconds / 3600) }
+    var sessionMins by remember { mutableIntStateOf((currentSessionLimitSeconds % 3600) / 60) }
+    var sessionSecs by remember { mutableIntStateOf(currentSessionLimitSeconds % 60) }
+
+    // Cooldown duration H/M/S
+    var cooldownHours by remember { mutableIntStateOf(currentCooldownSeconds / 3600) }
+    var cooldownMins by remember { mutableIntStateOf((currentCooldownSeconds % 3600) / 60) }
+    var cooldownSecs by remember { mutableIntStateOf(currentCooldownSeconds % 60) }
+
+    // Default reasonable values if toggled on from 0
+    if (sessionLimitEnabled && sessionHours == 0 && sessionMins == 0 && sessionSecs == 0) {
+        sessionMins = 10
+    }
+    if (sessionLimitEnabled && cooldownHours == 0 && cooldownMins == 0 && cooldownSecs == 0) {
+        cooldownHours = 1
+    }
+
+    val totalSessionSeconds = com.example.util.SessionLimitHelper.toSeconds(sessionHours, sessionMins, sessionSecs)
+    val totalCooldownSeconds = com.example.util.SessionLimitHelper.toSeconds(cooldownHours, cooldownMins, cooldownSecs)
+
+    val parsedDailyMinutes = if (dailyLimitEnabled) (inputMinutesText.toIntOrNull() ?: 0) else 0
+    val isDailyValid = !dailyLimitEnabled || parsedDailyMinutes >= 1
+    val isSessionValid = !sessionLimitEnabled || (totalSessionSeconds > 0 && totalCooldownSeconds > 0)
+    val hasAtLeastOneRule = (dailyLimitEnabled && parsedDailyMinutes >= 1) || (sessionLimitEnabled && totalSessionSeconds > 0 && totalCooldownSeconds > 0)
+    val isValid = isDailyValid && isSessionValid && hasAtLeastOneRule
+
+    val liveDailyReadout = remember(parsedDailyMinutes) {
+        if (parsedDailyMinutes >= 1) {
+            val h = parsedDailyMinutes / 60
+            val m = parsedDailyMinutes % 60
             when {
                 h > 0 && m > 0 -> "= ${h}h ${m}m"
                 h > 0 -> "= ${h}h"
@@ -437,16 +565,6 @@ private fun TimeLimitDialog(
         }
     }
 
-    val displayStr = remember(parsedMinutes) {
-        if (parsedMinutes >= 1) {
-            val h = parsedMinutes / 60
-            val m = parsedMinutes % 60
-            if (h > 0 && m > 0) "${h}h ${m}m" else if (h > 0) "${h}h" else "${m}m"
-        } else {
-            "0m"
-        }
-    }
-
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -454,148 +572,190 @@ private fun TimeLimitDialog(
             tonalElevation = 6.dp,
             modifier = Modifier.fillMaxWidth(0.95f)
         ) {
-            Column(
-                modifier = Modifier.padding(22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                AppIconImage(icon = app.icon, modifier = Modifier.size(52.dp))
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = app.appName,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Daily Screen Time Limit",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                item {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        AppIconImage(icon = app.icon, modifier = Modifier.size(52.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = app.appName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Screen Time & Session Limits",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Prior usage today breakdown
-                if (alreadyUsedTodayMinutes > 0) {
-                    val usedH = alreadyUsedTodayMinutes / 60
-                    val usedM = alreadyUsedTodayMinutes % 60
-                    val usedDisplay = if (usedH > 0 && usedM > 0) "${usedH}h ${usedM}m" else if (usedH > 0) "${usedH}h" else "${usedM}m"
-                    val isExceeded = isValid && alreadyUsedTodayMinutes >= parsedMinutes
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isExceeded) {
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        },
-                        modifier = Modifier.fillMaxWidth()
+                // 1. Daily Limit Section
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                            Text(
-                                text = "Already used today: $usedDisplay",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (isExceeded) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                            )
-                            if (isValid) {
-                                val remaining = parsedMinutes - alreadyUsedTodayMinutes
-                                if (remaining > 0) {
-                                    val remH = remaining / 60
-                                    val remM = remaining % 60
-                                    val remDisplay = if (remH > 0 && remM > 0) "${remH}h ${remM}m" else if (remH > 0) "${remH}h" else "${remM}m"
-                                    Text(
-                                        text = "Remaining today: $remDisplay",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                } else {
-                                    Text(
-                                        text = "Exceeds new limit! App will block immediately upon opening.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                        fontWeight = FontWeight.Medium
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Daily Screen Time Limit", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                    Text("Total usage allowed per 24-hour day", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(
+                                    checked = dailyLimitEnabled,
+                                    onCheckedChange = { dailyLimitEnabled = it }
+                                )
+                            }
+
+                            AnimatedVisibility(visible = dailyLimitEnabled) {
+                                Column(modifier = Modifier.padding(top = 10.dp)) {
+                                    OutlinedTextField(
+                                        value = inputMinutesText,
+                                        onValueChange = { newText ->
+                                            if (newText.isEmpty() || (newText.all { it.isDigit() } && newText.length <= 5)) {
+                                                inputMinutesText = newText
+                                            }
+                                        },
+                                        label = { Text("Daily Allowance (Minutes)") },
+                                        placeholder = { Text("e.g. 45 or 120") },
+                                        suffix = {
+                                            if (liveDailyReadout.isNotEmpty()) {
+                                                Text(liveDailyReadout, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                            } else {
+                                                Text("min")
+                                            }
+                                        },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("custom_minute_input"),
+                                        shape = RoundedCornerShape(10.dp)
                                     )
                                 }
                             }
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                // Numeric input field with live readout
-                OutlinedTextField(
-                    value = inputMinutesText,
-                    onValueChange = { newText ->
-                        if (newText.isEmpty() || (newText.all { it.isDigit() } && newText.length <= 5)) {
-                            inputMinutesText = newText
-                        }
-                    },
-                    label = { Text("Daily Limit (Minutes)") },
-                    placeholder = { Text("e.g. 45 or 120") },
-                    suffix = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("min", fontWeight = FontWeight.SemiBold)
-                            if (liveReadout.isNotEmpty()) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
+                // 2. Session Limit & Cooldown Section
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Session Limit & Cooldown", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                    Text("Locks app after continuous use until break ends", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(
+                                    checked = sessionLimitEnabled,
+                                    onCheckedChange = { sessionLimitEnabled = it },
+                                    modifier = Modifier.testTag("session_limit_switch")
+                                )
+                            }
+
+                            AnimatedVisibility(visible = sessionLimitEnabled) {
+                                Column(modifier = Modifier.padding(top = 12.dp)) {
                                     Text(
-                                        text = liveReadout,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        text = "Session Duration (Max time per session):",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    HmsInputRow(
+                                        hours = sessionHours,
+                                        minutes = sessionMins,
+                                        seconds = sessionSecs,
+                                        onHoursChange = { sessionHours = it },
+                                        onMinutesChange = { sessionMins = it },
+                                        onSecondsChange = { sessionSecs = it }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Text(
+                                        text = "Cooldown Break Duration (Lockout period):",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    HmsInputRow(
+                                        hours = cooldownHours,
+                                        minutes = cooldownMins,
+                                        seconds = cooldownSecs,
+                                        onHoursChange = { cooldownHours = it },
+                                        onMinutesChange = { cooldownMins = it },
+                                        onSecondsChange = { cooldownSecs = it }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surface
+                                    ) {
+                                        Text(
+                                            text = "Allowed: ${com.example.util.SessionLimitHelper.formatHms(totalSessionSeconds)} • Break: ${com.example.util.SessionLimitHelper.formatHms(totalCooldownSeconds)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
-                    },
-                    isError = inputMinutesText.isNotEmpty() && !isValid,
-                    supportingText = {
-                        if (inputMinutesText.isNotEmpty() && !isValid) {
-                            Text("Limit must be at least 1 minute", color = MaterialTheme.colorScheme.error)
-                        } else if (inputMinutesText.isEmpty()) {
-                            Text("Enter any whole number of minutes (minimum 1)")
-                        } else if (liveReadout.isNotEmpty()) {
-                            Text("$parsedMinutes minutes $liveReadout", color = MaterialTheme.colorScheme.primary)
-                        } else {
-                            Text("Enter duration in minutes")
-                        }
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Done
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("custom_minute_input"),
-                    shape = RoundedCornerShape(12.dp)
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Button(
-                    onClick = { onSave(parsedMinutes) },
-                    enabled = isValid,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("save_limit_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(if (isValid) "Save Limit ($displayStr)" else "Save Limit")
+                    }
                 }
 
-                if (currentMinutes > 0) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(
-                        onClick = onRemove,
-                        modifier = Modifier.testTag("remove_limit_button")
+                item {
+                    Button(
+                        onClick = {
+                            val dMin = if (dailyLimitEnabled) parsedDailyMinutes else 0
+                            val sSec = if (sessionLimitEnabled) totalSessionSeconds else 0
+                            val cSec = if (sessionLimitEnabled) totalCooldownSeconds else 0
+                            onSave(dMin, sSec, cSec)
+                        },
+                        enabled = isValid,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("save_limit_button"),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Remove Limit", color = MaterialTheme.colorScheme.error)
+                        Text("Save Limits")
+                    }
+                }
+
+                if (currentMinutes > 0 || currentSessionLimitSeconds > 0) {
+                    item {
+                        TextButton(
+                            onClick = onRemove,
+                            modifier = Modifier.testTag("remove_limit_button")
+                        ) {
+                            Text("Remove Limits", color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
             }

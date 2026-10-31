@@ -125,7 +125,6 @@ sealed class NavigationTab(
 fun MainFocusApp(viewModel: FocusViewModel) {
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
     var isViewingAnalytics by rememberSaveable { mutableStateOf(false) }
-    val isMasterEnabled by viewModel.isMasterEnabled.collectAsStateWithLifecycle()
 
     // System Back Button Routing:
     // If viewing analytics, back returns to the previous screen.
@@ -154,47 +153,17 @@ fun MainFocusApp(viewModel: FocusViewModel) {
             .fillMaxSize()
             .testTag("main_scaffold"),
         topBar = {
-            TopAppBar(
-                title = {
-                    if (isViewingAnalytics) {
+            if (isViewingAnalytics) {
+                TopAppBar(
+                    title = {
                         Text(
                             text = "Analytics & Dwell",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onBackground
                         )
-                    } else {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Focus Lock",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        color = if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                        shape = CircleShape
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (isMasterEnabled) "Active" else "Paused",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    if (isViewingAnalytics) {
+                    },
+                    navigationIcon = {
                         IconButton(
                             onClick = { isViewingAnalytics = false },
                             modifier = Modifier.testTag("top_bar_analytics_back")
@@ -205,13 +174,13 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                                 tint = MaterialTheme.colorScheme.onBackground
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
             val navOutlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)

@@ -118,58 +118,97 @@ fun DashboardScreen(
         )
     }
 
-    LazyColumn(
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .testTag("dashboard_screen"),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .testTag("dashboard_screen")
     ) {
-        // Warning banner if accessibility is off
-        item {
-            AnimatedVisibility(visible = !isAccessibilityEnabled) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { PermissionHelper.openAccessibilitySettings(context) }
-                        .testTag("accessibility_warning_banner"),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+        // Top Header: "Focus Lock • Active" (only shown on Home tab)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 0.dp)
+                .testTag("home_header_row")
+        ) {
+            Text(
+                text = "Focus Lock",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(
+                        color = if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        shape = CircleShape
+                    )
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = if (isMasterEnabled) "Active" else "Paused",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.height(13.dp))
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Warning banner if accessibility is off (rendered conditionally to avoid empty item with spacedBy gap)
+            if (!isAccessibilityEnabled) {
+                item(key = "accessibility_warning") {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { PermissionHelper.openAccessibilitySettings(context) }
+                            .testTag("accessibility_warning_banner"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Protection is Inactive",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(28.dp)
                             )
-                            Text(
-                                text = "Accessibility service is off. Tap to re-enable in system settings.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Protection is Inactive",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = "Accessibility service is off. Tap to re-enable in system settings.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Master Switch Card
-        item {
+            // Master Switch Card
+            item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -474,6 +513,7 @@ fun DashboardScreen(
                 }
             }
         }
+    }
     }
 }
 

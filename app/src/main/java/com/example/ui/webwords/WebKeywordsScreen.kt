@@ -41,8 +41,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import android.widget.Toast
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,10 +64,43 @@ fun WebKeywordsScreen(
     val websites by viewModel.blockedWebsites.collectAsStateWithLifecycle()
     val keywords by viewModel.blockedKeywords.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     var newWebsiteInput by remember { mutableStateOf("") }
     var newKeywordInput by remember { mutableStateOf("") }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
+
+    fun submitWebsites() {
+        if (newWebsiteInput.isNotBlank()) {
+            viewModel.addBlockedWebsites(newWebsiteInput) { result ->
+                when (result) {
+                    is FocusViewModel.AddRuleResult.AllDuplicates -> {
+                        Toast.makeText(context, "Website is already in your blocked list", Toast.LENGTH_SHORT).show()
+                    }
+                    is FocusViewModel.AddRuleResult.Added -> {
+                        newWebsiteInput = ""
+                    }
+                    is FocusViewModel.AddRuleResult.EmptyInput -> {}
+                }
+            }
+        }
+    }
+
+    fun submitKeywords() {
+        if (newKeywordInput.isNotBlank()) {
+            viewModel.addBlockedKeywords(newKeywordInput) { result ->
+                when (result) {
+                    is FocusViewModel.AddRuleResult.AllDuplicates -> {
+                        Toast.makeText(context, "Keyword is already in your blocked list", Toast.LENGTH_SHORT).show()
+                    }
+                    is FocusViewModel.AddRuleResult.Added -> {
+                        newKeywordInput = ""
+                    }
+                    is FocusViewModel.AddRuleResult.EmptyInput -> {}
+                }
+            }
+        }
+    }
 
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(
@@ -214,16 +252,13 @@ fun WebKeywordsScreen(
                                         .weight(1f)
                                         .testTag("website_input_field"),
                                     singleLine = true,
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(12.dp),
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { submitWebsites() })
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Button(
-                                    onClick = {
-                                        if (newWebsiteInput.isNotBlank()) {
-                                            viewModel.addBlockedWebsite(newWebsiteInput)
-                                            newWebsiteInput = ""
-                                        }
-                                    },
+                                    onClick = { submitWebsites() },
                                     enabled = newWebsiteInput.isNotBlank(),
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.testTag("add_website_button")
@@ -250,16 +285,13 @@ fun WebKeywordsScreen(
                                         .weight(1f)
                                         .testTag("keyword_input_field"),
                                     singleLine = true,
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(12.dp),
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { submitKeywords() })
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Button(
-                                    onClick = {
-                                        if (newKeywordInput.isNotBlank()) {
-                                            viewModel.addBlockedKeyword(newKeywordInput)
-                                            newKeywordInput = ""
-                                        }
-                                    },
+                                    onClick = { submitKeywords() },
                                     enabled = newKeywordInput.isNotBlank(),
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.testTag("add_keyword_button")

@@ -627,5 +627,58 @@ class ExampleUnitTest {
         // Dark mode background is deep charcoal slate, not #000000
         assertTrue(darkScheme.background != androidx.compose.ui.graphics.Color(0xFF000000))
     }
+
+    @Test
+    fun testWebsiteDomainNormalization() {
+        assertEquals("youtube.com", com.example.util.WebRuleHelper.normalizeDomain("https://www.YouTube.com/"))
+        assertEquals("youtube.com", com.example.util.WebRuleHelper.normalizeDomain("http://youtube.com"))
+        assertEquals("youtube.com", com.example.util.WebRuleHelper.normalizeDomain("www.youtube.com/"))
+        assertEquals("youtube.com", com.example.util.WebRuleHelper.normalizeDomain("https://youtube.com///"))
+        assertEquals("reddit.com", com.example.util.WebRuleHelper.normalizeDomain("  HTTPS://WWW.REDDIT.COM/  "))
+        assertEquals("reddit.com", com.example.util.WebRuleHelper.normalizeDomain("reddit.com"))
+    }
+
+    @Test
+    fun testKeywordNormalization() {
+        assertEquals("shorts", com.example.util.WebRuleHelper.normalizeKeyword("  shorts  "))
+        assertEquals("funny shorts", com.example.util.WebRuleHelper.normalizeKeyword("  funny    shorts  "))
+        assertEquals("gambling", com.example.util.WebRuleHelper.normalizeKeyword("Gambling".lowercase()))
+    }
+
+    @Test
+    fun testBatchWebsiteDeduplication() {
+        val input = "https://www.YouTube.com/, youtube.com, REDDIT.COM, reddit.com/"
+        val rawItems = input.split(",").map { com.example.util.WebRuleHelper.normalizeDomain(it) }.filter { it.isNotBlank() }
+        val uniqueInBatch = mutableListOf<String>()
+        val seenLower = mutableSetOf<String>()
+        for (item in rawItems) {
+            if (seenLower.add(item.lowercase())) {
+                uniqueInBatch.add(item)
+            }
+        }
+        assertEquals(listOf("youtube.com", "reddit.com"), uniqueInBatch)
+
+        val existing = listOf("youtube.com")
+        val toAdd = uniqueInBatch.filter { it.lowercase() !in existing }
+        assertEquals(listOf("reddit.com"), toAdd)
+    }
+
+    @Test
+    fun testBatchKeywordDeduplication() {
+        val input = "shorts, Shorts, SHORTS, reels, Reels"
+        val rawItems = input.split(",").map { com.example.util.WebRuleHelper.normalizeKeyword(it) }.filter { it.isNotBlank() }
+        val uniqueInBatch = mutableListOf<String>()
+        val seenLower = mutableSetOf<String>()
+        for (item in rawItems) {
+            if (seenLower.add(item.lowercase())) {
+                uniqueInBatch.add(item)
+            }
+        }
+        assertEquals(listOf("shorts", "reels"), uniqueInBatch)
+
+        val existing = listOf("shorts")
+        val toAdd = uniqueInBatch.filter { it.lowercase() !in existing }
+        assertEquals(listOf("reels"), toAdd)
+    }
 }
 

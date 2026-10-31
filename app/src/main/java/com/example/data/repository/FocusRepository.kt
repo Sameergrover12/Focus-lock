@@ -10,6 +10,7 @@ import com.example.data.local.entity.DailyUsageLog
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
 import com.example.util.ScreenTimeHelper
+import com.example.util.WebRuleHelper
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -186,6 +187,7 @@ class FocusRepository(private val focusDao: FocusDao) {
                 focusDao.updateGroupSessionState(group.id, 0L, group.lastSessionExitTimestamp, group.cooldownEndTimestamp)
             }
         }
+        deduplicateStoredRulesIfNeeded()
     }
 
     // Groups
@@ -217,19 +219,67 @@ class FocusRepository(private val focusDao: FocusDao) {
     suspend fun updateGroupUsage(groupId: Long, usedMinutes: Int, date: String) =
         focusDao.updateGroupUsage(groupId, usedMinutes, date)
 
-    // Websites
-    val allBlockedWebsites: Flow<List<BlockedWebsite>> = focusDao.getAllBlockedWebsites()
-    suspend fun getAllBlockedWebsitesSync(): List<BlockedWebsite> = focusDao.getAllBlockedWebsitesSync()
-    suspend fun addBlockedWebsite(domainOrUrl: String) =
-        focusDao.insertBlockedWebsite(BlockedWebsite(domainOrUrl = domainOrUrl.trim()))
+    // Websites (Enforce domain normalization and distinct entries)
+    val allBlockedWebsites: Flow<List<BlockedWebsite>> = focusDao.getAllBlockedWebsites().map { list ->
+        list.distinctBy { WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }
+    }
+
+    suspend fun getAllBlockedWebsitesSync(): List<BlockedWebsite> =
+        focusDao.getAllBlockedWebsitesSync().distinctBy { WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }
+
+    suspend fun addBlockedWebsite(domainOrUrl: String) {
+        val normalized = WebRuleHelper.normalizeDomain(domainOrUrl)
+        if (normalized.isBlank()) return
+        val existing = focusDao.getAllBlockedWebsitesSync()
+        if (existing.none { WebRuleHelper.normalizeDomain(it.domainOrUrl).equals(normalized, ignoreCase = true) }) {
+            focusDao.insertBlockedWebsite(BlockedWebsite(domainOrUrl = normalized))
+        }
+    }
+
     suspend fun removeBlockedWebsite(id: Long) = focusDao.deleteBlockedWebsite(id)
 
-    // Keywords
-    val allBlockedKeywords: Flow<List<BlockedKeyword>> = focusDao.getAllBlockedKeywords()
-    suspend fun getAllBlockedKeywordsSync(): List<BlockedKeyword> = focusDao.getAllBlockedKeywordsSync()
-    suspend fun addBlockedKeyword(keyword: String, caseSensitive: Boolean = false) =
-        focusDao.insertBlockedKeyword(BlockedKeyword(keyword = keyword.trim(), caseSensitive = caseSensitive))
+    // Keywords (Enforce space collapsing, case-insensitive distinct entries)
+    val allBlockedKeywords: Flow<List<BlockedKeyword>> = focusDao.getAllBlockedKeywords().map { list ->
+        list.distinctBy { WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }
+    }
+
+    suspend fun getAllBlockedKeywordsSync(): List<BlockedKeyword> =
+        focusDao.getAllBlockedKeywordsSync().distinctBy { WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }
+
+    suspend fun addBlockedKeyword(keyword: String, caseSensitive: Boolean = false) {
+        val normalized = WebRuleHelper.normalizeKeyword(keyword)
+        if (normalized.isBlank()) return
+        val existing = focusDao.getAllBlockedKeywordsSync()
+        if (existing.none { WebRuleHelper.normalizeKeyword(it.keyword).equals(normalized, ignoreCase = true) }) {
+            focusDao.insertBlockedKeyword(BlockedKeyword(keyword = normalized, caseSensitive = caseSensitive))
+        }
+    }
+
     suspend fun removeBlockedKeyword(id: Long) = focusDao.deleteBlockedKeyword(id)
+
+    suspend fun deduplicateStoredRulesIfNeeded() {
+        try {
+            val websites = focusDao.getAllBlockedWebsitesSync()
+            val seenWebsites = mutableSetOf<String>()
+            for (site in websites) {
+                val norm = WebRuleHelper.normalizeDomain(site.domainOrUrl).lowercase()
+                if (!seenWebsites.add(norm)) {
+                    focusDao.deleteBlockedWebsite(site.id)
+                }
+            }
+
+            val keywords = focusDao.getAllBlockedKeywordsSync()
+            val seenKeywords = mutableSetOf<String>()
+            for (kw in keywords) {
+                val norm = WebRuleHelper.normalizeKeyword(kw.keyword).lowercase()
+                if (!seenKeywords.add(norm)) {
+                    focusDao.deleteBlockedKeyword(kw.id)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FocusRepository", "Error deduplicating rules", e)
+        }
+    }
 
     // Daily Usage Logs & Device Screen-On Time
     fun getUsageLogsForDate(date: String): Flow<List<DailyUsageLog>> = focusDao.getUsageLogsForDate(date)

@@ -131,11 +131,7 @@ object ContentScanner {
      * Normalizes a URL or domain by stripping protocol, www, trailing slash, and converting to lowercase.
      */
     fun normalizeUrlOrDomain(input: String): String {
-        return input.trim().lowercase(Locale.ROOT)
-            .removePrefix("https://")
-            .removePrefix("http://")
-            .removePrefix("www.")
-            .trimEnd('/')
+        return com.example.util.WebRuleHelper.normalizeDomain(input)
     }
 
     /**

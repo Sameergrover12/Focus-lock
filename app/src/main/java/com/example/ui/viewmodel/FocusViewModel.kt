@@ -462,25 +462,85 @@ class FocusViewModel(
         }
     }
 
+    sealed class AddRuleResult {
+        data class Added(val count: Int) : AddRuleResult()
+        object AllDuplicates : AddRuleResult()
+        object EmptyInput : AddRuleResult()
+    }
+
     // Website actions
-    fun addBlockedWebsite(url: String) {
-        viewModelScope.launch {
-            repository.addBlockedWebsite(url)
+    fun addBlockedWebsites(input: String, onResult: (AddRuleResult) -> Unit = {}) {
+        val rawItems = input.split(",").map { com.example.util.WebRuleHelper.normalizeDomain(it) }.filter { it.isNotBlank() }
+        if (rawItems.isEmpty()) {
+            onResult(AddRuleResult.EmptyInput)
+            return
         }
+        val uniqueInBatch = mutableListOf<String>()
+        val seenLower = mutableSetOf<String>()
+        for (item in rawItems) {
+            if (seenLower.add(item.lowercase())) {
+                uniqueInBatch.add(item)
+            }
+        }
+        val existing = blockedWebsites.value
+        val existingLower = existing.map { com.example.util.WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }.toSet()
+        val toAdd = uniqueInBatch.filter { it.lowercase() !in existingLower }
+        if (toAdd.isEmpty()) {
+            onResult(AddRuleResult.AllDuplicates)
+            return
+        }
+        viewModelScope.launch {
+            for (domain in toAdd) {
+                repository.addBlockedWebsite(domain)
+            }
+            triggerAutoBackup()
+            onResult(AddRuleResult.Added(toAdd.size))
+        }
+    }
+
+    fun addBlockedWebsite(url: String) {
+        addBlockedWebsites(url)
     }
 
     fun removeBlockedWebsite(id: Long) {
         viewModelScope.launch {
             repository.removeBlockedWebsite(id)
+            triggerAutoBackup()
         }
     }
 
     // Keyword actions
-    fun addBlockedKeyword(keyword: String, caseSensitive: Boolean = false) {
-        viewModelScope.launch {
-            repository.addBlockedKeyword(keyword, caseSensitive)
-            triggerAutoBackup()
+    fun addBlockedKeywords(input: String, caseSensitive: Boolean = false, onResult: (AddRuleResult) -> Unit = {}) {
+        val rawItems = input.split(",").map { com.example.util.WebRuleHelper.normalizeKeyword(it) }.filter { it.isNotBlank() }
+        if (rawItems.isEmpty()) {
+            onResult(AddRuleResult.EmptyInput)
+            return
         }
+        val uniqueInBatch = mutableListOf<String>()
+        val seenLower = mutableSetOf<String>()
+        for (item in rawItems) {
+            if (seenLower.add(item.lowercase())) {
+                uniqueInBatch.add(item)
+            }
+        }
+        val existing = blockedKeywords.value
+        val existingLower = existing.map { com.example.util.WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }.toSet()
+        val toAdd = uniqueInBatch.filter { it.lowercase() !in existingLower }
+        if (toAdd.isEmpty()) {
+            onResult(AddRuleResult.AllDuplicates)
+            return
+        }
+        viewModelScope.launch {
+            for (kw in toAdd) {
+                repository.addBlockedKeyword(kw, caseSensitive)
+            }
+            triggerAutoBackup()
+            onResult(AddRuleResult.Added(toAdd.size))
+        }
+    }
+
+    fun addBlockedKeyword(keyword: String, caseSensitive: Boolean = false) {
+        addBlockedKeywords(keyword, caseSensitive)
     }
 
     fun removeBlockedKeyword(id: Long) {

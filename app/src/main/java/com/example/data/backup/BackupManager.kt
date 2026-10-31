@@ -152,25 +152,29 @@ class BackupManager(
         }
         root.put("groupApps", groupAppsArray)
 
-        // 5. Blocked Websites
+        // 5. Blocked Websites (De-duplicated & Normalized)
         val websitesArray = JSONArray()
-        dao.getAllBlockedWebsitesSync().forEach { site ->
-            val obj = JSONObject()
-            obj.put("domainOrUrl", site.domainOrUrl)
-            obj.put("dateAdded", site.dateAdded)
-            websitesArray.put(obj)
-        }
+        dao.getAllBlockedWebsitesSync()
+            .distinctBy { com.example.util.WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }
+            .forEach { site ->
+                val obj = JSONObject()
+                obj.put("domainOrUrl", com.example.util.WebRuleHelper.normalizeDomain(site.domainOrUrl))
+                obj.put("dateAdded", site.dateAdded)
+                websitesArray.put(obj)
+            }
         root.put("blockedWebsites", websitesArray)
 
-        // 6. Blocked Keywords
+        // 6. Blocked Keywords (De-duplicated & Normalized)
         val keywordsArray = JSONArray()
-        dao.getAllBlockedKeywordsSync().forEach { kw ->
-            val obj = JSONObject()
-            obj.put("keyword", kw.keyword)
-            obj.put("caseSensitive", kw.caseSensitive)
-            obj.put("dateAdded", kw.dateAdded)
-            keywordsArray.put(obj)
-        }
+        dao.getAllBlockedKeywordsSync()
+            .distinctBy { com.example.util.WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }
+            .forEach { kw ->
+                val obj = JSONObject()
+                obj.put("keyword", com.example.util.WebRuleHelper.normalizeKeyword(kw.keyword))
+                obj.put("caseSensitive", kw.caseSensitive)
+                obj.put("dateAdded", kw.dateAdded)
+                keywordsArray.put(obj)
+            }
         root.put("blockedKeywords", keywordsArray)
 
         // 7. Preferences Snapshot
@@ -291,17 +295,19 @@ class BackupManager(
                 }
             }
 
-            // 5. Blocked Websites (De-duplicate)
+            // 5. Blocked Websites (De-duplicate with smart domain normalization)
             if (root.has("blockedWebsites")) {
                 val array = root.getJSONArray("blockedWebsites")
                 val existing = dao.getAllBlockedWebsitesSync()
+                val existingNormalized = existing.map { com.example.util.WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }.toMutableSet()
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
-                    val domain = obj.getString("domainOrUrl").trim()
-                    if (existing.none { it.domainOrUrl.equals(domain, ignoreCase = true) }) {
+                    val rawDomain = obj.getString("domainOrUrl")
+                    val normalized = com.example.util.WebRuleHelper.normalizeDomain(rawDomain)
+                    if (normalized.isNotBlank() && existingNormalized.add(normalized.lowercase())) {
                         dao.insertBlockedWebsite(
                             BlockedWebsite(
-                                domainOrUrl = domain,
+                                domainOrUrl = normalized,
                                 dateAdded = obj.optLong("dateAdded", System.currentTimeMillis())
                             )
                         )
@@ -309,15 +315,17 @@ class BackupManager(
                 }
             }
 
-            // 6. Blocked Keywords (De-duplicate)
+            // 6. Blocked Keywords (De-duplicate with case-insensitive matching)
             if (root.has("blockedKeywords")) {
                 val array = root.getJSONArray("blockedKeywords")
                 val existing = dao.getAllBlockedKeywordsSync()
+                val existingNormalized = existing.map { com.example.util.WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }.toMutableSet()
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
-                    val kw = obj.getString("keyword").trim()
+                    val rawKw = obj.getString("keyword")
+                    val kw = com.example.util.WebRuleHelper.normalizeKeyword(rawKw)
                     val caseSensitive = obj.optBoolean("caseSensitive", false)
-                    if (existing.none { it.keyword.equals(kw, ignoreCase = !caseSensitive) }) {
+                    if (kw.isNotBlank() && existingNormalized.add(kw.lowercase())) {
                         dao.insertBlockedKeyword(
                             BlockedKeyword(
                                 keyword = kw,

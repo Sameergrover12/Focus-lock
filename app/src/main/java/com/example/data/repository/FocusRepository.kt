@@ -93,6 +93,70 @@ class FocusRepository(private val focusDao: FocusDao) {
             )
         )
     }
+
+    suspend fun setDailyLimit(packageName: String, dailyLimitMinutes: Int) {
+        val today = getTodayDateString()
+        val todayUsage = focusDao.getUsageLog(packageName, today)?.minutesUsed ?: 0
+        val existing = focusDao.getScreenTimeLimit(packageName)
+        focusDao.insertOrUpdateScreenTimeLimit(
+            ScreenTimeLimit(
+                packageName = packageName,
+                dailyLimitMinutes = dailyLimitMinutes,
+                usedMinutesToday = todayUsage,
+                lastResetDate = today,
+                sessionLimitSeconds = existing?.sessionLimitSeconds ?: 0,
+                cooldownSeconds = existing?.cooldownSeconds ?: 0,
+                currentSessionUsedMs = existing?.currentSessionUsedMs ?: 0L,
+                lastSessionExitTimestamp = existing?.lastSessionExitTimestamp ?: 0L,
+                cooldownEndTimestamp = existing?.cooldownEndTimestamp ?: 0L
+            )
+        )
+    }
+
+    suspend fun removeDailyLimit(packageName: String) {
+        val existing = focusDao.getScreenTimeLimit(packageName) ?: return
+        if (existing.sessionLimitSeconds > 0) {
+            focusDao.insertOrUpdateScreenTimeLimit(existing.copy(dailyLimitMinutes = 0))
+        } else {
+            focusDao.deleteScreenTimeLimit(packageName)
+        }
+    }
+
+    suspend fun setSessionLimit(packageName: String, sessionLimitSeconds: Int, cooldownSeconds: Int) {
+        val today = getTodayDateString()
+        val todayUsage = focusDao.getUsageLog(packageName, today)?.minutesUsed ?: 0
+        val existing = focusDao.getScreenTimeLimit(packageName)
+        focusDao.insertOrUpdateScreenTimeLimit(
+            ScreenTimeLimit(
+                packageName = packageName,
+                dailyLimitMinutes = existing?.dailyLimitMinutes ?: 0,
+                usedMinutesToday = existing?.usedMinutesToday ?: todayUsage,
+                lastResetDate = existing?.lastResetDate ?: today,
+                sessionLimitSeconds = sessionLimitSeconds,
+                cooldownSeconds = cooldownSeconds,
+                currentSessionUsedMs = existing?.currentSessionUsedMs ?: 0L,
+                lastSessionExitTimestamp = existing?.lastSessionExitTimestamp ?: 0L,
+                cooldownEndTimestamp = existing?.cooldownEndTimestamp ?: 0L
+            )
+        )
+    }
+
+    suspend fun removeSessionLimit(packageName: String) {
+        val existing = focusDao.getScreenTimeLimit(packageName) ?: return
+        if (existing.dailyLimitMinutes > 0) {
+            focusDao.insertOrUpdateScreenTimeLimit(
+                existing.copy(
+                    sessionLimitSeconds = 0,
+                    cooldownSeconds = 0,
+                    currentSessionUsedMs = 0L,
+                    cooldownEndTimestamp = 0L
+                )
+            )
+        } else {
+            focusDao.deleteScreenTimeLimit(packageName)
+        }
+    }
+
     suspend fun removeScreenTimeLimit(packageName: String) = focusDao.deleteScreenTimeLimit(packageName)
     suspend fun updateScreenTimeUsage(packageName: String, usedMinutes: Int, date: String) =
         focusDao.updateScreenTimeUsage(packageName, usedMinutes, date)

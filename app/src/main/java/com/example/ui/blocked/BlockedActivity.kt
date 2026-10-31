@@ -301,9 +301,9 @@ fun BlockedScreen(
         ) {
             if (type == BlockedActivity.TYPE_SESSION_COOLDOWN) {
                 Surface(
-                    color = Color(0xFF141519),
+                    color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
                     modifier = Modifier
                         .fillMaxWidth(0.92f)
                         .padding(bottom = 14.dp)
@@ -314,7 +314,7 @@ fun BlockedScreen(
                     ) {
                         Text(
                             text = "SESSION COOLDOWN BREAK",
-                            color = Color(0xFF888888),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
@@ -322,14 +322,14 @@ fun BlockedScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "${com.example.util.SessionLimitHelper.formatRemaining(remainingCooldownMs)} remaining",
-                            color = Color(0xFF10B981),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Session limit reached. Take a break before starting another session.",
-                            color = Color(0xFFCCCCCC),
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
                         )
@@ -339,7 +339,7 @@ fun BlockedScreen(
 
             Text(
                 text = "“",
-                color = Color(0xFF10B981).copy(alpha = 0.45f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
                 fontSize = 68.sp,
                 fontWeight = FontWeight.Bold,
                 lineHeight = 48.sp,
@@ -350,7 +350,7 @@ fun BlockedScreen(
 
             Text(
                 text = quoteBody,
-                color = Color(0xFFF5F5F5),
+                color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 21.sp,
                 fontWeight = FontWeight.Medium,
                 lineHeight = 31.sp,
@@ -364,7 +364,7 @@ fun BlockedScreen(
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
                     text = quoteAuthor,
-                    color = Color(0xFFAAAAAA),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp,
                     fontStyle = FontStyle.Italic,
                     fontWeight = FontWeight.Normal,
@@ -385,9 +385,9 @@ fun BlockedScreen(
             if (!canDismissManually) {
                 // 4-Second friction state: manual bypass disabled
                 Surface(
-                    color = Color(0xFF0D0E11),
+                    color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(27.dp),
-                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.4f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
                         .heightIn(min = 52.dp)
@@ -402,7 +402,7 @@ fun BlockedScreen(
                     ) {
                         Text(
                             text = "Absorbing pattern interrupt (${secondsRemaining}s)...",
-                            color = Color(0xFF10B981),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             letterSpacing = 0.4.sp
@@ -414,10 +414,10 @@ fun BlockedScreen(
                 OutlinedButton(
                     onClick = onGoHome,
                     shape = RoundedCornerShape(27.dp),
-                    border = BorderStroke(1.dp, Color(0xFF10B981)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color(0xFF141519),
-                        contentColor = Color.White
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary
                     ),
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -444,7 +444,7 @@ fun BlockedScreen(
             // Emergency Failsafe Trigger
             Text(
                 text = if (breaksRemaining > 0) "Emergency Break ($breaksRemaining/3 left this week)" else "Emergency Breaks Depleted (0/3)",
-                color = if (breaksRemaining > 0) Color(0xFF888888) else Color(0xFF664444),
+                color = if (breaksRemaining > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
@@ -499,14 +499,14 @@ fun EmergencyFailsafeDialog(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xCC000000))
+            .background(Color.Black.copy(alpha = 0.75f))
             .clickable(onClick = onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF0F0F0F),
-            border = BorderStroke(1.dp, Color(0xFF262626)),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .clickable(
@@ -530,13 +530,13 @@ fun EmergencyFailsafeDialog(
                         Icon(
                             imageVector = Icons.Default.HourglassBottom,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Emergency Break Failsafe",
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -548,7 +548,7 @@ fun EmergencyFailsafeDialog(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = Color(0xFF888888),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -559,7 +559,7 @@ fun EmergencyFailsafeDialog(
                 // Weekly allowance banner
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = if (breaksRemaining > 0) Color(0xFF191919) else Color(0xFF2B1313),
+                    color = if (breaksRemaining > 0) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -568,14 +568,14 @@ fun EmergencyFailsafeDialog(
                     ) {
                         Text(
                             text = "Weekly Allowance:",
-                            color = Color(0xFFAAAAAA),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.weight(1f))
                         Text(
                             text = "$breaksRemaining of 3 breaks remaining",
-                            color = if (breaksRemaining > 0) Color.White else Color(0xFFEF9A9A),
+                            color = if (breaksRemaining > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -587,7 +587,7 @@ fun EmergencyFailsafeDialog(
                 if (breaksRemaining <= 0) {
                     Text(
                         text = "All 3 emergency breaks for this 7-day cycle have been depleted. Active blocks cannot be bypassed under any circumstances until the week resets.",
-                        color = Color(0xFFE57373),
+                        color = MaterialTheme.colorScheme.error,
                         fontSize = 13.sp,
                         lineHeight = 20.sp,
                         textAlign = TextAlign.Center
@@ -597,8 +597,8 @@ fun EmergencyFailsafeDialog(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(20.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF262626),
-                            contentColor = Color.White
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -607,7 +607,7 @@ fun EmergencyFailsafeDialog(
                 } else {
                     Text(
                         text = "Grants exactly 10 minutes of access. During this break, there is no countdown timer on your screen. At exactly 10 minutes and 0 seconds, the block will abruptly snap back with no warning.",
-                        color = Color(0xFFCCCCCC),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         lineHeight = 18.sp
                     )
@@ -616,7 +616,7 @@ fun EmergencyFailsafeDialog(
 
                     Text(
                         text = "Type this exact sentence to confirm your intention:",
-                        color = Color(0xFFAAAAAA),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.fillMaxWidth()
@@ -626,13 +626,13 @@ fun EmergencyFailsafeDialog(
 
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF141414),
-                        border = BorderStroke(1.dp, Color(0xFF333333)),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = "\"$expectedPassphrase\"",
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(12.dp)
@@ -650,7 +650,7 @@ fun EmergencyFailsafeDialog(
                         placeholder = {
                             Text(
                                 "Type exact reflective sentence here...",
-                                color = Color(0xFF666666),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 fontSize = 13.sp
                             )
                         },
@@ -659,12 +659,12 @@ fun EmergencyFailsafeDialog(
                             .testTag("emergency_passphrase_input"),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color(0xFF111111),
-                            unfocusedContainerColor = Color(0xFF0D0D0D),
-                            focusedBorderColor = if (isMatch) Color(0xFF81C784) else Color.White,
-                            unfocusedBorderColor = if (isMatch) Color(0xFF4CAF50) else Color(0xFF262626),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                            focusedBorderColor = if (isMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = if (isMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                         ),
                         singleLine = false,
                         maxLines = 3
@@ -680,13 +680,13 @@ fun EmergencyFailsafeDialog(
                             Icon(
                                 imageVector = Icons.Default.CheckCircle,
                                 contentDescription = null,
-                                tint = Color(0xFF81C784),
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Sentence matched exactly",
-                                color = Color(0xFF81C784),
+                                color = MaterialTheme.colorScheme.primary,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
                             )
@@ -694,7 +694,7 @@ fun EmergencyFailsafeDialog(
                     } else if (typedInput.isNotEmpty()) {
                         Text(
                             text = "Character match: ${typedInput.length} / ${expectedPassphrase.length}",
-                            color = Color(0xFF888888),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -704,7 +704,7 @@ fun EmergencyFailsafeDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "Sentence did not match verbatim. Check punctuation and casing.",
-                            color = Color(0xFFE57373),
+                            color = MaterialTheme.colorScheme.error,
                             fontSize = 12.sp,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -728,10 +728,10 @@ fun EmergencyFailsafeDialog(
                         enabled = isMatch && !isProcessing,
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black,
-                            disabledContainerColor = Color(0xFF222222),
-                            disabledContentColor = Color(0xFF555555)
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                         ),
                         modifier = Modifier
                             .fillMaxWidth()

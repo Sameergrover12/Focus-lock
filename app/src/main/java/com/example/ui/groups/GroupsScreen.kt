@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,12 +26,10 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HourglassBottom
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -44,6 +41,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,17 +70,25 @@ import com.example.ui.common.CheatProtectionAuthDialog
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.ui.viewmodel.GroupWithAppDetails
+import com.example.util.SessionLimitHelper
+import com.example.util.TimeIntegrityManager
 
 @Composable
 fun GroupsScreen(
     viewModel: FocusViewModel
 ) {
-    val groupsWithDetails by viewModel.groupsWithDetails.collectAsStateWithLifecycle()
+    // 2 Top Tabs: 0: Schedules & Daily Budget, 1: Session Groups
+    var selectedTab by remember { mutableIntStateOf(0) }
+
+    val scheduleGroups by viewModel.scheduleAndDailyGroups.collectAsStateWithLifecycle()
+    val sessionGroups by viewModel.sessionGroups.collectAsStateWithLifecycle()
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
 
-    var groupToEdit by remember { mutableStateOf<GroupWithAppDetails?>(null) }
-    var isCreatingNew by remember { mutableStateOf(false) }
+    var groupToEditSchedule by remember { mutableStateOf<GroupWithAppDetails?>(null) }
+    var groupToEditSession by remember { mutableStateOf<GroupWithAppDetails?>(null) }
+    var isCreatingScheduleGroup by remember { mutableStateOf(false) }
+    var isCreatingSessionGroup by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     pendingCheatAction?.let { action ->
@@ -96,7 +103,13 @@ fun GroupsScreen(
         modifier = Modifier.fillMaxSize().testTag("groups_screen"),
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { isCreatingNew = true },
+                onClick = {
+                    if (selectedTab == 0) {
+                        isCreatingScheduleGroup = true
+                    } else {
+                        isCreatingSessionGroup = true
+                    }
+                },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.testTag("create_group_fab")
@@ -105,118 +118,155 @@ fun GroupsScreen(
             }
         }
     ) { innerPadding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(innerPadding)
         ) {
-            item {
-                Text(
-                    text = "App Groups",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Schedules & Daily (${scheduleGroups.size})") },
+                    icon = { Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("tab_schedules_daily")
                 )
-                Text(
-                    text = "Combine multiple apps under scheduled focus windows or shared daily time budgets.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Session Groups (${sessionGroups.size})") },
+                    icon = { Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("tab_session_groups")
                 )
             }
 
-            if (groupsWithDetails.isEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 24.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(28.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Group,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(48.dp)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                if (selectedTab == 0) {
+                    // TAB 1: Schedules & Daily Budget Groups
+                    item {
+                        Text(
+                            text = "Schedules & Daily Budget Groups",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Group multiple apps together under scheduled focus windows or a shared daily allowance.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (scheduleGroups.isEmpty()) {
+                        item {
+                            EmptyGroupsCard(
+                                title = "No Schedule or Budget Groups",
+                                description = "Create a group like 'Social Media' or 'Entertainment' to enforce shared daily budgets or scheduled blackout windows.",
+                                buttonLabel = "Create Schedule Group",
+                                onClick = { isCreatingScheduleGroup = true }
                             )
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Text(
-                                text = "No Groups Configured",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Create a group like 'Social Media' or 'Games' to enforce shared limits or schedules across multiple apps.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(18.dp))
-                            Button(
-                                onClick = { isCreatingNew = true },
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("Create First Group")
-                            }
                         }
+                    }
+
+                    items(scheduleGroups, key = { it.group.id }) { groupDetail ->
+                        ScheduleGroupCard(
+                            groupDetail = groupDetail,
+                            onEdit = { groupToEditSchedule = groupDetail },
+                            onDelete = {
+                                if (isCheatProtectionEnabled) {
+                                    pendingCheatAction = PendingLooseningAction(
+                                        title = "Delete Group '${groupDetail.group.name}'",
+                                        description = "Deleting this group removes all schedules and time budgets for its member apps.",
+                                        onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                                    )
+                                } else {
+                                    viewModel.deleteGroup(groupDetail.group.id)
+                                }
+                            }
+                        )
+                    }
+                } else {
+                    // TAB 2: Dedicated Session Groups
+                    item {
+                        Text(
+                            text = "Session Groups",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Multiple apps share a continuous session timer. When the session limit is reached, all apps in the group are locked into cooldown together.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (sessionGroups.isEmpty()) {
+                        item {
+                            EmptyGroupsCard(
+                                title = "No Session Groups Configured",
+                                description = "Create a session group to enforce a combined session timer (e.g. 15m session, 45m break) across multiple distracting apps.",
+                                buttonLabel = "Create Session Group",
+                                onClick = { isCreatingSessionGroup = true }
+                            )
+                        }
+                    }
+
+                    items(sessionGroups, key = { it.group.id }) { groupDetail ->
+                        SessionGroupCard(
+                            groupDetail = groupDetail,
+                            onEdit = { groupToEditSession = groupDetail },
+                            onDelete = {
+                                if (isCheatProtectionEnabled) {
+                                    pendingCheatAction = PendingLooseningAction(
+                                        title = "Delete Session Group '${groupDetail.group.name}'",
+                                        description = "Deleting this session group disables shared session tracking and cooldown protection across its member apps.",
+                                        onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                                    )
+                                } else {
+                                    viewModel.deleteGroup(groupDetail.group.id)
+                                }
+                            }
+                        )
                     }
                 }
-            }
-
-            items(groupsWithDetails, key = { it.group.id }) { groupDetail ->
-                GroupCard(
-                    groupDetail = groupDetail,
-                    onEdit = { groupToEdit = groupDetail },
-                    onDelete = {
-                        if (isCheatProtectionEnabled) {
-                            pendingCheatAction = PendingLooseningAction(
-                                title = "Delete Group '${groupDetail.group.name}'",
-                                description = "Deleting this group removes all schedules, time budgets, and protections for its member apps.",
-                                onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
-                            )
-                        } else {
-                            viewModel.deleteGroup(groupDetail.group.id)
-                        }
-                    }
-                )
             }
         }
     }
 
-    if (isCreatingNew || groupToEdit != null) {
-        val initialGroup = groupToEdit?.group ?: AppGroup(name = "")
-        val initialPkgs = groupToEdit?.memberPackages?.toSet() ?: emptySet()
-        val currentEdit = groupToEdit
+    // Schedule & Budget Dialog
+    if (isCreatingScheduleGroup || groupToEditSchedule != null) {
+        val initialGroup = groupToEditSchedule?.group ?: AppGroup(name = "", sessionLimitEnabled = false)
+        val initialPkgs = groupToEditSchedule?.memberPackages?.toSet() ?: emptySet()
+        val currentEdit = groupToEditSchedule
 
-        EditGroupDialog(
+        EditScheduleGroupDialog(
             initialGroup = initialGroup,
             initialPackages = initialPkgs,
             installedApps = installedApps,
             onDismiss = {
-                isCreatingNew = false
-                groupToEdit = null
+                isCreatingScheduleGroup = false
+                groupToEditSchedule = null
             },
             onSave = { updatedGroup, selectedPkgs ->
                 val isLoosening = currentEdit != null && (
-                    (currentEdit.group.scheduleEnabled && !updatedGroup.scheduleEnabled) ||
-                    (currentEdit.group.budgetEnabled && !updatedGroup.budgetEnabled) ||
-                    (updatedGroup.dailyBudgetMinutes > currentEdit.group.dailyBudgetMinutes) ||
-                    (currentEdit.group.sessionLimitEnabled && !updatedGroup.sessionLimitEnabled) ||
-                    (currentEdit.group.sessionLimitEnabled && updatedGroup.sessionLimitSeconds > currentEdit.group.sessionLimitSeconds) ||
-                    (currentEdit.group.sessionLimitEnabled && updatedGroup.cooldownSeconds < currentEdit.group.cooldownSeconds) ||
-                    currentEdit.memberPackages.any { it !in selectedPkgs }
-                )
+                        (currentEdit.group.scheduleEnabled && !updatedGroup.scheduleEnabled) ||
+                                (currentEdit.group.budgetEnabled && !updatedGroup.budgetEnabled) ||
+                                (updatedGroup.dailyBudgetMinutes > currentEdit.group.dailyBudgetMinutes) ||
+                                currentEdit.memberPackages.any { it !in selectedPkgs }
+                        )
 
                 if (isLoosening && isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
                         title = "Modify Group '${updatedGroup.name}'",
-                        description = "Changes will loosen restrictions, increase budget or session duration, reduce cooldown, disable the group, or remove protected member apps.",
+                        description = "Changes will loosen restrictions, increase budget, disable the group, or remove protected member apps.",
                         onAuthorized = {
                             viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
                         }
@@ -224,15 +274,110 @@ fun GroupsScreen(
                 } else {
                     viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
                 }
-                isCreatingNew = false
-                groupToEdit = null
+                isCreatingScheduleGroup = false
+                groupToEditSchedule = null
+            }
+        )
+    }
+
+    // Dedicated Session Group Dialog
+    if (isCreatingSessionGroup || groupToEditSession != null) {
+        val initialGroup = groupToEditSession?.group ?: AppGroup(
+            name = "",
+            scheduleEnabled = false,
+            budgetEnabled = false,
+            sessionLimitEnabled = true,
+            sessionLimitSeconds = 600,
+            cooldownSeconds = 3600
+        )
+        val initialPkgs = groupToEditSession?.memberPackages?.toSet() ?: emptySet()
+        val currentEdit = groupToEditSession
+
+        EditSessionGroupDialog(
+            initialGroup = initialGroup,
+            initialPackages = initialPkgs,
+            installedApps = installedApps,
+            onDismiss = {
+                isCreatingSessionGroup = false
+                groupToEditSession = null
+            },
+            onSave = { updatedGroup, selectedPkgs ->
+                val prevSession = currentEdit?.group?.sessionLimitSeconds ?: 0
+                val prevCooldown = currentEdit?.group?.cooldownSeconds ?: 0
+
+                val isLoosening = currentEdit != null && (
+                        (prevSession > 0 && updatedGroup.sessionLimitSeconds > prevSession) ||
+                                (prevCooldown > 0 && updatedGroup.cooldownSeconds < prevCooldown) ||
+                                currentEdit.memberPackages.any { it !in selectedPkgs }
+                        )
+
+                if (isLoosening && isCheatProtectionEnabled) {
+                    pendingCheatAction = PendingLooseningAction(
+                        title = "Loosen Session Group '${updatedGroup.name}'",
+                        description = "Increasing session time, reducing cooldown, or removing member apps requires passphrase verification.",
+                        onAuthorized = {
+                            viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
+                        }
+                    )
+                } else {
+                    viewModel.saveGroup(updatedGroup, selectedPkgs.toList())
+                }
+                isCreatingSessionGroup = false
+                groupToEditSession = null
             }
         )
     }
 }
 
 @Composable
-private fun GroupCard(
+private fun EmptyGroupsCard(
+    title: String,
+    description: String,
+    buttonLabel: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier.padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Default.Group,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(18.dp))
+            Button(
+                onClick = onClick,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text(buttonLabel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleGroupCard(
     groupDetail: GroupWithAppDetails,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -244,13 +389,7 @@ private fun GroupCard(
     val isBudgetExhausted = remember(group.budgetEnabled, group.dailyBudgetMinutes, group.usedMinutesToday) {
         GroupRuleEvaluator.isBudgetExhausted(group)
     }
-    val isCooldownActive = remember(group.sessionLimitEnabled, group.cooldownEndTimestamp) {
-        group.sessionLimitEnabled && group.cooldownSeconds > 0 && group.cooldownEndTimestamp > com.example.util.TimeIntegrityManager.getTrueTimeMillis()
-    }
-    val remainingCooldownMs = remember(group.cooldownEndTimestamp) {
-        com.example.util.SessionLimitHelper.getCooldownRemainingMs(group.cooldownEndTimestamp)
-    }
-    val isCurrentlyBlocked = isScheduleActive || isBudgetExhausted || isCooldownActive
+    val isCurrentlyBlocked = isScheduleActive || isBudgetExhausted
 
     Card(
         modifier = Modifier
@@ -267,7 +406,6 @@ private fun GroupCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
-            // Title and action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -284,12 +422,12 @@ private fun GroupCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary
                         ) {
                             Text(
-                                text = if (isCooldownActive) "ON COOLDOWN" else "LOCKED",
+                                text = "LOCKED",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (isCooldownActive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
+                                color = MaterialTheme.colorScheme.onPrimary,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
@@ -307,59 +445,8 @@ private fun GroupCard(
                 }
             }
 
-            // Member app icons preview (avatar-stack style)
-            if (groupDetail.memberApps.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val maxVisibleIcons = 4
-                    val displayApps = groupDetail.memberApps.take(maxVisibleIcons)
-                    val remainingCount = groupDetail.memberApps.size - displayApps.size
-                    val iconOverlapStep = 22.dp
-                    val iconSize = 32.dp
-                    val totalStackWidth = iconSize + (iconOverlapStep * (displayApps.size - 1))
-
-                    Box(
-                        modifier = Modifier
-                            .width(totalStackWidth)
-                            .height(iconSize)
-                    ) {
-                        displayApps.forEachIndexed { index, app ->
-                            Box(
-                                modifier = Modifier
-                                    .padding(start = (index * 22).dp)
-                                    .size(iconSize)
-                                    .clip(CircleShape)
-                                    .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
-                            ) {
-                                AppIconImage(icon = app.icon, modifier = Modifier.fillMaxSize())
-                            }
-                        }
-                    }
-
-                    if (remainingCount > 0) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.height(24.dp)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            ) {
-                                Text(
-                                    text = "+$remainingCount",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            // Member app icons preview
+            MemberAppIconsRow(groupDetail.memberApps)
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -430,29 +517,175 @@ private fun GroupCard(
                     )
                 }
             }
+        }
+    }
+}
 
-            // Rule 3: Session Limit & Cooldown
-            if (group.sessionLimitEnabled) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.HourglassBottom,
-                        contentDescription = null,
-                        tint = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+@Composable
+private fun SessionGroupCard(
+    groupDetail: GroupWithAppDetails,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val group = groupDetail.group
+    val isCooldownActive = remember(group.cooldownEndTimestamp) {
+        group.cooldownSeconds > 0 && group.cooldownEndTimestamp > TimeIntegrityManager.getTrueTimeMillis()
+    }
+    val remainingCooldownMs = remember(group.cooldownEndTimestamp) {
+        SessionLimitHelper.getCooldownRemainingMs(group.cooldownEndTimestamp)
+    }
+
+    val sessionProgress = remember(group.sessionLimitSeconds, group.currentSessionUsedMs) {
+        if (group.sessionLimitSeconds > 0) {
+            (group.currentSessionUsedMs.toFloat() / (group.sessionLimitSeconds * 1000f)).coerceIn(0f, 1f)
+        } else 0f
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("session_group_card_${group.id}"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isCooldownActive) {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = group.name,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            text = if (isCooldownActive) "ON COOLDOWN" else if (group.currentSessionUsedMs > 0L) "IN SESSION" else "SESSION GROUP",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isCooldownActive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Row {
+                    IconButton(onClick = onEdit) {
+                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit session group")
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete session group", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            // Member app icons preview
+            MemberAppIconsRow(groupDetail.memberApps)
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Session & Cooldown Details
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 2.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.HourglassBottom,
+                    contentDescription = null,
+                    tint = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isCooldownActive) {
+                        "Break active: ${SessionLimitHelper.formatRemaining(remainingCooldownMs)} remaining"
+                    } else if (group.currentSessionUsedMs > 0L) {
+                        "Session active: ${SessionLimitHelper.formatHms((group.currentSessionUsedMs / 1000).toInt())} used / ${SessionLimitHelper.formatHms(group.sessionLimitSeconds)} allowed"
+                    } else {
+                        "Session: ${SessionLimitHelper.formatHms(group.sessionLimitSeconds)} • Cooldown: ${SessionLimitHelper.formatHms(group.cooldownSeconds)}"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isCooldownActive || group.currentSessionUsedMs > 0L) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            if (group.currentSessionUsedMs > 0L && !isCooldownActive) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { sessionProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemberAppIconsRow(memberApps: List<com.example.data.model.AppInfo>) {
+    if (memberApps.isEmpty()) return
+    Spacer(modifier = Modifier.height(10.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        val maxVisibleIcons = 5
+        val displayApps = memberApps.take(maxVisibleIcons)
+        val remainingCount = memberApps.size - displayApps.size
+        val iconOverlapStep = 22.dp
+        val iconSize = 32.dp
+        val totalStackWidth = iconSize + (iconOverlapStep * (displayApps.size - 1))
+
+        Box(
+            modifier = Modifier
+                .width(totalStackWidth)
+                .height(iconSize)
+        ) {
+            displayApps.forEachIndexed { index, app ->
+                Box(
+                    modifier = Modifier
+                        .padding(start = (index * 22).dp)
+                        .size(iconSize)
+                        .clip(CircleShape)
+                        .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                ) {
+                    AppIconImage(icon = app.icon, modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+
+        if (remainingCount > 0) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.height(24.dp)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                ) {
                     Text(
-                        text = if (isCooldownActive) {
-                            "On Cooldown (${com.example.util.SessionLimitHelper.formatRemaining(remainingCooldownMs)} remaining)"
-                        } else {
-                            "Shared Session: ${com.example.util.SessionLimitHelper.formatHms(group.sessionLimitSeconds)} (Cooldown: ${com.example.util.SessionLimitHelper.formatHms(group.cooldownSeconds)})"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (isCooldownActive) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isCooldownActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                        text = "+$remainingCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -471,7 +704,7 @@ private fun formatDays(days: Set<Int>): String {
 }
 
 @Composable
-private fun EditGroupDialog(
+private fun EditScheduleGroupDialog(
     initialGroup: AppGroup,
     initialPackages: Set<String>,
     installedApps: List<com.example.data.model.AppInfo>,
@@ -483,31 +716,12 @@ private fun EditGroupDialog(
     var showAppPicker by remember { mutableStateOf(false) }
 
     var scheduleEnabled by remember { mutableStateOf(initialGroup.scheduleEnabled) }
-    var scheduleStart by remember { mutableStateOf(initialGroup.scheduleStart) }
-    var scheduleEnd by remember { mutableStateOf(initialGroup.scheduleEnd) }
-    var daysOfWeek by remember { mutableStateOf(initialGroup.daysOfWeek) }
+    var scheduleStart by remember { mutableStateOf(if (initialGroup.scheduleStart.isNotBlank()) initialGroup.scheduleStart else "09:00") }
+    var scheduleEnd by remember { mutableStateOf(if (initialGroup.scheduleEnd.isNotBlank()) initialGroup.scheduleEnd else "17:00") }
+    var daysOfWeek by remember { mutableStateOf(if (initialGroup.daysOfWeek.isNotEmpty()) initialGroup.daysOfWeek else setOf(2, 3, 4, 5, 6)) }
 
     var budgetEnabled by remember { mutableStateOf(initialGroup.budgetEnabled) }
     var dailyBudgetMinutes by remember { mutableIntStateOf(if (initialGroup.dailyBudgetMinutes > 0) initialGroup.dailyBudgetMinutes else 60) }
-
-    var sessionLimitEnabled by remember { mutableStateOf(initialGroup.sessionLimitEnabled) }
-    var sessionHours by remember { mutableIntStateOf(initialGroup.sessionLimitSeconds / 3600) }
-    var sessionMins by remember { mutableIntStateOf((initialGroup.sessionLimitSeconds % 3600) / 60) }
-    var sessionSecs by remember { mutableIntStateOf(initialGroup.sessionLimitSeconds % 60) }
-
-    var cooldownHours by remember { mutableIntStateOf(initialGroup.cooldownSeconds / 3600) }
-    var cooldownMins by remember { mutableIntStateOf((initialGroup.cooldownSeconds % 3600) / 60) }
-    var cooldownSecs by remember { mutableIntStateOf(initialGroup.cooldownSeconds % 60) }
-
-    if (sessionLimitEnabled && sessionHours == 0 && sessionMins == 0 && sessionSecs == 0) {
-        sessionMins = 10
-    }
-    if (sessionLimitEnabled && cooldownHours == 0 && cooldownMins == 0 && cooldownSecs == 0) {
-        cooldownHours = 1
-    }
-
-    val totalSessionSeconds = com.example.util.SessionLimitHelper.toSeconds(sessionHours, sessionMins, sessionSecs)
-    val totalCooldownSeconds = com.example.util.SessionLimitHelper.toSeconds(cooldownHours, cooldownMins, cooldownSecs)
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -519,7 +733,7 @@ private fun EditGroupDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .padding(vertical = 24.dp)
-                .testTag("edit_group_dialog"),
+                .testTag("edit_schedule_group_dialog"),
             shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp
@@ -532,13 +746,12 @@ private fun EditGroupDialog(
             ) {
                 item {
                     Text(
-                        text = if (initialGroup.id == 0L) "Create App Group" else "Edit Group",
+                        text = if (initialGroup.id == 0L) "Create Schedule / Budget Group" else "Edit Group",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                // Name
                 item {
                     OutlinedTextField(
                         value = name,
@@ -552,7 +765,6 @@ private fun EditGroupDialog(
                     )
                 }
 
-                // App Selection
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -573,7 +785,7 @@ private fun EditGroupDialog(
                     }
                 }
 
-                // Rule 1: Schedule Rule
+                // Schedule Rule
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -644,7 +856,7 @@ private fun EditGroupDialog(
                     }
                 }
 
-                // Rule 2: Budget Rule
+                // Budget Rule
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -700,82 +912,250 @@ private fun EditGroupDialog(
                     }
                 }
 
-                // Rule 3: Session Limit & Cooldown
+                if (errorMessage != null) {
+                    item {
+                        Text(
+                            text = errorMessage!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                item {
+                    Button(
+                        onClick = {
+                            if (name.isBlank()) {
+                                errorMessage = "Please enter a group name"
+                                return@Button
+                            }
+                            if (!scheduleEnabled && !budgetEnabled) {
+                                errorMessage = "Enable at least one rule (Schedule or Time Budget)"
+                                return@Button
+                            }
+                            if (selectedPackages.isEmpty()) {
+                                errorMessage = "Please select at least one app for this group"
+                                return@Button
+                            }
+
+                            val updated = initialGroup.copy(
+                                name = name.trim(),
+                                scheduleEnabled = scheduleEnabled,
+                                scheduleStart = scheduleStart.trim(),
+                                scheduleEnd = scheduleEnd.trim(),
+                                daysOfWeek = daysOfWeek,
+                                budgetEnabled = budgetEnabled,
+                                dailyBudgetMinutes = dailyBudgetMinutes,
+                                sessionLimitEnabled = false
+                            )
+                            onSave(updated, selectedPackages)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("save_group_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Save Group")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAppPicker) {
+        AppPickerDialog(
+            title = "Select Group Apps",
+            availableApps = installedApps,
+            initialSelectedPackages = selectedPackages,
+            onDismiss = { showAppPicker = false },
+            onConfirm = { pkgs ->
+                selectedPackages = pkgs
+                showAppPicker = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun EditSessionGroupDialog(
+    initialGroup: AppGroup,
+    initialPackages: Set<String>,
+    installedApps: List<com.example.data.model.AppInfo>,
+    onDismiss: () -> Unit,
+    onSave: (AppGroup, Set<String>) -> Unit
+) {
+    var name by remember { mutableStateOf(initialGroup.name) }
+    var selectedPackages by remember { mutableStateOf(initialPackages) }
+    var showAppPicker by remember { mutableStateOf(false) }
+
+    var sessionHours by remember { mutableIntStateOf(initialGroup.sessionLimitSeconds / 3600) }
+    var sessionMins by remember { mutableIntStateOf((initialGroup.sessionLimitSeconds % 3600) / 60) }
+    var sessionSecs by remember { mutableIntStateOf(initialGroup.sessionLimitSeconds % 60) }
+
+    var cooldownHours by remember { mutableIntStateOf(initialGroup.cooldownSeconds / 3600) }
+    var cooldownMins by remember { mutableIntStateOf((initialGroup.cooldownSeconds % 3600) / 60) }
+    var cooldownSecs by remember { mutableIntStateOf(initialGroup.cooldownSeconds % 60) }
+
+    if (initialGroup.sessionLimitSeconds == 0 && sessionHours == 0 && sessionMins == 0 && sessionSecs == 0) {
+        sessionMins = 10
+    }
+    if (initialGroup.cooldownSeconds == 0 && cooldownHours == 0 && cooldownMins == 0 && cooldownSecs == 0) {
+        cooldownHours = 1
+    }
+
+    val totalSessionSeconds = SessionLimitHelper.toSeconds(sessionHours, sessionMins, sessionSecs)
+    val totalCooldownSeconds = SessionLimitHelper.toSeconds(cooldownHours, cooldownMins, cooldownSecs)
+    val isValid = totalSessionSeconds > 0 && totalCooldownSeconds > 0 && name.isNotBlank() && selectedPackages.isNotEmpty()
+
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .padding(vertical = 24.dp)
+                .testTag("edit_session_group_dialog"),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                item {
+                    Text(
+                        text = if (initialGroup.id == 0L) "Create Session Group" else "Edit Session Group",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Shared session limit and break cooldown across multiple apps",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Group Name
+                item {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it; errorMessage = null },
+                        label = { Text("Group Name (e.g. Social Apps)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("session_group_name_input"),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+
+                // Member Apps
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Included Apps", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text("${selectedPackages.size} apps selected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(
+                            onClick = { showAppPicker = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("pick_session_group_apps_button")
+                        ) {
+                            Text("Select Apps")
+                        }
+                    }
+                }
+
+                // Session Duration
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Session Limit & Cooldown", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                                    Text("Shared session timer and break cooldown for all apps in group", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Switch(
-                                    checked = sessionLimitEnabled,
-                                    onCheckedChange = { sessionLimitEnabled = it; errorMessage = null },
-                                    modifier = Modifier.testTag("group_session_limit_switch")
-                                )
-                            }
-
-                            AnimatedVisibility(visible = sessionLimitEnabled) {
-                                Column(modifier = Modifier.padding(top = 12.dp)) {
-                                    Text(
-                                        text = "Session Duration (Max time before lockout):",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    GroupHmsInputRow(
-                                        hours = sessionHours,
-                                        minutes = sessionMins,
-                                        seconds = sessionSecs,
-                                        onHoursChange = { sessionHours = it },
-                                        onMinutesChange = { sessionMins = it },
-                                        onSecondsChange = { sessionSecs = it }
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    Text(
-                                        text = "Cooldown Duration (Required break time):",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    GroupHmsInputRow(
-                                        hours = cooldownHours,
-                                        minutes = cooldownMins,
-                                        seconds = cooldownSecs,
-                                        onHoursChange = { cooldownHours = it },
-                                        onMinutesChange = { cooldownMins = it },
-                                        onSecondsChange = { cooldownSecs = it }
-                                    )
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = MaterialTheme.colorScheme.surface
-                                    ) {
-                                        Text(
-                                            text = "Allowed: ${com.example.util.SessionLimitHelper.formatHms(totalSessionSeconds)} • Break: ${com.example.util.SessionLimitHelper.formatHms(totalCooldownSeconds)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                        )
-                                    }
-                                }
-                            }
+                            Text(
+                                text = "Session Duration (Max time across all member apps):",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Using any app in this group consumes this shared session timer",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            GroupHmsInputRow(
+                                hours = sessionHours,
+                                minutes = sessionMins,
+                                seconds = sessionSecs,
+                                onHoursChange = { sessionHours = it },
+                                onMinutesChange = { sessionMins = it },
+                                onSecondsChange = { sessionSecs = it }
+                            )
                         }
+                    }
+                }
+
+                // Cooldown Duration
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Cooldown Break Duration (Lockout period for all member apps):",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "All member apps are locked until this break period elapses",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            GroupHmsInputRow(
+                                hours = cooldownHours,
+                                minutes = cooldownMins,
+                                seconds = cooldownSecs,
+                                onHoursChange = { cooldownHours = it },
+                                onMinutesChange = { cooldownMins = it },
+                                onSecondsChange = { cooldownSecs = it }
+                            )
+                        }
+                    }
+                }
+
+                // Preview Summary
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Allowed: ${SessionLimitHelper.formatHms(totalSessionSeconds)} • Break: ${SessionLimitHelper.formatHms(totalCooldownSeconds)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
                     }
                 }
 
@@ -796,40 +1176,33 @@ private fun EditGroupDialog(
                                 errorMessage = "Please enter a group name"
                                 return@Button
                             }
-                            if (!scheduleEnabled && !budgetEnabled && !sessionLimitEnabled) {
-                                errorMessage = "Enable at least one rule (Schedule, Time Budget, or Session Limit)"
-                                return@Button
-                            }
-                            if (sessionLimitEnabled && (totalSessionSeconds <= 0 || totalCooldownSeconds <= 0)) {
-                                errorMessage = "Please enter valid session and cooldown durations"
-                                return@Button
-                            }
                             if (selectedPackages.isEmpty()) {
-                                errorMessage = "Please select at least one app for this group"
+                                errorMessage = "Please select at least one app for this session group"
+                                return@Button
+                            }
+                            if (totalSessionSeconds <= 0 || totalCooldownSeconds <= 0) {
+                                errorMessage = "Both session and cooldown must be greater than 0 seconds"
                                 return@Button
                             }
 
                             val updated = initialGroup.copy(
                                 name = name.trim(),
-                                scheduleEnabled = scheduleEnabled,
-                                scheduleStart = scheduleStart.trim(),
-                                scheduleEnd = scheduleEnd.trim(),
-                                daysOfWeek = daysOfWeek,
-                                budgetEnabled = budgetEnabled,
-                                dailyBudgetMinutes = dailyBudgetMinutes,
-                                sessionLimitEnabled = sessionLimitEnabled,
-                                sessionLimitSeconds = if (sessionLimitEnabled) totalSessionSeconds else 0,
-                                cooldownSeconds = if (sessionLimitEnabled) totalCooldownSeconds else 0
+                                scheduleEnabled = false,
+                                budgetEnabled = false,
+                                sessionLimitEnabled = true,
+                                sessionLimitSeconds = totalSessionSeconds,
+                                cooldownSeconds = totalCooldownSeconds
                             )
                             onSave(updated, selectedPackages)
                         },
+                        enabled = isValid,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
-                            .testTag("save_group_button"),
+                            .testTag("save_session_group_button"),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Save Group")
+                        Text("Save Session Group")
                     }
                 }
             }
@@ -838,7 +1211,7 @@ private fun EditGroupDialog(
 
     if (showAppPicker) {
         AppPickerDialog(
-            title = "Select Group Apps",
+            title = "Select Session Group Apps",
             availableApps = installedApps,
             initialSelectedPackages = selectedPackages,
             onDismiss = { showAppPicker = false },
@@ -904,4 +1277,3 @@ private fun GroupHmsInputRow(
         )
     }
 }
-

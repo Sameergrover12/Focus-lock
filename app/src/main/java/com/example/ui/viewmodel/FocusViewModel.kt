@@ -277,6 +277,22 @@ class FocusViewModel(
         initialValue = emptyList()
     )
 
+    val scheduleAndDailyGroups: StateFlow<List<GroupWithAppDetails>> = groupsWithDetails.map { list ->
+        list.filter { !it.group.sessionLimitEnabled }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val sessionGroups: StateFlow<List<GroupWithAppDetails>> = groupsWithDetails.map { list ->
+        list.filter { it.group.sessionLimitEnabled }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     init {
         loadInstalledApps()
         refreshDailyUsageStats()
@@ -363,6 +379,30 @@ class FocusViewModel(
     ) {
         viewModelScope.launch {
             repository.setScreenTimeLimit(packageName, limitMinutes, sessionLimitSeconds, cooldownSeconds)
+        }
+    }
+
+    fun setDailyLimit(packageName: String, limitMinutes: Int) {
+        viewModelScope.launch {
+            repository.setDailyLimit(packageName, limitMinutes)
+        }
+    }
+
+    fun removeDailyLimit(packageName: String) {
+        viewModelScope.launch {
+            repository.removeDailyLimit(packageName)
+        }
+    }
+
+    fun setSessionLimit(packageName: String, sessionLimitSeconds: Int, cooldownSeconds: Int) {
+        viewModelScope.launch {
+            repository.setSessionLimit(packageName, sessionLimitSeconds, cooldownSeconds)
+        }
+    }
+
+    fun removeSessionLimit(packageName: String) {
+        viewModelScope.launch {
+            repository.removeSessionLimit(packageName)
         }
     }
 

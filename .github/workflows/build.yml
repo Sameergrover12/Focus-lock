@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,25 +19,19 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Keystores for Persistent In-Place Updates
-        env:
-          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 || secrets.RELEASE_KEYSTORE_BASE64 || secrets.DEBUG_KEYSTORE_BASE64 }}
+      - name: Setup & Lock Permanent Keystore in Vault Branch
         run: |
           mkdir -p ~/.android
-          if [ -n "$SIGNING_KEY_BASE64" ]; then
-            echo "Restoring persistent keystore from GitHub Secret..."
-            echo "$SIGNING_KEY_BASE64" | base64 -d > debug.keystore
-            echo "$SIGNING_KEY_BASE64" | base64 -d > release.keystore
-          elif [ -f "debug.keystore.base64" ]; then
-            echo "Restoring persistent keystore from repository debug.keystore.base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
-            cp debug.keystore release.keystore
-          elif [ -f "debug.keystore" ]; then
-            echo "Using existing debug.keystore from repository..."
-            cp debug.keystore release.keystore
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin keystore-vault >/dev/null 2>&1; then
+            echo "Restoring permanent keystore from keystore-vault branch..."
+            git fetch origin keystore-vault
+            git checkout origin/keystore-vault -- debug.keystore
           else
-            echo "Generating persistent debug keystore..."
-            keytool -genkey -v \
+            echo "Creating permanent keystore for the first time and locking in keystore-vault..."
+            keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
               -alias androiddebugkey \
@@ -44,16 +40,30 @@ jobs:
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-            cp debug.keystore release.keystore
+            git checkout --orphan keystore-vault-temp
+            git rm -rf --cached .
+            git add -f debug.keystore
+            git commit -m "chore: lock permanent signing keystore in vault"
+            git push origin keystore-vault-temp:refs/heads/keystore-vault
+            git checkout -f ${{ github.ref_name }}
+            git fetch origin keystore-vault
+            git checkout origin/keystore-vault -- debug.keystore
           fi
+
+          # Copy permanent keystore to all standard & custom paths so Gradle always uses it
+          cp debug.keystore release.keystore
           cp debug.keystore ~/.android/debug.keystore
           cp debug.keystore app/debug.keystore 2>/dev/null || true
-          cp release.keystore app/release.keystore 2>/dev/null || true
+          cp debug.keystore app/release.keystore 2>/dev/null || true
+
+          # Also create focuslock.keystore with matching key if app/build.gradle.kts checks for it
+          keytool -importkeystore -srckeystore debug.keystore -srcstorepass android -srcalias androiddebugkey -srckeypass android \
+            -destkeystore app/focuslock.keystore -deststorepass focuslock123 -destalias focuslockkey -destkeypass focuslock123 -noprompt 2>/dev/null || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.3.1'
+          gradle-version: '8.3.1'
 
       - name: Build APKs with Auto-Increment Version Code
         env:
@@ -76,3 +86,4 @@ jobs:
         with:
           name: focus-app-apks
           path: app/build/outputs/apk/**/*.apk
+ 

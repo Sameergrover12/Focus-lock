@@ -68,7 +68,7 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: FocusViewModel by viewModels {
         val app = application as FocusApplication
-        FocusViewModelFactory(app, app.repository, app.preferencesRepository)
+        FocusViewModelFactory(app, app.repository, app.preferencesRepository, app.backupManager)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -14,6 +14,7 @@ class FocusApplication : Application() {
     val database by lazy { FocusDatabase.getDatabase(this) }
     val repository by lazy { FocusRepository(database.focusDao()) }
     val preferencesRepository by lazy { UserPreferencesRepository(this) }
+    val backupManager by lazy { com.example.data.backup.BackupManager(this, database, preferencesRepository) }
 
     override fun onCreate() {
         super.onCreate()

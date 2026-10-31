@@ -58,6 +58,10 @@ class UserPreferencesRepository(private val context: Context) {
         val EMERGENCY_BREAKS_REMAINING = intPreferencesKey("emergency_breaks_remaining")
         val EMERGENCY_BREAK_WEEK_START = longPreferencesKey("emergency_break_week_start")
         val ACTIVE_EMERGENCY_BREAK_UNTIL = longPreferencesKey("active_emergency_break_until")
+
+        // Cloud Backup & Account
+        val CONNECTED_GMAIL_ACCOUNT = stringPreferencesKey("connected_gmail_account")
+        val LAST_CLOUD_BACKUP_TIME = longPreferencesKey("last_cloud_backup_time")
     }
 
     fun getSystemBaseThemeMode(): BaseThemeMode {
@@ -136,6 +140,60 @@ class UserPreferencesRepository(private val context: Context) {
 
     val activeEmergencyBreakUntil: Flow<Long> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] ?: 0L
+    }
+
+    val connectedGmailAccount: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT]
+    }
+
+    val lastCloudBackupTime: Flow<Long> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME] ?: 0L
+    }
+
+    suspend fun setConnectedGmailAccount(email: String?) {
+        context.dataStore.edit { preferences ->
+            if (email != null) {
+                preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT] = email
+            } else {
+                preferences.remove(PreferencesKeys.CONNECTED_GMAIL_ACCOUNT)
+            }
+        }
+    }
+
+    suspend fun setLastCloudBackupTime(timestamp: Long) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME] = timestamp
+        }
+    }
+
+    suspend fun getPreferencesSnapshot(): Map<String, Any?> {
+        val prefs = context.dataStore.data.first()
+        return mapOf(
+            "base_theme_mode" to prefs[PreferencesKeys.BASE_THEME_MODE],
+            "secondary_palette" to prefs[PreferencesKeys.SECONDARY_PALETTE],
+            "theme_mode" to prefs[PreferencesKeys.THEME_MODE],
+            "master_enabled" to (prefs[PreferencesKeys.MASTER_ENABLED] ?: true),
+            "cheat_protection_enabled" to (prefs[PreferencesKeys.CHEAT_PROTECTION_ENABLED] ?: false),
+            "cheat_protection_hash" to prefs[PreferencesKeys.CHEAT_PROTECTION_HASH],
+            "cheat_protection_salt" to prefs[PreferencesKeys.CHEAT_PROTECTION_SALT],
+            "invincible_mode_enabled" to (prefs[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: false),
+            "clock_tamper_protection_enabled" to (prefs[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] ?: true),
+            "reclaimed_commitment" to (prefs[PreferencesKeys.RECLAIMED_COMMITMENT] ?: "My Focus"),
+            "cognitive_passphrase" to (prefs[PreferencesKeys.COGNITIVE_PASSPHRASE] ?: DEFAULT_COGNITIVE_PASSPHRASE)
+        )
+    }
+
+    suspend fun restoreCheatProtection(enabled: Boolean, hash: String?, salt: String?) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = enabled
+            if (hash != null && salt != null) {
+                preferences[PreferencesKeys.CHEAT_PROTECTION_HASH] = hash
+                preferences[PreferencesKeys.CHEAT_PROTECTION_SALT] = salt
+            } else {
+                preferences.remove(PreferencesKeys.CHEAT_PROTECTION_HASH)
+                preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
+            }
+        }
     }
 
     suspend fun setClockTamperProtectionEnabled(enabled: Boolean) {

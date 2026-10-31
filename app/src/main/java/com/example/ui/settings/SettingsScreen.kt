@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,20 +61,43 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.app.admin.DevicePolicyManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import com.example.receiver.FocusDeviceAdminReceiver
-import com.example.data.preferences.ThemeMode
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.example.R
+import com.example.data.backup.BackupManager
+import com.example.data.preferences.ThemeMode
+import com.example.receiver.FocusDeviceAdminReceiver
 import com.example.ui.common.CheatProtectionAuthDialog
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.common.StrictModeActivationDialog
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun SettingsScreen(
@@ -92,16 +117,91 @@ fun SettingsScreen(
     val emergencyBreaksRemaining by viewModel.emergencyBreaksRemaining.collectAsStateWithLifecycle()
     val activeEmergencyBreakUntil by viewModel.activeEmergencyBreakUntil.collectAsStateWithLifecycle()
 
+    val connectedGmailAccount by viewModel.connectedGmailAccount.collectAsStateWithLifecycle()
+    val lastCloudBackupTime by viewModel.lastCloudBackupTime.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+
     var hasAccessibility by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
     var hasOverlay by remember { mutableStateOf(PermissionHelper.canDrawOverlays(context)) }
     var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
 
     var showThemesSheet by remember { mutableStateOf(false) }
+    var showBackupRestoreModal by remember { mutableStateOf(false) }
     var showStrictModeDialog by remember { mutableStateOf(false) }
     var showInvincibleConfirmDialog by remember { mutableStateOf(false) }
     var showEmergencyBreakConfirmDialog by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+
+    val exportDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportOfflineBackup(uri) { success, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val importDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            if (isCheatProtectionEnabled) {
+                pendingImportUri = uri
+                pendingCheatAction = PendingLooseningAction(
+                    title = "Authorize Backup Import",
+                    description = "Importing an offline backup replaces current limits and schedules. Enter your verbatim passphrase to authorize this action.",
+                    onAuthorized = {
+                        pendingImportUri?.let { targetUri ->
+                            viewModel.importOfflineBackup(targetUri) { _, msg ->
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        pendingImportUri = null
+                    }
+                )
+            } else {
+                viewModel.importOfflineBackup(uri) { _, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            val email = account?.email ?: "User"
+            val idToken = account?.idToken
+            viewModel.onGoogleSignInSuccess(email, idToken) {
+                Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            val last = GoogleSignIn.getLastSignedInAccount(context)
+            if (last?.email != null) {
+                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken) {
+                    Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun launchGoogleSignIn() {
+        val webClientId = BackupManager.getDefaultWebClientId(context)
+        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).requestEmail()
+        if (!webClientId.isNullOrEmpty()) {
+            gsoBuilder.requestIdToken(webClientId)
+        }
+        val client = GoogleSignIn.getClient(context, gsoBuilder.build())
+        googleSignInLauncher.launch(client.signInIntent)
+    }
 
     val isBreakActive = activeEmergencyBreakUntil > System.currentTimeMillis()
 
@@ -210,6 +310,42 @@ fun SettingsScreen(
         )
     }
 
+    if (showBackupRestoreModal) {
+        BackupRestoreDialog(
+            connectedGmail = connectedGmailAccount,
+            lastCloudBackupTime = lastCloudBackupTime,
+            isSyncing = isSyncing,
+            onSignInGoogle = { launchGoogleSignIn() },
+            onSignOutGoogle = {
+                if (isCheatProtectionEnabled) {
+                    pendingCheatAction = PendingLooseningAction(
+                        title = "Sign Out Google Account",
+                        description = "Disconnecting your cloud backup account during active Strict Mode requires passphrase verification.",
+                        onAuthorized = {
+                            viewModel.signOutGmail()
+                            Toast.makeText(context, "Signed out of Google account", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                } else {
+                    viewModel.signOutGmail()
+                    Toast.makeText(context, "Signed out of Google account", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onSyncNow = {
+                viewModel.syncNow { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onExportJson = {
+                exportDocumentLauncher.launch("focus_lock_backup_${System.currentTimeMillis()}.json")
+            },
+            onImportJson = {
+                importDocumentLauncher.launch(arrayOf("application/json", "*/*"))
+            },
+            onDismiss = { showBackupRestoreModal = false }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -311,6 +447,75 @@ fun SettingsScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = "Open Themes",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        // Section: Backup & Restore
+        item {
+            Text(
+                text = "Data & Storage",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showBackupRestoreModal = true }
+                    .testTag("backup_restore_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        modifier = Modifier.size(40.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_cloud_backup),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Backup & Restore",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (connectedGmailAccount != null) "Cloud: $connectedGmailAccount" else "Gmail Cloud Sync & Offline JSON",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (connectedGmailAccount != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Open Backup & Restore",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
@@ -965,3 +1170,387 @@ private fun PermissionStatusRow(
         )
     }
 }
+
+@Composable
+private fun BackupRestoreDialog(
+    connectedGmail: String?,
+    lastCloudBackupTime: Long,
+    isSyncing: Boolean,
+    onSignInGoogle: () -> Unit,
+    onSignOutGoogle: () -> Unit,
+    onSyncNow: () -> Unit,
+    onExportJson: () -> Unit,
+    onImportJson: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val isFirebaseReady = remember { BackupManager.isFirebaseAvailable(context) }
+    val sha1Fingerprint = remember { BackupManager.getSha1Fingerprint(context) }
+    val formattedLastBackup = remember(lastCloudBackupTime) {
+        if (lastCloudBackupTime > 0) {
+            SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()).format(Date(lastCloudBackupTime))
+        } else {
+            "Never"
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .padding(16.dp)
+                .testTag("backup_restore_dialog"),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(22.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        modifier = Modifier.size(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_cloud_backup),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Backup & Restore",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Google Cloud Sync & Offline Storage",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // OPTION 1: Cloud Backup (Gmail)
+                Text(
+                    text = "OPTION 1: CLOUD BACKUP (GMAIL)",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 1.sp
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (connectedGmail != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = connectedGmail,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Last Cloud Sync: $formattedLastBackup",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = onSyncNow,
+                                    enabled = !isSyncing,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("sync_now_button")
+                                ) {
+                                    if (isSyncing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Sync,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Sync Now", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                OutlinedButton(
+                                    onClick = onSignOutGoogle,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.onSurface
+                                    ),
+                                    modifier = Modifier.testTag("sign_out_google_button")
+                                ) {
+                                    Text("Sign Out", fontSize = 13.sp)
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = "Sign in with Google to automatically back up and restore your rules and limits.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Button(
+                                onClick = onSignInGoogle,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_google_signin_button")
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_google_logo),
+                                    contentDescription = "Google",
+                                    tint = Color.Unspecified,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("Sign in with Google", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            }
+                        }
+
+                        // Developer Setup Helper
+                        if (!isFirebaseReady) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("developer_setup_helper_card")
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Developer Setup Helper",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "Package: ${context.packageName}",
+                                        fontSize = 11.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "SHA-1: $sha1Fingerprint",
+                                        fontSize = 10.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Button(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val clip = ClipData.newPlainText("Firebase Config", "Package: ${context.packageName}\nSHA-1: $sha1Fingerprint")
+                                            clipboard.setPrimaryClip(clip)
+                                            Toast.makeText(context, "Copied Package & SHA-1 to Clipboard", Toast.LENGTH_SHORT).show()
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("copy_sha1_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Copy Package & SHA-1", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Add this SHA-1 in your Firebase Console and place google-services.json in /app to activate cloud syncing.",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // OPTION 2: Offline Backup (.json file)
+                Text(
+                    text = "OPTION 2: OFFLINE BACKUP (.JSON)",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 1.sp
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Export your rules and settings to a JSON file, or restore from a previously exported backup file.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = onExportJson,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("export_backup_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FileDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Export .json", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = onImportJson,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("import_backup_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FileUpload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Import .json", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "Note: Active screen-time usage and cooldown timers are preserved during restore.",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("close_backup_dialog_button")
+                ) {
+                    Text("Close", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+

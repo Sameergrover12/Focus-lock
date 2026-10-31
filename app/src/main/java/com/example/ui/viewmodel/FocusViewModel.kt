@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import kotlinx.coroutines.tasks.await
+
 import com.example.ui.theme.BaseThemeMode
 import com.example.ui.theme.SecondaryThemePalette
 
@@ -42,8 +44,43 @@ data class GroupWithAppDetails(
 class FocusViewModel(
     application: Application,
     private val repository: FocusRepository,
-    private val preferencesRepository: UserPreferencesRepository
+    private val preferencesRepository: UserPreferencesRepository,
+    val backupManager: com.example.data.backup.BackupManager = (application as FocusApplication).backupManager
 ) : AndroidViewModel(application) {
+
+    // Cloud Backup & Account State
+    val connectedGmailAccount: StateFlow<String?> = preferencesRepository.connectedGmailAccount.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+
+    val lastCloudBackupTime: StateFlow<Long> = preferencesRepository.lastCloudBackupTime.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0L
+    )
+
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val _syncStatusMessage = MutableStateFlow<String?>(null)
+    val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
+
+    fun triggerAutoBackup() {
+        val email = connectedGmailAccount.value ?: return
+        viewModelScope.launch {
+            if (com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
+                try {
+                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    val uid = auth.currentUser?.uid ?: return@launch
+                    backupManager.syncToCloud(uid, email)
+                } catch (e: Exception) {
+                    // Suppress background auto-sync exceptions
+                }
+            }
+        }
+    }
 
     // Theme & Onboarding & Master State
     val baseThemeMode: StateFlow<BaseThemeMode> = preferencesRepository.baseThemeMode.stateIn(
@@ -442,12 +479,120 @@ class FocusViewModel(
     fun addBlockedKeyword(keyword: String, caseSensitive: Boolean = false) {
         viewModelScope.launch {
             repository.addBlockedKeyword(keyword, caseSensitive)
+            triggerAutoBackup()
         }
     }
 
     fun removeBlockedKeyword(id: Long) {
         viewModelScope.launch {
             repository.removeBlockedKeyword(id)
+            triggerAutoBackup()
+        }
+    }
+
+    // --- Gmail Cloud Backup & Offline Backup Actions ---
+
+    fun onGoogleSignInSuccess(email: String, idToken: String?, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isSyncing.value = true
+            preferencesRepository.setConnectedGmailAccount(email)
+
+            if (com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
+                try {
+                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    if (!idToken.isNullOrEmpty()) {
+                        val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                        auth.signInWithCredential(credential).await()
+                    }
+                    val uid = auth.currentUser?.uid
+                    if (uid != null) {
+                        val restoreResult = backupManager.restoreFromCloud(uid)
+                        if (restoreResult.isSuccess && restoreResult.getOrNull() == true) {
+                            _syncStatusMessage.value = "Settings restored from Google Cloud"
+                        } else {
+                            backupManager.syncToCloud(uid, email)
+                            _syncStatusMessage.value = "Settings backed up to Google Cloud"
+                        }
+                    }
+                } catch (e: Exception) {
+                    _syncStatusMessage.value = "Account connected (Cloud sync notice: ${e.message})"
+                }
+            } else {
+                _syncStatusMessage.value = "Connected to $email"
+            }
+            _isSyncing.value = false
+            onComplete()
+        }
+    }
+
+    fun syncNow(onResult: (Boolean, String) -> Unit) {
+        val email = connectedGmailAccount.value
+        if (email.isNullOrEmpty()) {
+            onResult(false, "No Google account connected.")
+            return
+        }
+        viewModelScope.launch {
+            _isSyncing.value = true
+            if (!com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
+                _isSyncing.value = false
+                onResult(false, "Firebase backend not initialized. Add google-services.json to enable cloud sync.")
+                return@launch
+            }
+            try {
+                val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                val uid = auth.currentUser?.uid
+                if (uid == null) {
+                    _isSyncing.value = false
+                    onResult(false, "Authentication session expired. Please sign in again.")
+                    return@launch
+                }
+                val syncResult = backupManager.syncToCloud(uid, email)
+                _isSyncing.value = false
+                if (syncResult.isSuccess) {
+                    onResult(true, "Cloud backup completed successfully.")
+                } else {
+                    onResult(false, "Cloud sync failed: ${syncResult.exceptionOrNull()?.message}")
+                }
+            } catch (e: Exception) {
+                _isSyncing.value = false
+                onResult(false, "Error: ${e.message}")
+            }
+        }
+    }
+
+    fun signOutGmail() {
+        viewModelScope.launch {
+            if (com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
+                try {
+                    com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+                } catch (e: Exception) {
+                    // Suppress
+                }
+            }
+            preferencesRepository.setConnectedGmailAccount(null)
+        }
+    }
+
+    fun exportOfflineBackup(uri: android.net.Uri, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = backupManager.exportToUri(uri)
+            if (result.isSuccess) {
+                onResult(true, "Backup exported successfully.")
+            } else {
+                onResult(false, "Export failed: ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun importOfflineBackup(uri: android.net.Uri, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = backupManager.importFromUri(uri)
+            if (result.isSuccess && result.getOrNull() == true) {
+                triggerAutoBackup()
+                onResult(true, "Backup imported and applied successfully.")
+            } else {
+                onResult(false, "Import failed: ${result.exceptionOrNull()?.message ?: "Invalid file"}")
+            }
         }
     }
 }
@@ -455,12 +600,13 @@ class FocusViewModel(
 class FocusViewModelFactory(
     private val application: Application,
     private val repository: FocusRepository,
-    private val preferencesRepository: UserPreferencesRepository
+    private val preferencesRepository: UserPreferencesRepository,
+    private val backupManager: com.example.data.backup.BackupManager = (application as FocusApplication).backupManager
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(FocusViewModel::class.java)) {
-            return FocusViewModel(application, repository, preferencesRepository) as T
+            return FocusViewModel(application, repository, preferencesRepository, backupManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

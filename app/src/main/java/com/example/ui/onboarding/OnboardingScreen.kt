@@ -1,5 +1,6 @@
 package com.example.ui.onboarding
 
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -39,9 +40,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
@@ -50,14 +51,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +74,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -79,8 +82,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.R
+import com.example.data.backup.BackupManager
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -120,12 +128,12 @@ fun OnboardingScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF000000))
+            .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding()
             .testTag("onboarding_root")
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Bar with Page Indicators
+            // Top Bar with Indicators
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -145,7 +153,7 @@ fun OnboardingScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color.White
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 } else {
@@ -164,7 +172,7 @@ fun OnboardingScreen(
                                 .height(4.dp)
                                 .width(if (isSelected) 24.dp else 8.dp)
                                 .background(
-                                    color = if (isSelected) Color(0xFF10B981) else Color.White.copy(alpha = 0.25f),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
                                     shape = CircleShape
                                 )
                         )
@@ -174,7 +182,7 @@ fun OnboardingScreen(
                 if (pagerState.currentPage < 3) {
                     Text(
                         text = "Skip",
-                        color = Color.White.copy(alpha = 0.5f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier
@@ -201,16 +209,15 @@ fun OnboardingScreen(
             ) { page ->
                 when (page) {
                     0 -> RealityCheckScreen(isActive = pagerState.currentPage == 0)
-                    1 -> TheArsenalScreen(isActive = pagerState.currentPage == 1)
-                    2 -> InteractiveCommitmentScreen(
-                        isActive = pagerState.currentPage == 2,
+                    1 -> ArsenalCommitmentScreen(
+                        isActive = pagerState.currentPage == 1,
                         currentSelection = selectedCommitment,
                         onSelectCommitment = { choice ->
                             viewModel?.setReclaimedCommitment(choice)
                         }
                     )
-                    3 -> TransparencyPactScreen(
-                        isActive = pagerState.currentPage == 3,
+                    2 -> TransparencyPactScreen(
+                        isActive = pagerState.currentPage == 2,
                         hasUsageStats = hasUsageStats,
                         hasAccessibility = hasAccessibility,
                         hasOverlay = hasOverlay,
@@ -222,17 +229,21 @@ fun OnboardingScreen(
                         onOpenBattery = { PermissionHelper.openBatteryOptimizationSettings(context) },
                         onOpenNotification = { PermissionHelper.openNotificationSettings(context) }
                     )
+                    3 -> CloudBackupScreen(
+                        viewModel = viewModel,
+                        onComplete = onComplete
+                    )
                 }
             }
 
-            // Bottom Navigation Action
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (pagerState.currentPage < 3) {
+            // Bottom Navigation for Pages 0, 1, 2 (Page 3 handles its own primary action and skip)
+            if (pagerState.currentPage < 3) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Button(
                         onClick = {
                             scope.launch {
@@ -245,12 +256,12 @@ fun OnboardingScreen(
                             .testTag("onboarding_next_button"),
                         shape = RoundedCornerShape(27.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
                         )
                     ) {
                         Text(
-                            text = if (pagerState.currentPage == 2) "Review Transparency Pact" else "Continue",
+                            text = if (pagerState.currentPage == 2) "Continue to Cloud Backup" else "Continue",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp
@@ -262,26 +273,6 @@ fun OnboardingScreen(
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                } else {
-                    Button(
-                        onClick = onComplete,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp)
-                            .testTag("onboarding_complete_button"),
-                        shape = RoundedCornerShape(27.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black
-                        )
-                    ) {
-                        Text(
-                            text = "Enter Focus Lock",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        )
-                    }
                 }
             }
         }
@@ -290,9 +281,6 @@ fun OnboardingScreen(
 
 /**
  * Screen 1: The Reality Check
- * Headline: "You are being engineered."
- * Body: "Algorithms are designed to harvest your attention. This tool is your counter-measure to take your mind back."
- * Visual: A minimal geometric shape with a slow, breathing pulse animation.
  */
 @Composable
 private fun RealityCheckScreen(isActive: Boolean) {
@@ -316,6 +304,9 @@ private fun RealityCheckScreen(isActive: Boolean) {
         label = "pulse_alpha"
     )
 
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -323,7 +314,6 @@ private fun RealityCheckScreen(isActive: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Breathing Geometric Shape Canvas
         Box(
             modifier = Modifier.size(180.dp),
             contentAlignment = Alignment.Center
@@ -332,25 +322,22 @@ private fun RealityCheckScreen(isActive: Boolean) {
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val baseRadius = (size.minDimension / 2f) * 0.72f
 
-                // Outer pulsing breathing ring
                 drawCircle(
-                    color = Color.White.copy(alpha = pulseAlpha * 0.45f),
+                    color = primaryColor.copy(alpha = pulseAlpha * 0.45f),
                     radius = baseRadius * pulseScale,
                     center = center,
                     style = Stroke(width = 2.dp.toPx())
                 )
 
-                // Middle sharp geometric diamond/square
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.9f),
+                    color = onSurfaceColor.copy(alpha = 0.9f),
                     radius = baseRadius * 0.55f,
                     center = center,
                     style = Stroke(width = 3.dp.toPx())
                 )
 
-                // Core solid white focus point
                 drawCircle(
-                    color = Color.White,
+                    color = primaryColor,
                     radius = 5.dp.toPx(),
                     center = center
                 )
@@ -366,7 +353,7 @@ private fun RealityCheckScreen(isActive: Boolean) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "You are being engineered.",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
@@ -378,7 +365,7 @@ private fun RealityCheckScreen(isActive: Boolean) {
 
                 Text(
                     text = "Algorithms are designed to harvest your attention. This tool is your counter-measure to take your mind back.",
-                    color = Color(0xFFCCCCCC),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Normal,
                     lineHeight = 25.sp,
@@ -391,76 +378,10 @@ private fun RealityCheckScreen(isActive: Boolean) {
 }
 
 /**
- * Screen 2: The Arsenal
- * Headline: "Friction is Freedom."
- * Body: "We intercept your doomscroll, detect restricted keywords, and force you to confront your own impulses. No easy bypasses. No negotiating with weakness."
+ * Screen 2: The Arsenal & Interactive Commitment
  */
 @Composable
-private fun TheArsenalScreen(isActive: Boolean) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        // Minimalist geometric shield symbol
-        Box(
-            modifier = Modifier
-                .size(120.dp)
-                .background(Color(0xFF111111), CircleShape)
-                .clip(CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Shield,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(54.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(48.dp))
-
-        AnimatedVisibility(
-            visible = isActive,
-            enter = fadeIn(tween(600)) + slideInVertically(tween(600)) { 40 }
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "Friction is Freedom.",
-                    color = Color.White,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    letterSpacing = (-0.5).sp,
-                    modifier = Modifier.testTag("the_arsenal_headline")
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                Text(
-                    text = "We intercept your doomscroll, detect restricted keywords, and force you to confront your own impulses. No easy bypasses. No negotiating with weakness.",
-                    color = Color(0xFFCCCCCC),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Normal,
-                    lineHeight = 25.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("the_arsenal_body")
-                )
-            }
-        }
-    }
-}
-
-/**
- * Screen 3: The Interactive Commitment
- * Headline: "What are you reclaiming today?"
- * Action: Three large selectable buttons: My Time, My Focus, or My Discipline.
- * Logic: Save this selection locally via Android DataStore.
- */
-@Composable
-private fun InteractiveCommitmentScreen(
+private fun ArsenalCommitmentScreen(
     isActive: Boolean,
     currentSelection: String,
     onSelectCommitment: (String) -> Unit
@@ -475,35 +396,52 @@ private fun InteractiveCommitmentScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        Surface(
+            modifier = Modifier.size(80.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Default.Shield,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         AnimatedVisibility(
             visible = isActive,
             enter = fadeIn(tween(500)) + slideInVertically(tween(500)) { 30 }
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "What are you reclaiming today?",
-                    color = Color.White,
+                    text = "Friction is Freedom.",
+                    color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 26.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
                     letterSpacing = (-0.5).sp,
-                    modifier = Modifier.testTag("commitment_headline")
+                    modifier = Modifier.testTag("the_arsenal_headline")
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = "Declare your primary intention. It will anchor every friction screen and intervention.",
-                    color = Color(0xFFAAAAAA),
+                    text = "We intercept doomscrolls and block impulse openings. What are you reclaiming today?",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp,
                     lineHeight = 22.sp,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(36.dp))
+                Spacer(modifier = Modifier.height(28.dp))
 
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     options.forEach { option ->
@@ -511,10 +449,10 @@ private fun InteractiveCommitmentScreen(
                         Surface(
                             onClick = { onSelectCommitment(option) },
                             shape = RoundedCornerShape(16.dp),
-                            color = if (isSelected) Color(0xFF1E1E1E) else Color(0xFF0F0F0F),
+                            color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface,
                             border = BorderStroke(
                                 width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) Color.White else Color(0xFF262626)
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -523,24 +461,23 @@ private fun InteractiveCommitmentScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 20.dp, horizontal = 22.dp),
+                                    .padding(vertical = 18.dp, horizontal = 20.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = option,
-                                    color = if (isSelected) Color.White else Color(0xFFCCCCCC),
-                                    fontSize = 18.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    letterSpacing = 0.5.sp
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 17.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
 
                                 if (isSelected) {
                                     Icon(
                                         imageVector = Icons.Default.CheckCircle,
                                         contentDescription = "Selected",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(24.dp)
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                             }
@@ -553,8 +490,7 @@ private fun InteractiveCommitmentScreen(
 }
 
 /**
- * Screen 4: The Transparency Pact (Google Play Prominent Disclosure)
- * Full 5-permission deck with interactive status cards.
+ * Screen 3: The Transparency Pact (Permissions)
  */
 @Composable
 private fun TransparencyPactScreen(
@@ -587,7 +523,7 @@ private fun TransparencyPactScreen(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "We need teeth to fight back.",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
@@ -599,7 +535,7 @@ private fun TransparencyPactScreen(
 
                 Text(
                     text = "To dismantle habit loops and reliably enforce focus friction, Focus Lock requires 5 system permissions.",
-                    color = Color(0xFFAAAAAA),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                     lineHeight = 19.sp,
                     textAlign = TextAlign.Center
@@ -607,7 +543,6 @@ private fun TransparencyPactScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // 1. Usage Access
                 TransparencyDisclosureCard(
                     title = "1. Usage Access",
                     disclosure = "To detect active foreground apps in real time.",
@@ -620,7 +555,6 @@ private fun TransparencyPactScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 2. Accessibility Service
                 TransparencyDisclosureCard(
                     title = "2. Accessibility Service",
                     disclosure = "To intercept restricted screen events and draw the full-screen barrier.",
@@ -633,7 +567,6 @@ private fun TransparencyPactScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 3. Display Over Other Apps
                 TransparencyDisclosureCard(
                     title = "3. Display Over Other Apps",
                     disclosure = "Required to immediately render overlays over third-party applications.",
@@ -646,7 +579,6 @@ private fun TransparencyPactScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 4. Battery Optimization Bypass
                 TransparencyDisclosureCard(
                     title = "4. Battery Optimization Bypass",
                     disclosure = "Prevents aggressive OEM background task killers from stopping the blocker service.",
@@ -659,7 +591,6 @@ private fun TransparencyPactScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 5. Post Notifications
                 TransparencyDisclosureCard(
                     title = "5. Post Notifications",
                     disclosure = "Ensures foreground service notifications run reliably without silent termination.",
@@ -672,11 +603,10 @@ private fun TransparencyPactScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Privacy Promise Card
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = Color(0xFF0D0E11),
-                    border = BorderStroke(1.dp, Color(0xFF22262F)),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("privacy_promise_card")
@@ -688,21 +618,21 @@ private fun TransparencyPactScreen(
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = Color(0xFF10B981),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
                                 text = "Privacy Promise",
-                                color = Color.White,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Everything operates strictly on your local device. We do not track or export your data.",
-                                color = Color(0xFFCCCCCC),
+                                text = "Everything operates strictly on your local device. We do not sell or track your personal activity.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp
                             )
@@ -711,6 +641,220 @@ private fun TransparencyPactScreen(
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Screen 4: Cloud Backup with Gmail
+ */
+@Composable
+private fun CloudBackupScreen(
+    viewModel: FocusViewModel?,
+    onComplete: () -> Unit
+) {
+    val context = LocalContext.current
+    var isSigningIn by remember { mutableStateOf(false) }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isSigningIn = false
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            val email = account?.email ?: "User"
+            val idToken = account?.idToken
+            Toast.makeText(context, "Connected as $email", Toast.LENGTH_SHORT).show()
+            viewModel?.onGoogleSignInSuccess(email, idToken) {
+                onComplete()
+            } ?: onComplete()
+        } catch (e: Exception) {
+            val lastAccount = GoogleSignIn.getLastSignedInAccount(context)
+            if (lastAccount?.email != null) {
+                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken) {
+                    onComplete()
+                } ?: onComplete()
+            } else {
+                Toast.makeText(context, "Sign-in cancelled. You can set up cloud backup anytime in Settings.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun launchGoogleSignIn() {
+        isSigningIn = true
+        val webClientId = BackupManager.getDefaultWebClientId(context)
+        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+
+        if (!webClientId.isNullOrEmpty()) {
+            gsoBuilder.requestIdToken(webClientId)
+        }
+
+        val client = GoogleSignIn.getClient(context, gsoBuilder.build())
+        googleSignInLauncher.launch(client.signInIntent)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp)
+            .testTag("onboarding_cloud_backup_screen")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 72.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Surface(
+                modifier = Modifier.size(92.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_cloud_backup),
+                        contentDescription = "Cloud Backup",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(46.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Text(
+                text = "Cloud Backup with Gmail",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag("cloud_backup_headline")
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Never lose your configuration. Your screen limits, schedules, app groups, and strict mode preferences sync securely with your Google account.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                lineHeight = 22.sp
+            )
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Instant Silent Restore on Reinstall",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Anti-Tamper & Strict Mode Protected",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(36.dp))
+
+            // Primary Action: Sign in with Google
+            Button(
+                onClick = { launchGoogleSignIn() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .testTag("onboarding_google_signin_button"),
+                shape = RoundedCornerShape(27.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ),
+                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+            ) {
+                if (isSigningIn) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_google_logo),
+                        contentDescription = "Google",
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Sign in with Google",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
+        // Bottom-Right Anchored Skip Button
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 16.dp, end = 4.dp)
+        ) {
+            OutlinedButton(
+                onClick = onComplete,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                modifier = Modifier.testTag("onboarding_skip_backup_button")
+            ) {
+                Text(
+                    text = "Skip for Now",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp)
+                )
             }
         }
     }
@@ -728,10 +872,10 @@ private fun TransparencyDisclosureCard(
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = Color(0xFF0D0E11),
+        color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(
             width = if (isGranted) 1.5.dp else 1.dp,
-            color = if (isGranted) Color(0xFF10B981) else Color(0xFF22262F)
+            color = if (isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -750,13 +894,13 @@ private fun TransparencyDisclosureCard(
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = if (isGranted) Color(0xFF10B981) else Color(0xFFB0B0B0),
+                        tint = if (isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = title,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -765,14 +909,14 @@ private fun TransparencyDisclosureCard(
                 if (isGranted) {
                     Surface(
                         shape = CircleShape,
-                        color = Color(0xFF064E3B),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                         modifier = Modifier.size(24.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = "Granted",
-                                tint = Color(0xFF10B981),
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -784,7 +928,7 @@ private fun TransparencyDisclosureCard(
 
             Text(
                 text = disclosure,
-                color = Color(0xFF9E9E9E),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 lineHeight = 18.sp
             )
@@ -795,10 +939,10 @@ private fun TransparencyDisclosureCard(
                 OutlinedButton(
                     onClick = onAction,
                     shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color(0xFF141519),
-                        contentColor = Color(0xFF10B981)
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                        contentColor = MaterialTheme.colorScheme.primary
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -816,13 +960,13 @@ private fun TransparencyDisclosureCard(
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = null,
-                        tint = Color(0xFF10B981),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Configured & Active",
-                        color = Color(0xFF10B981),
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )

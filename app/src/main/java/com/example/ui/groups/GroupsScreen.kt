@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -132,17 +133,63 @@ fun GroupsScreen(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Schedules & Daily (${scheduleGroups.size})") },
-                    icon = { Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    modifier = Modifier.testTag("tab_schedules_daily")
-                )
+                    modifier = Modifier.testTag("tab_schedules_daily"),
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Schedules & Daily (${scheduleGroups.size})",
+                            maxLines = 1,
+                            softWrap = false,
+                            fontSize = 13.sp,
+                            letterSpacing = (-0.2).sp,
+                            fontWeight = if (selectedTab == 0) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
+                }
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("Session Groups (${sessionGroups.size})") },
-                    icon = { Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    modifier = Modifier.testTag("tab_session_groups")
-                )
+                    modifier = Modifier.testTag("tab_session_groups"),
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HourglassBottom,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Session Groups (${sessionGroups.size})",
+                            maxLines = 1,
+                            softWrap = false,
+                            fontSize = 13.sp,
+                            letterSpacing = (-0.2).sp,
+                            fontWeight = if (selectedTab == 1) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
+                }
             }
 
             LazyColumn(

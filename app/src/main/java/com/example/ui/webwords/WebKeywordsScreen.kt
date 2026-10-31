@@ -84,15 +84,63 @@ fun WebKeywordsScreen(
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("Websites (${websites.size})") },
-                icon = { Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp)) }
-            )
+                modifier = Modifier.testTag("tab_websites"),
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Websites (${websites.size})",
+                        maxLines = 1,
+                        softWrap = false,
+                        fontSize = 13.sp,
+                        letterSpacing = (-0.2).sp,
+                        fontWeight = if (selectedTab == 0) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text("Keywords (${keywords.size})") },
-                icon = { Icon(Icons.Default.TextFields, contentDescription = null, modifier = Modifier.size(18.dp)) }
-            )
+                modifier = Modifier.testTag("tab_keywords"),
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.TextFields,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Keywords (${keywords.size})",
+                        maxLines = 1,
+                        softWrap = false,
+                        fontSize = 13.sp,
+                        letterSpacing = (-0.2).sp,
+                        fontWeight = if (selectedTab == 1) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
         }
 
         LazyColumn(

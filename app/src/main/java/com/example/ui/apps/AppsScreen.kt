@@ -55,6 +55,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.AppInfo
@@ -132,21 +133,93 @@ fun AppsScreen(
             Tab(
                 selected = selectedSubTab == 0,
                 onClick = { selectedSubTab = 0 },
-                text = { Text("Hard Block (${blockedApps.size})") },
-                icon = { Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp)) }
-            )
+                modifier = Modifier.testTag("tab_hard_block"),
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Hard Block (${blockedApps.size})",
+                        maxLines = 1,
+                        softWrap = false,
+                        fontSize = 13.sp,
+                        letterSpacing = (-0.2).sp,
+                        fontWeight = if (selectedSubTab == 0) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
             Tab(
                 selected = selectedSubTab == 1,
                 onClick = { selectedSubTab = 1 },
-                text = { Text("Screen Time ($dailyLimitsCount)") },
-                icon = { Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(18.dp)) }
-            )
+                modifier = Modifier.testTag("tab_screen_time"),
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.HourglassBottom,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Screen Time ($dailyLimitsCount)",
+                        maxLines = 1,
+                        softWrap = false,
+                        fontSize = 13.sp,
+                        letterSpacing = (-0.2).sp,
+                        fontWeight = if (selectedSubTab == 1) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
             Tab(
                 selected = selectedSubTab == 2,
                 onClick = { selectedSubTab = 2 },
-                text = { Text("Session ($sessionLimitsCount)") },
-                icon = { Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp)) }
-            )
+                modifier = Modifier.testTag("tab_session_limits"),
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Session ($sessionLimitsCount)",
+                        maxLines = 1,
+                        softWrap = false,
+                        fontSize = 13.sp,
+                        letterSpacing = (-0.2).sp,
+                        fontWeight = if (selectedSubTab == 2) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
         }
 
         // Search Bar

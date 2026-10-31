@@ -45,13 +45,16 @@ class BackupManager(
             }
         }
 
-        fun getDefaultWebClientId(context: Context): String? {
-            return try {
+        const val DEFAULT_WEB_CLIENT_ID = "582909401822-va6q6bhbubp23arcivuu7d2o2dt0ctoo.apps.googleusercontent.com"
+
+        fun getDefaultWebClientId(context: Context): String {
+            val dynamicId = try {
                 val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
                 if (resId != 0) context.getString(resId) else null
             } catch (e: Throwable) {
                 null
             }
+            return if (!dynamicId.isNullOrEmpty()) dynamicId else DEFAULT_WEB_CLIENT_ID
         }
 
         fun getSha1Fingerprint(context: Context): String {

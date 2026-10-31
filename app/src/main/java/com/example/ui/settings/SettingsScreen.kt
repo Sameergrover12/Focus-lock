@@ -195,10 +195,9 @@ fun SettingsScreen(
 
     fun launchGoogleSignIn() {
         val webClientId = BackupManager.getDefaultWebClientId(context)
-        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).requestEmail()
-        if (!webClientId.isNullOrEmpty()) {
-            gsoBuilder.requestIdToken(webClientId)
-        }
+        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
+            .requestEmail()
         val client = GoogleSignIn.getClient(context, gsoBuilder.build())
         googleSignInLauncher.launch(client.signInIntent)
     }
@@ -1184,8 +1183,6 @@ private fun BackupRestoreDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val isFirebaseReady = remember { BackupManager.isFirebaseAvailable(context) }
-    val sha1Fingerprint = remember { BackupManager.getSha1Fingerprint(context) }
     val formattedLastBackup = remember(lastCloudBackupTime) {
         if (lastCloudBackupTime > 0) {
             SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()).format(Date(lastCloudBackupTime))
@@ -1369,83 +1366,6 @@ private fun BackupRestoreDialog(
                                 Text("Sign in with Google", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             }
                         }
-
-                        // Developer Setup Helper
-                        if (!isFirebaseReady) {
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("developer_setup_helper_card")
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.Info,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = "Developer Setup Helper",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = "Package: ${context.packageName}",
-                                        fontSize = 11.sp,
-                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "SHA-1: $sha1Fingerprint",
-                                        fontSize = 10.sp,
-                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Button(
-                                        onClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            val clip = ClipData.newPlainText("Firebase Config", "Package: ${context.packageName}\nSHA-1: $sha1Fingerprint")
-                                            clipboard.setPrimaryClip(clip)
-                                            Toast.makeText(context, "Copied Package & SHA-1 to Clipboard", Toast.LENGTH_SHORT).show()
-                                        },
-                                        shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary,
-                                            contentColor = MaterialTheme.colorScheme.onPrimary
-                                        ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .testTag("copy_sha1_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Copy Package & SHA-1", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "Add this SHA-1 in your Firebase Console and place google-services.json in /app to activate cloud syncing.",
-                                        fontSize = 10.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        lineHeight = 14.sp
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -1480,11 +1400,13 @@ private fun BackupRestoreDialog(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Button(
                                 onClick = onExportJson,
                                 shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.primary,
                                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -1493,18 +1415,30 @@ private fun BackupRestoreDialog(
                                     .weight(1f)
                                     .testTag("export_backup_button")
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.FileDownload,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Export .json", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FileDownload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Export .json",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
                             }
 
                             OutlinedButton(
                                 onClick = onImportJson,
                                 shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurface
@@ -1513,13 +1447,24 @@ private fun BackupRestoreDialog(
                                     .weight(1f)
                                     .testTag("import_backup_button")
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.FileUpload,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Import .json", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FileUpload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Import .json",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
                             }
                         }
 

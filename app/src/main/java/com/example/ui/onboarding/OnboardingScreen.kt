@@ -686,11 +686,8 @@ private fun CloudBackupScreen(
         isSigningIn = true
         val webClientId = BackupManager.getDefaultWebClientId(context)
         val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
             .requestEmail()
-
-        if (!webClientId.isNullOrEmpty()) {
-            gsoBuilder.requestIdToken(webClientId)
-        }
 
         val client = GoogleSignIn.getClient(context, gsoBuilder.build())
         googleSignInLauncher.launch(client.signInIntent)

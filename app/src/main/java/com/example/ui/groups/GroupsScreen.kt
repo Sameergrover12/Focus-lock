@@ -714,7 +714,7 @@ private fun MemberAppIconsRow(memberApps: List<com.example.data.model.AppInfo>) 
                         .clip(CircleShape)
                         .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
                 ) {
-                    AppIconImage(icon = app.icon, modifier = Modifier.fillMaxSize())
+                    AppIconImage(icon = app.icon, packageName = app.packageName, modifier = Modifier.fillMaxSize())
                 }
             }
         }

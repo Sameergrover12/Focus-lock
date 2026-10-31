@@ -1,10 +1,14 @@
 package com.example.data.backup
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import com.example.data.local.FocusDatabase
 import com.example.data.local.entity.AppGroup
 import com.example.data.local.entity.BlockedApp
@@ -12,12 +16,18 @@ import com.example.data.local.entity.BlockedKeyword
 import com.example.data.local.entity.BlockedWebsite
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
-import com.example.ui.theme.BaseThemeMode
-import com.example.ui.theme.SecondaryThemePalette
-import com.example.data.preferences.ThemeMode
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FocusRepository
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -26,6 +36,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BackupManager(
     private val context: Context,
@@ -35,7 +46,8 @@ class BackupManager(
     companion object {
         private const val TAG = "BackupManager"
         const val BACKUP_VERSION = 1
-        const val FIRESTORE_COLLECTION = "user_backups"
+        const val FIRESTORE_USERS_COLLECTION = "users"
+        const val FIRESTORE_LEGACY_COLLECTION = "user_backups"
 
         fun isFirebaseAvailable(context: Context): Boolean {
             return try {
@@ -84,6 +96,64 @@ class BackupManager(
                 digest.joinToString(":") { "%02X".format(it) }
             } catch (e: Exception) {
                 "Error retrieving SHA-1: ${e.message}"
+            }
+        }
+    }
+
+    // Critical race-condition guard: prevents fresh installs from reverse overwriting cloud backup
+    val isRestoringFromCloud = AtomicBoolean(false)
+
+    // Global reactive restore version: incremented on cloud or JSON restore to reload UI state immediately
+    private val _restoreVersion = MutableStateFlow(0)
+    val restoreVersion: StateFlow<Int> = _restoreVersion.asStateFlow()
+
+    // 400ms Debounce scope on Dispatchers.IO
+    private val backupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var autoBackupJob: Job? = null
+
+    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (!isRestoringFromCloud.get() && key != "last_cloud_backup_time") {
+            scheduleAutoBackup()
+        }
+    }
+
+    init {
+        try {
+            val syncPrefs = context.getSharedPreferences(UserPreferencesRepository.SYNC_PREFS_NAME, Context.MODE_PRIVATE)
+            syncPrefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register OnSharedPreferenceChangeListener", e)
+        }
+    }
+
+    /**
+     * Schedules an auto-backup to Firestore with a 400ms debounce on Dispatchers.IO.
+     * Backs up automatically whenever a Google account is connected, independent of Focus Protection.
+     */
+    fun scheduleAutoBackup(context: Context? = null) {
+        if (isRestoringFromCloud.get()) {
+            Log.d(TAG, "scheduleAutoBackup skipped: restore in progress")
+            return
+        }
+
+        autoBackupJob?.cancel()
+        autoBackupJob = backupScope.launch {
+            delay(400) // 400ms debounce
+            if (isRestoringFromCloud.get()) return@launch
+
+            val email = preferencesRepository.getConnectedGmailAccountSync()
+                ?: try { preferencesRepository.connectedGmailAccount.first() } catch (e: Exception) { null }
+            if (email.isNullOrEmpty()) return@launch
+
+            val targetContext = context ?: this@BackupManager.context
+            if (isFirebaseAvailable(targetContext)) {
+                try {
+                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    val uid = auth.currentUser?.uid ?: return@launch
+                    syncToCloud(uid, email)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Silent auto-backup notice: ${e.message}")
+                }
             }
         }
     }
@@ -337,44 +407,14 @@ class BackupManager(
                 }
             }
 
-            // 7. Preferences
+            // 7. Preferences (Synchronously committed to disk)
             if (root.has("preferences")) {
                 val prefs = root.getJSONObject("preferences")
-                if (prefs.has("base_theme_mode")) {
-                    val modeName = prefs.getString("base_theme_mode")
-                    BaseThemeMode.entries.find { it.name == modeName }?.let {
-                        preferencesRepository.setBaseThemeMode(it)
-                    }
-                }
-                if (prefs.has("secondary_palette")) {
-                    val paletteName = prefs.getString("secondary_palette")
-                    SecondaryThemePalette.entries.find { it.name == paletteName }?.let {
-                        preferencesRepository.setSecondaryPalette(it)
-                    }
-                }
-                if (prefs.has("master_enabled")) {
-                    preferencesRepository.setMasterEnabled(prefs.getBoolean("master_enabled"))
-                }
-                if (prefs.has("cheat_protection_enabled")) {
-                    val enabled = prefs.getBoolean("cheat_protection_enabled")
-                    val hash = prefs.optString("cheat_protection_hash", null)
-                    val salt = prefs.optString("cheat_protection_salt", null)
-                    preferencesRepository.restoreCheatProtection(enabled, hash, salt)
-                }
-                if (prefs.has("invincible_mode_enabled")) {
-                    preferencesRepository.setInvincibleModeEnabled(prefs.getBoolean("invincible_mode_enabled"))
-                }
-                if (prefs.has("clock_tamper_protection_enabled")) {
-                    preferencesRepository.setClockTamperProtectionEnabled(prefs.getBoolean("clock_tamper_protection_enabled"))
-                }
-                if (prefs.has("reclaimed_commitment")) {
-                    preferencesRepository.setReclaimedCommitment(prefs.getString("reclaimed_commitment"))
-                }
-                if (prefs.has("cognitive_passphrase")) {
-                    preferencesRepository.setCognitivePassphrase(prefs.getString("cognitive_passphrase"))
-                }
+                preferencesRepository.restorePreferencesSync(prefs)
             }
 
+            // Signal all UI screens to update
+            _restoreVersion.value++
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restore backup from JSON", e)
@@ -417,7 +457,12 @@ class BackupManager(
                 }
             }
             val success = restoreFromJson(content.toString())
-            if (success) Result.success(true) else Result.failure(Exception("Failed to parse backup content"))
+            if (success) {
+                scheduleAutoBackup()
+                Result.success(true)
+            } else {
+                Result.failure(Exception("Failed to parse backup content"))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to import backup from URI: $uri", e)
             Result.failure(e)
@@ -425,9 +470,13 @@ class BackupManager(
     }
 
     /**
-     * Syncs backup data silently to Cloud Firestore.
+     * Syncs backup data silently to Cloud Firestore users/{uid} and user_backups/{uid}.
      */
     suspend fun syncToCloud(uid: String, email: String?): Result<Long> = withContext(Dispatchers.IO) {
+        if (isRestoringFromCloud.get()) {
+            return@withContext Result.failure(Exception("Cannot upload while restoring from cloud"))
+        }
+
         if (!isFirebaseAvailable(context)) {
             return@withContext Result.failure(Exception("Firebase is not initialized. Please ensure google-services.json is configured."))
         }
@@ -445,7 +494,16 @@ class BackupManager(
                 "version" to BACKUP_VERSION
             )
 
-            firestore.collection(FIRESTORE_COLLECTION).document(uid).set(docData).await()
+            // Primary storage: users/{uid}
+            firestore.collection(FIRESTORE_USERS_COLLECTION).document(uid).set(docData).await()
+
+            // Backwards compatibility fallback: user_backups/{uid}
+            try {
+                firestore.collection(FIRESTORE_LEGACY_COLLECTION).document(uid).set(docData).await()
+            } catch (e: Exception) {
+                // Secondary fallback failure is ignored
+            }
+
             preferencesRepository.setLastCloudBackupTime(now)
             Result.success(now)
         } catch (e: Exception) {
@@ -455,32 +513,69 @@ class BackupManager(
     }
 
     /**
-     * Restores backup silently from Cloud Firestore if a backup exists.
+     * Restores backup silently from Cloud Firestore (users/{uid} or user_backups/{uid}).
+     * Uses Source.SERVER first to retrieve newest settings.
+     * Prevents race-condition overwrites using isRestoringFromCloud.
      */
-    suspend fun restoreFromCloud(uid: String): Result<Boolean> = withContext(Dispatchers.IO) {
+    suspend fun restoreFromCloud(uid: String, email: String? = null): Result<Boolean> = withContext(Dispatchers.IO) {
         if (!isFirebaseAvailable(context)) {
             return@withContext Result.failure(Exception("Firebase is not initialized."))
         }
 
-        return@withContext try {
+        isRestoringFromCloud.set(true)
+        try {
             val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-            val snapshot = firestore.collection(FIRESTORE_COLLECTION).document(uid).get().await()
 
-            if (snapshot.exists()) {
+            // 1. Fetch users/{uid} from Server first, fallback to default
+            var snapshot: com.google.firebase.firestore.DocumentSnapshot? = try {
+                firestore.collection(FIRESTORE_USERS_COLLECTION).document(uid)
+                    .get(com.google.firebase.firestore.Source.SERVER).await()
+            } catch (e: Exception) {
+                try {
+                    firestore.collection(FIRESTORE_USERS_COLLECTION).document(uid).get().await()
+                } catch (e2: Exception) {
+                    null
+                }
+            }
+
+            // 2. Fallback to legacy user_backups/{uid}
+            if (snapshot == null || !snapshot.exists() || snapshot.getString("backupJson").isNullOrEmpty()) {
+                snapshot = try {
+                    firestore.collection(FIRESTORE_LEGACY_COLLECTION).document(uid)
+                        .get(com.google.firebase.firestore.Source.SERVER).await()
+                } catch (e: Exception) {
+                    try {
+                        firestore.collection(FIRESTORE_LEGACY_COLLECTION).document(uid).get().await()
+                    } catch (e2: Exception) {
+                        null
+                    }
+                }
+            }
+
+            if (snapshot != null && snapshot.exists()) {
                 val jsonString = snapshot.getString("backupJson")
                 val timestamp = snapshot.getLong("timestamp") ?: System.currentTimeMillis()
                 if (!jsonString.isNullOrEmpty()) {
                     val restored = restoreFromJson(jsonString)
                     if (restored) {
                         preferencesRepository.setLastCloudBackupTime(timestamp)
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Cloud backup restored", Toast.LENGTH_SHORT).show()
+                        }
                         return@withContext Result.success(true)
                     }
                 }
             }
-            Result.success(false) // No existing cloud backup found; nothing restored
+
+            // 3. No cloud document exists yet for this account: upload local settings as initial backup
+            val targetEmail = email ?: preferencesRepository.getConnectedGmailAccountSync()
+            syncToCloud(uid, targetEmail)
+            Result.success(false)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restore from Cloud Firestore", e)
             Result.failure(e)
+        } finally {
+            isRestoringFromCloud.set(false)
         }
     }
 }

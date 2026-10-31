@@ -19,25 +19,43 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import com.example.util.AppListLoader
 
 private val iconBitmapCache = LruCache<Drawable, Bitmap>(200)
 
 @Composable
 fun AppIconImage(
-    icon: Drawable?,
+    icon: Drawable? = null,
+    packageName: String? = null,
     modifier: Modifier = Modifier
 ) {
-    val bitmap = remember(icon) {
+    // 1. Check background-preloaded ConcurrentHashMap cache first (zero UI thread computation)
+    val cachedBitmap: ImageBitmap? = remember(packageName) {
+        if (!packageName.isNullOrEmpty()) AppListLoader.getCachedIcon(packageName) else null
+    }
+
+    // 2. If not preloaded, convert and cache
+    val bitmap: ImageBitmap? = cachedBitmap ?: remember(icon, packageName) {
+        if (!packageName.isNullOrEmpty()) {
+            val fromCache = AppListLoader.getCachedIcon(packageName)
+            if (fromCache != null) return@remember fromCache
+        }
         icon?.let { d ->
-            iconBitmapCache.get(d) ?: drawableToBitmap(d).also { iconBitmapCache.put(d, it) }
+            val bmp = iconBitmapCache.get(d) ?: drawableToBitmap(d).also { iconBitmapCache.put(d, it) }
+            val imgBmp = bmp.asImageBitmap()
+            if (!packageName.isNullOrEmpty()) {
+                AppListLoader.putCachedIcon(packageName, imgBmp)
+            }
+            imgBmp
         }
     }
 
     if (bitmap != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = bitmap,
             contentDescription = null,
             modifier = modifier.clip(RoundedCornerShape(10.dp))
         )

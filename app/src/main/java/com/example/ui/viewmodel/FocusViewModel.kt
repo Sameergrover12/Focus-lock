@@ -68,18 +68,7 @@ class FocusViewModel(
     val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
 
     fun triggerAutoBackup() {
-        val email = connectedGmailAccount.value ?: return
-        viewModelScope.launch {
-            if (com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
-                try {
-                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-                    val uid = auth.currentUser?.uid ?: return@launch
-                    backupManager.syncToCloud(uid, email)
-                } catch (e: Exception) {
-                    // Suppress background auto-sync exceptions
-                }
-            }
-        }
+        backupManager.scheduleAutoBackup(getApplication())
     }
 
     // Theme & Onboarding & Master State
@@ -136,6 +125,7 @@ class FocusViewModel(
     fun setClockTamperProtectionEnabled(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setClockTamperProtectionEnabled(enabled)
+            triggerAutoBackup()
         }
     }
 
@@ -166,12 +156,14 @@ class FocusViewModel(
     fun setReclaimedCommitment(commitment: String) {
         viewModelScope.launch {
             preferencesRepository.setReclaimedCommitment(commitment)
+            triggerAutoBackup()
         }
     }
 
     fun setCognitivePassphrase(phrase: String) {
         viewModelScope.launch {
             preferencesRepository.setCognitivePassphrase(phrase)
+            triggerAutoBackup()
         }
     }
 
@@ -198,6 +190,7 @@ class FocusViewModel(
     fun setInvincibleModeEnabled(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setInvincibleModeEnabled(enabled)
+            triggerAutoBackup()
         }
     }
 
@@ -206,18 +199,22 @@ class FocusViewModel(
     }
 
     suspend fun enableCheatProtection(passphrase: String): Boolean {
-        return preferencesRepository.enableCheatProtection(passphrase)
+        val success = preferencesRepository.enableCheatProtection(passphrase)
+        if (success) triggerAutoBackup()
+        return success
     }
 
     fun setCheatProtection(passphrase: String) {
         viewModelScope.launch {
-            preferencesRepository.enableCheatProtection(passphrase)
+            val success = preferencesRepository.enableCheatProtection(passphrase)
+            if (success) triggerAutoBackup()
         }
     }
 
     fun disableCheatProtection() {
         viewModelScope.launch {
             preferencesRepository.disableCheatProtection()
+            triggerAutoBackup()
         }
     }
 
@@ -333,6 +330,16 @@ class FocusViewModel(
     init {
         loadInstalledApps()
         refreshDailyUsageStats()
+
+        // React immediately to Cloud or JSON restore
+        viewModelScope.launch {
+            backupManager.restoreVersion.collect { version ->
+                if (version > 0) {
+                    loadInstalledApps()
+                    refreshDailyUsageStats()
+                }
+            }
+        }
     }
 
     fun refreshDailyUsageStats() {
@@ -354,18 +361,21 @@ class FocusViewModel(
     fun setBaseThemeMode(mode: BaseThemeMode) {
         viewModelScope.launch {
             preferencesRepository.setBaseThemeMode(mode)
+            triggerAutoBackup()
         }
     }
 
     fun setSecondaryPalette(palette: SecondaryThemePalette) {
         viewModelScope.launch {
             preferencesRepository.setSecondaryPalette(palette)
+            triggerAutoBackup()
         }
     }
 
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             preferencesRepository.setThemeMode(mode)
+            triggerAutoBackup()
         }
     }
 
@@ -375,12 +385,14 @@ class FocusViewModel(
             if (enabled) {
                 FocusForegroundService.startService(getApplication())
             }
+            triggerAutoBackup()
         }
     }
 
     fun setOnboardingComplete(complete: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setOnboardingComplete(complete)
+            triggerAutoBackup()
         }
     }
 
@@ -392,18 +404,21 @@ class FocusViewModel(
             } else {
                 repository.unblockApp(app.packageName)
             }
+            triggerAutoBackup()
         }
     }
 
     fun blockApp(packageName: String, appName: String) {
         viewModelScope.launch {
             repository.blockApp(packageName, appName)
+            triggerAutoBackup()
         }
     }
 
     fun unblockApp(packageName: String) {
         viewModelScope.launch {
             repository.unblockApp(packageName)
+            triggerAutoBackup()
         }
     }
 
@@ -416,36 +431,42 @@ class FocusViewModel(
     ) {
         viewModelScope.launch {
             repository.setScreenTimeLimit(packageName, limitMinutes, sessionLimitSeconds, cooldownSeconds)
+            triggerAutoBackup()
         }
     }
 
     fun setDailyLimit(packageName: String, limitMinutes: Int) {
         viewModelScope.launch {
             repository.setDailyLimit(packageName, limitMinutes)
+            triggerAutoBackup()
         }
     }
 
     fun removeDailyLimit(packageName: String) {
         viewModelScope.launch {
             repository.removeDailyLimit(packageName)
+            triggerAutoBackup()
         }
     }
 
     fun setSessionLimit(packageName: String, sessionLimitSeconds: Int, cooldownSeconds: Int) {
         viewModelScope.launch {
             repository.setSessionLimit(packageName, sessionLimitSeconds, cooldownSeconds)
+            triggerAutoBackup()
         }
     }
 
     fun removeSessionLimit(packageName: String) {
         viewModelScope.launch {
             repository.removeSessionLimit(packageName)
+            triggerAutoBackup()
         }
     }
 
     fun removeAppScreenLimit(packageName: String) {
         viewModelScope.launch {
             repository.removeScreenTimeLimit(packageName)
+            triggerAutoBackup()
         }
     }
 
@@ -453,12 +474,14 @@ class FocusViewModel(
     fun saveGroup(group: AppGroup, memberPackages: List<String>) {
         viewModelScope.launch {
             repository.saveGroup(group, memberPackages)
+            triggerAutoBackup()
         }
     }
 
     fun deleteGroup(groupId: Long) {
         viewModelScope.launch {
             repository.deleteGroup(groupId)
+            triggerAutoBackup()
         }
     }
 
@@ -566,11 +589,10 @@ class FocusViewModel(
                     }
                     val uid = auth.currentUser?.uid
                     if (uid != null) {
-                        val restoreResult = backupManager.restoreFromCloud(uid)
+                        val restoreResult = backupManager.restoreFromCloud(uid, email)
                         if (restoreResult.isSuccess && restoreResult.getOrNull() == true) {
                             _syncStatusMessage.value = "Settings restored from Google Cloud"
                         } else {
-                            backupManager.syncToCloud(uid, email)
                             _syncStatusMessage.value = "Settings backed up to Google Cloud"
                         }
                     }

@@ -20,6 +20,8 @@ class FocusApplication : Application() {
         super.onCreate()
         instance = this
         com.example.util.TimeIntegrityManager.init(this)
+        // Eagerly initialize BackupManager to listen for preferences changes immediately
+        backupManager
         createNotificationChannels()
     }
 

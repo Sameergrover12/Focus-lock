@@ -446,7 +446,7 @@ private fun AppBlockRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AppIconImage(icon = app.icon, modifier = Modifier.size(44.dp))
+            AppIconImage(icon = app.icon, packageName = app.packageName, modifier = Modifier.size(44.dp))
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -516,7 +516,7 @@ private fun AppScreenLimitRow(
                 .padding(14.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AppIconImage(icon = app.icon, modifier = Modifier.size(42.dp))
+                AppIconImage(icon = app.icon, packageName = app.packageName, modifier = Modifier.size(42.dp))
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -609,7 +609,7 @@ private fun AppSessionLimitRow(
                 .padding(14.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AppIconImage(icon = app.icon, modifier = Modifier.size(42.dp))
+                AppIconImage(icon = app.icon, packageName = app.packageName, modifier = Modifier.size(42.dp))
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -764,7 +764,7 @@ private fun DailyLimitDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                AppIconImage(icon = app.icon, modifier = Modifier.size(52.dp))
+                AppIconImage(icon = app.icon, packageName = app.packageName, modifier = Modifier.size(52.dp))
                 Text(
                     text = app.appName,
                     style = MaterialTheme.typography.titleMedium,
@@ -882,7 +882,7 @@ private fun SessionLimitDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 item {
-                    AppIconImage(icon = app.icon, modifier = Modifier.size(52.dp))
+                    AppIconImage(icon = app.icon, packageName = app.packageName, modifier = Modifier.size(52.dp))
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = app.appName,

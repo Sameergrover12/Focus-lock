@@ -184,6 +184,7 @@ fun AppPickerDialog(
                         ) {
                             AppIconImage(
                                 icon = app.icon,
+                                packageName = app.packageName,
                                 modifier = Modifier.size(40.dp)
                             )
                             Spacer(modifier = Modifier.width(12.dp))

@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
             val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
             val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
             val isOnboardingComplete by viewModel.isOnboardingComplete.collectAsStateWithLifecycle()
+            val restoreVersion by viewModel.backupManager.restoreVersion.collectAsStateWithLifecycle()
 
             FocusLockTheme(
                 baseThemeMode = baseThemeMode,

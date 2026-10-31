@@ -17,12 +17,8 @@ android {
     applicationId = "com.aistudio.focuslock.fclk"
     minSdk = 26
     targetSdk = 36
-    val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
-      ?: System.getenv("BUILD_NUMBER")?.toIntOrNull()
-      ?: System.getenv("VERSION_CODE")?.toIntOrNull()
-      ?: 1
-    versionCode = 1000 + runNumber
-    versionName = "1.0.$runNumber"
+    versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1) + 100
+    versionName = "1.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -34,6 +30,12 @@ android {
       keyAlias = "androiddebugkey"
       keyPassword = "android"
     }
+    create("permanentKey") {
+      storeFile = file("focuslock.keystore")
+      storePassword = "focuslock123"
+      keyAlias = "focuslockkey"
+      keyPassword = "focuslock123"
+    }
   }
 
   buildTypes {
@@ -41,9 +43,19 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig = if (file("focuslock.keystore").exists()) {
+        signingConfigs.getByName("permanentKey")
+      } else {
+        signingConfigs.getByName("debug")
+      }
     }
-    debug { signingConfig = signingConfigs.getByName("debug") }
+    debug {
+      signingConfig = if (file("focuslock.keystore").exists()) {
+        signingConfigs.getByName("permanentKey")
+      } else {
+        signingConfigs.getByName("debug")
+      }
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

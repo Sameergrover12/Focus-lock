@@ -28,8 +28,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
 
 import com.example.ui.theme.BaseThemeMode
@@ -68,7 +69,7 @@ class FocusViewModel(
     val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
 
     fun triggerAutoBackup() {
-        backupManager.scheduleAutoBackup(getApplication())
+        backupManager.backupToCloudAsync(getApplication())
     }
 
     // Theme & Onboarding & Master State
@@ -512,12 +513,14 @@ class FocusViewModel(
             onResult(AddRuleResult.AllDuplicates)
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             for (domain in toAdd) {
                 repository.addBlockedWebsite(domain)
             }
             triggerAutoBackup()
-            onResult(AddRuleResult.Added(toAdd.size))
+            withContext(Dispatchers.Main) {
+                onResult(AddRuleResult.Added(toAdd.size))
+            }
         }
     }
 
@@ -553,12 +556,14 @@ class FocusViewModel(
             onResult(AddRuleResult.AllDuplicates)
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             for (kw in toAdd) {
                 repository.addBlockedKeyword(kw, caseSensitive)
             }
             triggerAutoBackup()
-            onResult(AddRuleResult.Added(toAdd.size))
+            withContext(Dispatchers.Main) {
+                onResult(AddRuleResult.Added(toAdd.size))
+            }
         }
     }
 
@@ -578,29 +583,32 @@ class FocusViewModel(
     fun onGoogleSignInSuccess(email: String, idToken: String?, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             _isSyncing.value = true
-            preferencesRepository.setConnectedGmailAccount(email)
+            val normalizedEmail = email.trim().lowercase()
+            preferencesRepository.setConnectedGmailAccount(normalizedEmail)
 
-            if (com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
+            if (com.example.util.FirebaseInitializer.ensureInitialized(getApplication())) {
                 try {
                     val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-                    if (!idToken.isNullOrEmpty()) {
+                    if (!idToken.isNullOrEmpty() && auth.currentUser == null) {
                         val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
                         auth.signInWithCredential(credential).await()
                     }
-                    val uid = auth.currentUser?.uid
-                    if (uid != null) {
-                        val restoreResult = backupManager.restoreFromCloud(uid, email)
-                        if (restoreResult.isSuccess && restoreResult.getOrNull() == true) {
-                            _syncStatusMessage.value = "Settings restored from Google Cloud"
-                        } else {
-                            _syncStatusMessage.value = "Settings backed up to Google Cloud"
-                        }
-                    }
                 } catch (e: Exception) {
-                    _syncStatusMessage.value = "Account connected (Cloud sync notice: ${e.message})"
+                    android.util.Log.w("FocusViewModel", "FirebaseAuth credential notice: ${e.message}")
+                }
+
+                val restoreResult = backupManager.restoreFromCloud(normalizedEmail)
+                if (restoreResult.isSuccess) {
+                    if (restoreResult.getOrNull() == true) {
+                        _syncStatusMessage.value = "Settings restored from Google Cloud"
+                    } else {
+                        _syncStatusMessage.value = "Settings backed up to Google Cloud"
+                    }
+                } else {
+                    _syncStatusMessage.value = "Cloud sync notice: ${restoreResult.exceptionOrNull()?.message}"
                 }
             } else {
-                _syncStatusMessage.value = "Connected to $email"
+                _syncStatusMessage.value = "Connected to $normalizedEmail"
             }
             _isSyncing.value = false
             onComplete()
@@ -608,36 +616,20 @@ class FocusViewModel(
     }
 
     fun syncNow(onResult: (Boolean, String) -> Unit) {
-        val email = connectedGmailAccount.value
+        val email = connectedGmailAccount.value ?: preferencesRepository.getConnectedGmailAccountSync()
         if (email.isNullOrEmpty()) {
             onResult(false, "No Google account connected.")
             return
         }
         viewModelScope.launch {
             _isSyncing.value = true
-            if (!com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
-                _isSyncing.value = false
-                onResult(false, "Firebase backend not initialized. Add google-services.json to enable cloud sync.")
-                return@launch
-            }
-            try {
-                val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-                val uid = auth.currentUser?.uid
-                if (uid == null) {
-                    _isSyncing.value = false
-                    onResult(false, "Authentication session expired. Please sign in again.")
-                    return@launch
-                }
-                val syncResult = backupManager.syncToCloud(uid, email)
-                _isSyncing.value = false
-                if (syncResult.isSuccess) {
-                    onResult(true, "Cloud backup completed successfully.")
-                } else {
-                    onResult(false, "Cloud sync failed: ${syncResult.exceptionOrNull()?.message}")
-                }
-            } catch (e: Exception) {
-                _isSyncing.value = false
-                onResult(false, "Error: ${e.message}")
+            com.example.util.FirebaseInitializer.ensureInitialized(getApplication())
+            val syncResult = backupManager.syncToCloudDirect(email)
+            _isSyncing.value = false
+            if (syncResult.isSuccess) {
+                onResult(true, "Cloud backup completed successfully.")
+            } else {
+                onResult(false, "Cloud sync failed: ${syncResult.exceptionOrNull()?.message}")
             }
         }
     }

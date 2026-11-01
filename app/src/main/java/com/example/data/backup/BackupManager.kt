@@ -1,7 +1,6 @@
 package com.example.data.backup
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -18,6 +17,9 @@ import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FocusRepository
+import com.example.util.FirebaseInitializer
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,14 +49,9 @@ class BackupManager(
         private const val TAG = "BackupManager"
         const val BACKUP_VERSION = 1
         const val FIRESTORE_USERS_COLLECTION = "users"
-        const val FIRESTORE_LEGACY_COLLECTION = "user_backups"
 
         fun isFirebaseAvailable(context: Context): Boolean {
-            return try {
-                com.google.firebase.FirebaseApp.getApps(context).isNotEmpty()
-            } catch (e: Throwable) {
-                false
-            }
+            return FirebaseInitializer.ensureInitialized(context)
         }
 
         const val DEFAULT_WEB_CLIENT_ID = "582909401822-va6q6bhbubp23arcivuu7d2o2dt0ctoo.apps.googleusercontent.com"
@@ -103,7 +100,7 @@ class BackupManager(
     // Critical race-condition guard: prevents fresh installs from reverse overwriting cloud backup
     val isRestoringFromCloud = AtomicBoolean(false)
 
-    // Global reactive restore version: incremented on cloud or JSON restore to reload UI state immediately
+    // Global reactive restore version: incremented ONLY when external Cloud or JSON restore finishes
     private val _restoreVersion = MutableStateFlow(0)
     val restoreVersion: StateFlow<Int> = _restoreVersion.asStateFlow()
 
@@ -111,50 +108,100 @@ class BackupManager(
     private val backupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var autoBackupJob: Job? = null
 
-    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (!isRestoringFromCloud.get() && key != "last_cloud_backup_time") {
-            scheduleAutoBackup()
-        }
-    }
-
-    init {
-        try {
-            val syncPrefs = context.getSharedPreferences(UserPreferencesRepository.SYNC_PREFS_NAME, Context.MODE_PRIVATE)
-            syncPrefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to register OnSharedPreferenceChangeListener", e)
-        }
-    }
-
     /**
-     * Schedules an auto-backup to Firestore with a 400ms debounce on Dispatchers.IO.
+     * Schedules an auto-backup to Firestore with a 400ms debounce purely on Dispatchers.IO.
      * Backs up automatically whenever a Google account is connected, independent of Focus Protection.
      */
-    fun scheduleAutoBackup(context: Context? = null) {
+    fun backupToCloudAsync(context: Context? = null) {
         if (isRestoringFromCloud.get()) {
-            Log.d(TAG, "scheduleAutoBackup skipped: restore in progress")
+            Log.d(TAG, "backupToCloudAsync skipped: restore in progress")
             return
         }
 
         autoBackupJob?.cancel()
-        autoBackupJob = backupScope.launch {
+        autoBackupJob = backupScope.launch(Dispatchers.IO) {
             delay(400) // 400ms debounce
             if (isRestoringFromCloud.get()) return@launch
+
+            val targetContext = context ?: this@BackupManager.context
+            FirebaseInitializer.ensureInitialized(targetContext)
 
             val email = preferencesRepository.getConnectedGmailAccountSync()
                 ?: try { preferencesRepository.connectedGmailAccount.first() } catch (e: Exception) { null }
             if (email.isNullOrEmpty()) return@launch
 
-            val targetContext = context ?: this@BackupManager.context
-            if (isFirebaseAvailable(targetContext)) {
-                try {
-                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-                    val uid = auth.currentUser?.uid ?: return@launch
-                    syncToCloud(uid, email)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Silent auto-backup notice: ${e.message}")
+            try {
+                syncToCloudDirect(email)
+            } catch (e: Exception) {
+                Log.w(TAG, "Silent auto-backup error: ${e.message}")
+            }
+        }
+    }
+
+    fun scheduleAutoBackup(context: Context? = null) {
+        backupToCloudAsync(context)
+    }
+
+    /**
+     * Collects all entries from SharedPreferences into a dynamic JSON object.
+     * Covers all keys dynamically without missing rules or settings.
+     */
+    fun collectAllPrefsJson(): String {
+        val root = JSONObject()
+        val syncPrefs = context.getSharedPreferences(UserPreferencesRepository.SYNC_PREFS_NAME, Context.MODE_PRIVATE)
+        val allEntries = syncPrefs.all
+        for ((key, value) in allEntries) {
+            if (key == "onboarding_complete" || key == "is_onboarding_completed" || key == "last_cloud_backup_time") continue
+            when (value) {
+                is Boolean -> root.put(key, value)
+                is Int -> root.put(key, value)
+                is Long -> root.put(key, value)
+                is Float -> root.put(key, value.toDouble())
+                is String -> root.put(key, value)
+                is Set<*> -> {
+                    val arr = JSONArray()
+                    for (item in value) {
+                        arr.put(item.toString())
+                    }
+                    root.put(key, arr)
                 }
             }
+        }
+        return root.toString()
+    }
+
+    /**
+     * Restores all entries from a preferences JSON string into SharedPreferences via .apply().
+     */
+    suspend fun restoreFromPrefsJson(jsonString: String) {
+        try {
+            val root = JSONObject(jsonString)
+            val syncPrefs = context.getSharedPreferences(UserPreferencesRepository.SYNC_PREFS_NAME, Context.MODE_PRIVATE)
+            val editor = syncPrefs.edit()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key == "onboarding_complete" || key == "is_onboarding_completed" || key == "last_cloud_backup_time") continue
+                val value = root.get(key)
+                when (value) {
+                    is Boolean -> editor.putBoolean(key, value)
+                    is Int -> editor.putInt(key, value)
+                    is Long -> editor.putLong(key, value)
+                    is Double -> editor.putFloat(key, value.toFloat())
+                    is String -> editor.putString(key, value)
+                    is JSONArray -> {
+                        val set = mutableSetOf<String>()
+                        for (i in 0 until value.length()) {
+                            set.add(value.getString(i))
+                        }
+                        editor.putStringSet(key, set)
+                    }
+                }
+            }
+            editor.apply()
+            preferencesRepository.restorePreferencesSync(root)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restoring from prefs_json", e)
         }
     }
 
@@ -261,7 +308,7 @@ class BackupManager(
 
     /**
      * Restores rules, configurations, limits, and settings from a JSON payload.
-     * CRITICAL: Preserves all active volatile counters (usedMinutesToday, currentSessionUsedMs, cooldownEndTimestamp).
+     * CRITICAL: Preserves all active volatile counters.
      */
     suspend fun restoreFromJson(jsonString: String): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
@@ -295,7 +342,6 @@ class BackupManager(
                         dailyLimitMinutes = obj.optInt("dailyLimitMinutes", 0),
                         sessionLimitSeconds = obj.optInt("sessionLimitSeconds", 0),
                         cooldownSeconds = obj.optInt("cooldownSeconds", 0),
-                        // Preserve active counters!
                         usedMinutesToday = existing?.usedMinutesToday ?: 0,
                         lastResetDate = existing?.lastResetDate ?: todayDate,
                         currentSessionUsedMs = existing?.currentSessionUsedMs ?: 0L,
@@ -336,7 +382,6 @@ class BackupManager(
                         sessionLimitEnabled = obj.optBoolean("sessionLimitEnabled", false),
                         sessionLimitSeconds = obj.optInt("sessionLimitSeconds", 0),
                         cooldownSeconds = obj.optInt("cooldownSeconds", 0),
-                        // Preserve active counters!
                         usedMinutesToday = existing?.usedMinutesToday ?: 0,
                         lastResetDate = existing?.lastResetDate ?: todayDate,
                         currentSessionUsedMs = existing?.currentSessionUsedMs ?: 0L,
@@ -407,14 +452,12 @@ class BackupManager(
                 }
             }
 
-            // 7. Preferences (Synchronously committed to disk)
+            // 7. Preferences (Applied via .apply())
             if (root.has("preferences")) {
                 val prefs = root.getJSONObject("preferences")
                 preferencesRepository.restorePreferencesSync(prefs)
             }
 
-            // Signal all UI screens to update
-            _restoreVersion.value++
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restore backup from JSON", e)
@@ -458,7 +501,8 @@ class BackupManager(
             }
             val success = restoreFromJson(content.toString())
             if (success) {
-                scheduleAutoBackup()
+                _restoreVersion.value++
+                backupToCloudAsync(context)
                 Result.success(true)
             } else {
                 Result.failure(Exception("Failed to parse backup content"))
@@ -470,39 +514,37 @@ class BackupManager(
     }
 
     /**
-     * Syncs backup data silently to Cloud Firestore users/{uid} and user_backups/{uid}.
+     * Uploads backup data directly to Cloud Firestore keyed deterministically by the normalized email address.
+     * Does NOT require or depend on FirebaseAuth.currentUser.
      */
-    suspend fun syncToCloud(uid: String, email: String?): Result<Long> = withContext(Dispatchers.IO) {
+    suspend fun syncToCloudDirect(email: String): Result<Long> = withContext(Dispatchers.IO) {
         if (isRestoringFromCloud.get()) {
             return@withContext Result.failure(Exception("Cannot upload while restoring from cloud"))
         }
 
-        if (!isFirebaseAvailable(context)) {
-            return@withContext Result.failure(Exception("Firebase is not initialized. Please ensure google-services.json is configured."))
-        }
+        FirebaseInitializer.ensureInitialized(context)
 
         return@withContext try {
-            val jsonString = createBackupJson()
+            val normalizedEmail = email.trim().lowercase()
+            val prefsJson = collectAllPrefsJson()
+            val backupJson = createBackupJson()
             val now = System.currentTimeMillis()
-            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            val firestore = FirebaseFirestore.getInstance()
 
             val docData = hashMapOf(
-                "userId" to uid,
-                "email" to (email ?: ""),
+                "email" to normalizedEmail,
+                "signed_in_google_email" to normalizedEmail,
+                "prefs_json" to prefsJson,
+                "backupJson" to backupJson,
+                "updatedAt" to now,
                 "timestamp" to now,
-                "backupJson" to jsonString,
                 "version" to BACKUP_VERSION
             )
 
-            // Primary storage: users/{uid}
-            firestore.collection(FIRESTORE_USERS_COLLECTION).document(uid).set(docData).await()
-
-            // Backwards compatibility fallback: user_backups/{uid}
-            try {
-                firestore.collection(FIRESTORE_LEGACY_COLLECTION).document(uid).set(docData).await()
-            } catch (e: Exception) {
-                // Secondary fallback failure is ignored
-            }
+            firestore.collection(FIRESTORE_USERS_COLLECTION)
+                .document(normalizedEmail)
+                .set(docData)
+                .await()
 
             preferencesRepository.setLastCloudBackupTime(now)
             Result.success(now)
@@ -512,67 +554,85 @@ class BackupManager(
         }
     }
 
+    suspend fun syncToCloud(uid: String, email: String?): Result<Long> {
+        val targetEmail = email ?: preferencesRepository.getConnectedGmailAccountSync()
+        return if (!targetEmail.isNullOrEmpty()) {
+            syncToCloudDirect(targetEmail)
+        } else {
+            Result.failure(Exception("No connected Google account"))
+        }
+    }
+
     /**
-     * Restores backup silently from Cloud Firestore (users/{uid} or user_backups/{uid}).
+     * Restores backup silently from Cloud Firestore users/{normalizedEmail}.
      * Uses Source.SERVER first to retrieve newest settings.
      * Prevents race-condition overwrites using isRestoringFromCloud.
      */
-    suspend fun restoreFromCloud(uid: String, email: String? = null): Result<Boolean> = withContext(Dispatchers.IO) {
-        if (!isFirebaseAvailable(context)) {
-            return@withContext Result.failure(Exception("Firebase is not initialized."))
-        }
+    suspend fun restoreFromCloud(email: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        FirebaseInitializer.ensureInitialized(context)
 
         isRestoringFromCloud.set(true)
         try {
-            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            val normalizedEmail = email.trim().lowercase()
+            preferencesRepository.setConnectedGmailAccount(normalizedEmail)
+            val firestore = FirebaseFirestore.getInstance()
 
-            // 1. Fetch users/{uid} from Server first, fallback to default
+            // 1. Fetch users/{normalizedEmail} from Server first, fallback to default source
             var snapshot: com.google.firebase.firestore.DocumentSnapshot? = try {
-                firestore.collection(FIRESTORE_USERS_COLLECTION).document(uid)
-                    .get(com.google.firebase.firestore.Source.SERVER).await()
+                firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail)
+                    .get(Source.SERVER).await()
             } catch (e: Exception) {
                 try {
-                    firestore.collection(FIRESTORE_USERS_COLLECTION).document(uid).get().await()
+                    firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail).get().await()
                 } catch (e2: Exception) {
                     null
                 }
             }
 
-            // 2. Fallback to legacy user_backups/{uid}
-            if (snapshot == null || !snapshot.exists() || snapshot.getString("backupJson").isNullOrEmpty()) {
-                snapshot = try {
-                    firestore.collection(FIRESTORE_LEGACY_COLLECTION).document(uid)
-                        .get(com.google.firebase.firestore.Source.SERVER).await()
-                } catch (e: Exception) {
-                    try {
-                        firestore.collection(FIRESTORE_LEGACY_COLLECTION).document(uid).get().await()
-                    } catch (e2: Exception) {
-                        null
-                    }
-                }
-            }
-
             if (snapshot != null && snapshot.exists()) {
-                val jsonString = snapshot.getString("backupJson")
-                val timestamp = snapshot.getLong("timestamp") ?: System.currentTimeMillis()
-                if (!jsonString.isNullOrEmpty()) {
-                    val restored = restoreFromJson(jsonString)
-                    if (restored) {
-                        preferencesRepository.setLastCloudBackupTime(timestamp)
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, "Cloud backup restored", Toast.LENGTH_SHORT).show()
-                        }
-                        return@withContext Result.success(true)
+                val prefsJson = snapshot.getString("prefs_json")
+                val backupJson = snapshot.getString("backupJson")
+                val timestamp = snapshot.getLong("updatedAt") ?: snapshot.getLong("timestamp") ?: System.currentTimeMillis()
+
+                var anyRestored = false
+                if (!prefsJson.isNullOrEmpty()) {
+                    restoreFromPrefsJson(prefsJson)
+                    anyRestored = true
+                }
+                if (!backupJson.isNullOrEmpty()) {
+                    val roomRestored = restoreFromJson(backupJson)
+                    if (roomRestored) anyRestored = true
+                }
+
+                if (anyRestored) {
+                    preferencesRepository.setLastCloudBackupTime(timestamp)
+                    _restoreVersion.value++
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(context, "Cloud backup restored!", Toast.LENGTH_SHORT).show()
                     }
+                    return@withContext Result.success(true)
                 }
             }
 
-            // 3. No cloud document exists yet for this account: upload local settings as initial backup
-            val targetEmail = email ?: preferencesRepository.getConnectedGmailAccountSync()
-            syncToCloud(uid, targetEmail)
-            Result.success(false)
+            // 2. Document does not exist yet: upload current local settings as initial backup
+            val syncResult = syncToCloudDirect(normalizedEmail)
+            if (syncResult.isSuccess) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(context, "Cloud backup connected & synced!", Toast.LENGTH_SHORT).show()
+                }
+                Result.success(false)
+            } else {
+                val errorMsg = syncResult.exceptionOrNull()?.message ?: "Unknown cloud sync error"
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(context, "Cloud sync notice: $errorMsg", Toast.LENGTH_LONG).show()
+                }
+                Result.failure(syncResult.exceptionOrNull() ?: Exception(errorMsg))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restore from Cloud Firestore", e)
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, "Cloud sync error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
             Result.failure(e)
         } finally {
             isRestoringFromCloud.set(false)

@@ -19,8 +19,8 @@ class FocusApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        com.example.util.FirebaseInitializer.ensureInitialized(this)
         com.example.util.TimeIntegrityManager.init(this)
-        // Eagerly initialize BackupManager to listen for preferences changes immediately
         backupManager
         createNotificationChannels()
     }

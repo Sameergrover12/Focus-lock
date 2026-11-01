@@ -166,6 +166,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     val connectedGmailAccount: Flow<String?> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT]
+            ?: syncPrefs.getString("signed_in_google_email", null)
             ?: syncPrefs.getString("connected_gmail_account", null)
     }
 
@@ -175,18 +176,24 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     fun getConnectedGmailAccountSync(): String? {
-        return syncPrefs.getString("connected_gmail_account", null)
+        return syncPrefs.getString("signed_in_google_email", null)
+            ?: syncPrefs.getString("connected_gmail_account", null)
     }
 
     suspend fun setConnectedGmailAccount(email: String?) {
         syncPrefs.edit().apply {
-            if (email != null) putString("connected_gmail_account", email)
-            else remove("connected_gmail_account")
-            commit()
+            if (email != null) {
+                putString("signed_in_google_email", email.trim().lowercase())
+                putString("connected_gmail_account", email.trim().lowercase())
+            } else {
+                remove("signed_in_google_email")
+                remove("connected_gmail_account")
+            }
+            apply()
         }
         context.dataStore.edit { preferences ->
             if (email != null) {
-                preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT] = email
+                preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT] = email.trim().lowercase()
             } else {
                 preferences.remove(PreferencesKeys.CONNECTED_GMAIL_ACCOUNT)
             }
@@ -194,7 +201,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setLastCloudBackupTime(timestamp: Long) {
-        syncPrefs.edit().putLong("last_cloud_backup_time", timestamp).commit()
+        syncPrefs.edit().putLong("last_cloud_backup_time", timestamp).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME] = timestamp
         }
@@ -265,10 +272,10 @@ class UserPreferencesRepository(private val context: Context) {
             editor.putString("cognitive_passphrase", prefs.getString("cognitive_passphrase"))
         }
 
-        // Commit synchronously to disk immediately
-        editor.commit()
+        // Apply asynchronously without blocking Main thread
+        editor.apply()
 
-        // Also update DataStore so reactive Compose subscribers receive the new values immediately
+        // Also update DataStore
         context.dataStore.edit { preferences ->
             if (prefs.has("base_theme_mode")) {
                 val modeName = prefs.getString("base_theme_mode")
@@ -326,7 +333,7 @@ class UserPreferencesRepository(private val context: Context) {
                 remove("cheat_protection_hash")
                 remove("cheat_protection_salt")
             }
-            commit()
+            apply()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = enabled
@@ -341,7 +348,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setClockTamperProtectionEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("clock_tamper_protection_enabled", enabled).commit()
+        syncPrefs.edit().putBoolean("clock_tamper_protection_enabled", enabled).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = enabled
         }
@@ -349,7 +356,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setReclaimedCommitment(commitment: String) {
-        syncPrefs.edit().putString("reclaimed_commitment", commitment).commit()
+        syncPrefs.edit().putString("reclaimed_commitment", commitment).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.RECLAIMED_COMMITMENT] = commitment
         }
@@ -357,7 +364,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setCognitivePassphrase(phrase: String) {
         val trimmed = phrase.trim()
-        syncPrefs.edit().putString("cognitive_passphrase", trimmed).commit()
+        syncPrefs.edit().putString("cognitive_passphrase", trimmed).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.COGNITIVE_PASSPHRASE] = trimmed
         }
@@ -457,7 +464,7 @@ class UserPreferencesRepository(private val context: Context) {
                 BaseThemeMode.AMOLED -> ThemeMode.DARK.name
                 BaseThemeMode.SYSTEM_DEFAULT -> ThemeMode.SYSTEM.name
             })
-            commit()
+            apply()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.BASE_THEME_MODE] = mode.name
@@ -471,7 +478,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setSecondaryPalette(palette: SecondaryThemePalette) {
-        syncPrefs.edit().putString("secondary_palette", palette.name).commit()
+        syncPrefs.edit().putString("secondary_palette", palette.name).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.SECONDARY_PALETTE] = palette.name
         }
@@ -485,7 +492,7 @@ class UserPreferencesRepository(private val context: Context) {
                 ThemeMode.DARK -> BaseThemeMode.DARK.name
                 ThemeMode.SYSTEM -> BaseThemeMode.SYSTEM_DEFAULT.name
             })
-            commit()
+            apply()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.THEME_MODE] = mode.name
@@ -498,14 +505,14 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setOnboardingComplete(complete: Boolean) {
-        syncPrefs.edit().putBoolean("onboarding_complete", complete).commit()
+        syncPrefs.edit().putBoolean("onboarding_complete", complete).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.ONBOARDING_COMPLETE] = complete
         }
     }
 
     suspend fun setMasterEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("master_enabled", enabled).commit()
+        syncPrefs.edit().putBoolean("master_enabled", enabled).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.MASTER_ENABLED] = enabled
         }
@@ -521,7 +528,7 @@ class UserPreferencesRepository(private val context: Context) {
             putBoolean("cheat_protection_enabled", true)
             putString("cheat_protection_hash", hash)
             putString("cheat_protection_salt", salt)
-            commit()
+            apply()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = true
@@ -536,7 +543,7 @@ class UserPreferencesRepository(private val context: Context) {
             putBoolean("cheat_protection_enabled", false)
             remove("cheat_protection_hash")
             remove("cheat_protection_salt")
-            commit()
+            apply()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = false
@@ -546,7 +553,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setInvincibleModeEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("invincible_mode_enabled", enabled).commit()
+        syncPrefs.edit().putBoolean("invincible_mode_enabled", enabled).apply()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = enabled
         }

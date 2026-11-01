@@ -75,6 +75,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Explicitly initialize Firebase for Google Cloud Backup & Restore
+        com.example.util.FirebaseInitializer.ensureInitialized(this)
+
         // Start the enforcement background tracking service
         FocusForegroundService.startService(this)
 
@@ -82,7 +85,6 @@ class MainActivity : ComponentActivity() {
             val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
             val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
             val isOnboardingComplete by viewModel.isOnboardingComplete.collectAsStateWithLifecycle()
-            val restoreVersion by viewModel.backupManager.restoreVersion.collectAsStateWithLifecycle()
 
             FocusLockTheme(
                 baseThemeMode = baseThemeMode,
@@ -100,11 +102,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        viewModel.loadInstalledApps()
     }
 }
 

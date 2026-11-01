@@ -518,30 +518,75 @@ class FocusAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private var lastScanTimeMs = 0L
+
+    private fun isInputMethod(pkg: String): Boolean {
+        val lower = pkg.lowercase()
+        return lower.contains("inputmethod") ||
+                lower.contains("keyboard") ||
+                lower.contains("ime") ||
+                pkg == "com.google.android.inputmethod.latin" ||
+                pkg == "com.touchtype.swiftkey" ||
+                pkg == "com.samsung.android.honeyboard" ||
+                pkg == "com.sohu.inputmethod.sogou" ||
+                pkg == "com.baidu.input"
+    }
+
+    private fun isRecognizedBrowserOrMonitored(pkg: String?): Boolean {
+        if (pkg.isNullOrEmpty()) return false
+        if (ContentScanner.BROWSER_URL_BAR_IDS.containsKey(pkg)) return true
+        val lower = pkg.lowercase()
+        if (lower.contains("browser") || lower.contains("chrome") || lower.contains("firefox") || lower.contains("opera") || lower.contains("edge") || lower.contains("brave")) return true
+        return cachedBlockedPackages.contains(pkg) || blockedAppsByPackage.containsKey(pkg) || screenLimitsByPackage.containsKey(pkg) || groupIdsByPackage.containsKey(pkg)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // a. Immediately return if event == null or event.packageName == null
         if (event == null) return
+        val eventPkg = event.packageName?.toString() ?: return
         if (!isMasterEnabled) return
 
         val myPackageName = packageName
-        val eventPkg = event.packageName?.toString()
+        val appPkg = applicationContext.packageName
+
+        // b. Self & System Ignore: Immediately return if event is Focus Lock's own UI, systemui, or keyboard IME
+        if (eventPkg == myPackageName || eventPkg == appPkg || eventPkg == "com.aistudio.focuslock.fclk" || eventPkg == "com.android.systemui") {
+            return
+        }
+        if (isInputMethod(eventPkg)) {
+            return
+        }
+
         val className = event.className?.toString() ?: ""
+        if (className.contains("BlockedActivity")) {
+            return
+        }
+
         val eventType = event.eventType
+
+        // d. Throttle Window Content Scans: run at most once every 300ms and avoid recursive scans for unmonitored apps
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastScanTimeMs < 300L) {
+                return
+            }
+            lastScanTimeMs = now
+
+            if (!isRecognizedBrowserOrMonitored(eventPkg) && !isRecognizedBrowserOrMonitored(currentForegroundPackage)) {
+                return
+            }
+        }
 
         // 0. The Emergency Failsafe System: 10-Minute Hard Cap
         if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
-            if (!eventPkg.isNullOrEmpty() && !isSystemOverlay(eventPkg) && eventPkg != myPackageName) {
+            if (!isSystemOverlay(eventPkg) && eventPkg != myPackageName) {
                 currentForegroundPackage = eventPkg
                 FocusForegroundService.onForegroundPackageChanged(eventPkg)
             }
             return
         }
 
-        // -------------------------------------------------------------------------
-        // 1. FLOATING WINDOW & MULTI-WINDOW BLOCKING ENFORCEMENT:
-        // Do not rely only on event.packageName or rootInActiveWindow. Also iterate
-        // through windows (via getWindows()) and inspect root?.packageName of every
-        // visible interactive window on screen.
-        // -------------------------------------------------------------------------
+        // 1. FLOATING WINDOW & MULTI-WINDOW BLOCKING ENFORCEMENT
         val blockedPkg = findBlockedPackageInVisibleWindows(eventPkg)
         if (blockedPkg != null) {
             if (cachedBlockedPackages.contains(blockedPkg) || blockedAppsByPackage.containsKey(blockedPkg)) {
@@ -549,13 +594,6 @@ class FocusAccessibilityService : AccessibilityService() {
             } else {
                 checkForegroundPackage(blockedPkg)
             }
-            return
-        }
-
-        // Exclude our own app and BlockedActivity itself
-        if (className.contains("BlockedActivity") || eventPkg == myPackageName) {
-            currentForegroundPackage = myPackageName
-            FocusForegroundService.onForegroundPackageChanged(myPackageName)
             return
         }
 

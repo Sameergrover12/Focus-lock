@@ -71,15 +71,15 @@ fun WebKeywordsScreen(
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
     fun submitWebsites() {
-        if (newWebsiteInput.isNotBlank()) {
-            viewModel.addBlockedWebsites(newWebsiteInput) { result ->
+        val input = newWebsiteInput.trim()
+        if (input.isNotBlank()) {
+            newWebsiteInput = "" // Clear text field immediately on Main thread
+            viewModel.addBlockedWebsites(input) { result ->
                 when (result) {
                     is FocusViewModel.AddRuleResult.AllDuplicates -> {
                         Toast.makeText(context, "Website is already in your blocked list", Toast.LENGTH_SHORT).show()
                     }
-                    is FocusViewModel.AddRuleResult.Added -> {
-                        newWebsiteInput = ""
-                    }
+                    is FocusViewModel.AddRuleResult.Added -> {}
                     is FocusViewModel.AddRuleResult.EmptyInput -> {}
                 }
             }
@@ -87,15 +87,15 @@ fun WebKeywordsScreen(
     }
 
     fun submitKeywords() {
-        if (newKeywordInput.isNotBlank()) {
-            viewModel.addBlockedKeywords(newKeywordInput) { result ->
+        val input = newKeywordInput.trim()
+        if (input.isNotBlank()) {
+            newKeywordInput = "" // Clear text field immediately on Main thread
+            viewModel.addBlockedKeywords(input) { result ->
                 when (result) {
                     is FocusViewModel.AddRuleResult.AllDuplicates -> {
                         Toast.makeText(context, "Keyword is already in your blocked list", Toast.LENGTH_SHORT).show()
                     }
-                    is FocusViewModel.AddRuleResult.Added -> {
-                        newKeywordInput = ""
-                    }
+                    is FocusViewModel.AddRuleResult.Added -> {}
                     is FocusViewModel.AddRuleResult.EmptyInput -> {}
                 }
             }

@@ -1,8 +1,10 @@
 package com.example.data.local.entity
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
+@Immutable
 @Entity(tableName = "blocked_apps")
 data class BlockedApp(
     @PrimaryKey val packageName: String,
@@ -10,6 +12,7 @@ data class BlockedApp(
     val dateAdded: Long = System.currentTimeMillis()
 )
 
+@Immutable
 @Entity(tableName = "screen_time_limits")
 data class ScreenTimeLimit(
     @PrimaryKey val packageName: String,
@@ -23,6 +26,7 @@ data class ScreenTimeLimit(
     val cooldownEndTimestamp: Long = 0L
 )
 
+@Immutable
 @Entity(tableName = "app_groups")
 data class AppGroup(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -43,6 +47,7 @@ data class AppGroup(
     val cooldownEndTimestamp: Long = 0L
 )
 
+@Immutable
 @Entity(
     tableName = "group_apps",
     primaryKeys = ["groupId", "packageName"]
@@ -52,6 +57,7 @@ data class GroupApp(
     val packageName: String
 )
 
+@Immutable
 @Entity(tableName = "blocked_websites")
 data class BlockedWebsite(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -59,6 +65,7 @@ data class BlockedWebsite(
     val dateAdded: Long = System.currentTimeMillis()
 )
 
+@Immutable
 @Entity(tableName = "blocked_keywords")
 data class BlockedKeyword(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -67,6 +74,7 @@ data class BlockedKeyword(
     val dateAdded: Long = System.currentTimeMillis()
 )
 
+@Immutable
 @Entity(
     tableName = "daily_usage_logs",
     primaryKeys = ["packageName", "date"]

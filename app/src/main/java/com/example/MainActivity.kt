@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableHighRefreshRate()
         enableEdgeToEdge()
 
         // Explicitly initialize Firebase for Google Cloud Backup & Restore
@@ -102,6 +103,31 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun enableHighRefreshRate() {
+        try {
+            val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                this.display
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay
+            } ?: return
+
+            val supportedModes = display.supportedModes
+            val currentMode = display.mode
+            val highestMode = supportedModes
+                .filter { it.physicalWidth == currentMode.physicalWidth && it.physicalHeight == currentMode.physicalHeight }
+                .maxByOrNull { it.refreshRate }
+                ?: supportedModes.maxByOrNull { it.refreshRate }
+
+            if (highestMode != null) {
+                val layoutParams = window.attributes
+                layoutParams.preferredDisplayModeId = highestMode.modeId
+                layoutParams.preferredRefreshRate = highestMode.refreshRate
+                window.attributes = layoutParams
+            }
+        } catch (_: Exception) {}
     }
 }
 

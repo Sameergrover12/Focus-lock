@@ -19,10 +19,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import com.example.util.AppListLoader
+import com.example.util.ImageUtil
 
 private val iconBitmapCache = LruCache<Drawable, Bitmap>(200)
 
@@ -57,6 +59,7 @@ fun AppIconImage(
         Image(
             bitmap = bitmap,
             contentDescription = null,
+            filterQuality = FilterQuality.Low,
             modifier = modifier.clip(RoundedCornerShape(10.dp))
         )
     } else {
@@ -77,15 +80,5 @@ fun AppIconImage(
 }
 
 private fun drawableToBitmap(drawable: Drawable): Bitmap {
-    if (drawable is BitmapDrawable && drawable.bitmap != null) {
-        return drawable.bitmap
-    }
-
-    val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 72
-    val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 72
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    drawable.setBounds(0, 0, canvas.width, canvas.height)
-    drawable.draw(canvas)
-    return bitmap
+    return ImageUtil.drawableToBitmap(drawable, 96)
 }

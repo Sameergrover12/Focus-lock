@@ -92,21 +92,16 @@ fun WebKeywordsScreen(
     val websitesListState = rememberLazyListState()
     val keywordsListState = rememberLazyListState()
 
-    // 1. Hardware Haptic Feedback: Tier 1 Tick when HorizontalPager settles on a NEW page
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
-            .drop(1)
-            .distinctUntilChanged()
-            .collect {
-                FocusHaptics.tick(view)
-            }
+    // Keyboard dismiss on settled page change
+    LaunchedEffect(pagerState.settledPage) {
+        focusManager.clearFocus()
+        keyboardController?.hide()
     }
 
-    // 2. Auto-Dismiss Keyboard on Horizontal Swipe
+    // Mid-page safety recovery guard
     LaunchedEffect(pagerState.isScrollInProgress) {
-        if (pagerState.isScrollInProgress) {
-            focusManager.clearFocus()
-            keyboardController?.hide()
+        if (!pagerState.isScrollInProgress && kotlin.math.abs(pagerState.currentPageOffsetFraction) > 0.001f) {
+            pagerState.animateScrollToPage(pagerState.currentPage)
         }
     }
 
@@ -335,7 +330,11 @@ fun WebKeywordsScreen(
                             }
                         }
 
-                        items(websites, key = { it.id }) { site ->
+                        items(
+                            items = websites,
+                            key = { it.id },
+                            contentType = { "website_rule_row" }
+                        ) { site ->
                             RuleItemCard(
                                 modifier = Modifier.animateItem(
                                     fadeInSpec = tween(180),
@@ -432,7 +431,11 @@ fun WebKeywordsScreen(
                             }
                         }
 
-                        items(keywords, key = { it.id }) { word ->
+                        items(
+                            items = keywords,
+                            key = { it.id },
+                            contentType = { "keyword_rule_row" }
+                        ) { word ->
                             RuleItemCard(
                                 modifier = Modifier.animateItem(
                                     fadeInSpec = tween(180),

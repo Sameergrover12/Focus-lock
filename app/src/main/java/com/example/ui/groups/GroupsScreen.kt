@@ -64,6 +64,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -98,6 +100,21 @@ fun GroupsScreen(
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val coroutineScope = rememberCoroutineScope()
     val view = LocalView.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Keyboard dismiss on settled page change
+    LaunchedEffect(pagerState.settledPage) {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+
+    // Mid-page safety recovery guard
+    LaunchedEffect(pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress && kotlin.math.abs(pagerState.currentPageOffsetFraction) > 0.001f) {
+            pagerState.animateScrollToPage(pagerState.currentPage)
+        }
+    }
 
     val scheduleGroups by viewModel.scheduleAndDailyGroups.collectAsStateWithLifecycle()
     val sessionGroups by viewModel.sessionGroups.collectAsStateWithLifecycle()
@@ -112,16 +129,6 @@ fun GroupsScreen(
 
     val scheduleListState = rememberLazyListState()
     val sessionGroupListState = rememberLazyListState()
-
-    // 1. Hardware Haptic Feedback: Tier 1 Tick when HorizontalPager settles on a NEW page
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
-            .drop(1)
-            .distinctUntilChanged()
-            .collect {
-                FocusHaptics.tick(view)
-            }
-    }
 
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(
@@ -292,7 +299,11 @@ fun GroupsScreen(
                                 }
                             }
 
-                            items(scheduleGroups, key = { it.group.id }) { groupDetail ->
+                            items(
+                                items = scheduleGroups,
+                                key = { it.group.id },
+                                contentType = { "schedule_group_card" }
+                            ) { groupDetail ->
                                 ScheduleGroupCard(
                                     modifier = Modifier.animateItem(
                                         fadeInSpec = tween(180),
@@ -356,7 +367,11 @@ fun GroupsScreen(
                                 }
                             }
 
-                            items(sessionGroups, key = { it.group.id }) { groupDetail ->
+                            items(
+                                items = sessionGroups,
+                                key = { it.group.id },
+                                contentType = { "session_group_card" }
+                            ) { groupDetail ->
                                 SessionGroupCard(
                                     modifier = Modifier.animateItem(
                                         fadeInSpec = tween(180),

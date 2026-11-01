@@ -33,9 +33,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
 
+import androidx.compose.runtime.Immutable
 import com.example.ui.theme.BaseThemeMode
 import com.example.ui.theme.SecondaryThemePalette
 
+@Immutable
 data class GroupWithAppDetails(
     val group: AppGroup,
     val memberPackages: List<String>,

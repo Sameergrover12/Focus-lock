@@ -111,21 +111,16 @@ fun AppsScreen(
     val screenTimeListState = rememberLazyListState()
     val sessionListState = rememberLazyListState()
 
-    // 1. Hardware Haptic Feedback: Tier 1 Tick when HorizontalPager settles on a NEW page
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
-            .drop(1)
-            .distinctUntilChanged()
-            .collect {
-                FocusHaptics.tick(view)
-            }
+    // Keyboard dismiss on settled page change
+    LaunchedEffect(pagerState.settledPage) {
+        focusManager.clearFocus()
+        keyboardController?.hide()
     }
 
-    // 2. Auto-Dismiss Keyboard on Horizontal Swipe
+    // Mid-page safety recovery guard
     LaunchedEffect(pagerState.isScrollInProgress) {
-        if (pagerState.isScrollInProgress) {
-            focusManager.clearFocus()
-            keyboardController?.hide()
+        if (!pagerState.isScrollInProgress && kotlin.math.abs(pagerState.currentPageOffsetFraction) > 0.001f) {
+            pagerState.animateScrollToPage(pagerState.currentPage)
         }
     }
 
@@ -417,17 +412,14 @@ fun AppsScreen(
                             }
                         }
 
-                        items(sortedHardBlockApps, key = { it.packageName }) { app ->
+                        items(
+                            items = sortedHardBlockApps,
+                            key = { it.packageName },
+                            contentType = { "app_block_row" }
+                        ) { app ->
                             val isBlocked = blockedSet.contains(app.packageName)
                             AppBlockRow(
-                                modifier = Modifier.animateItem(
-                                    fadeInSpec = tween(180),
-                                    fadeOutSpec = tween(150),
-                                    placementSpec = spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMediumLow
-                                    )
-                                ),
+                                modifier = Modifier,
                                 app = app,
                                 isBlocked = isBlocked,
                                 onToggle = { shouldBlock ->
@@ -460,20 +452,17 @@ fun AppsScreen(
                             }
                         }
 
-                        items(sortedDailyLimitApps, key = { it.packageName }) { app ->
+                        items(
+                            items = sortedDailyLimitApps,
+                            key = { it.packageName },
+                            contentType = { "app_screen_limit_row" }
+                        ) { app ->
                             val limitEntity = limitsMap[app.packageName]
                             val usageLog = usageLogsMap[app.packageName]
                             val actualUsedMinutes = usageLog?.minutesUsed
                                 ?: (if (limitEntity?.lastResetDate == todayDateStr) limitEntity.usedMinutesToday else 0)
                             AppScreenLimitRow(
-                                modifier = Modifier.animateItem(
-                                    fadeInSpec = tween(180),
-                                    fadeOutSpec = tween(150),
-                                    placementSpec = spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMediumLow
-                                    )
-                                ),
+                                modifier = Modifier,
                                 app = app,
                                 limitEntity = limitEntity,
                                 usedMinutes = actualUsedMinutes,
@@ -498,17 +487,14 @@ fun AppsScreen(
                             }
                         }
 
-                        items(sortedSessionLimitApps, key = { it.packageName }) { app ->
+                        items(
+                            items = sortedSessionLimitApps,
+                            key = { it.packageName },
+                            contentType = { "app_session_limit_row" }
+                        ) { app ->
                             val limitEntity = limitsMap[app.packageName]
                             AppSessionLimitRow(
-                                modifier = Modifier.animateItem(
-                                    fadeInSpec = tween(180),
-                                    fadeOutSpec = tween(150),
-                                    placementSpec = spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMediumLow
-                                    )
-                                ),
+                                modifier = Modifier,
                                 app = app,
                                 limitEntity = limitEntity,
                                 onConfigure = {

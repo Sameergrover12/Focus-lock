@@ -210,98 +210,102 @@ class BackupManager(
      */
     suspend fun createBackupJson(): String = withContext(Dispatchers.IO) {
         val root = JSONObject()
-        root.put("version", BACKUP_VERSION)
-        root.put("timestamp", System.currentTimeMillis())
+        try {
+            root.put("version", BACKUP_VERSION)
+            root.put("timestamp", System.currentTimeMillis())
 
-        val dao = database.focusDao()
+            val dao = database.focusDao()
 
-        // 1. Blocked Apps
-        val blockedAppsArray = JSONArray()
-        dao.getAllBlockedAppsSync().forEach { app ->
-            val obj = JSONObject()
-            obj.put("packageName", app.packageName)
-            obj.put("appName", app.appName)
-            obj.put("dateAdded", app.dateAdded)
-            blockedAppsArray.put(obj)
-        }
-        root.put("blockedApps", blockedAppsArray)
-
-        // 2. Screen Time Limits (Preserves user configuration, omits volatile counters)
-        val limitsArray = JSONArray()
-        dao.getAllScreenTimeLimitsSync().forEach { limit ->
-            val obj = JSONObject()
-            obj.put("packageName", limit.packageName)
-            obj.put("dailyLimitMinutes", limit.dailyLimitMinutes)
-            obj.put("sessionLimitSeconds", limit.sessionLimitSeconds)
-            obj.put("cooldownSeconds", limit.cooldownSeconds)
-            limitsArray.put(obj)
-        }
-        root.put("screenTimeLimits", limitsArray)
-
-        // 3. App Groups
-        val groupsArray = JSONArray()
-        dao.getAllGroupsSync().forEach { group ->
-            val obj = JSONObject()
-            obj.put("id", group.id)
-            obj.put("name", group.name)
-            obj.put("scheduleEnabled", group.scheduleEnabled)
-            obj.put("scheduleStart", group.scheduleStart)
-            obj.put("scheduleEnd", group.scheduleEnd)
-            val daysArray = JSONArray()
-            group.daysOfWeek.forEach { daysArray.put(it) }
-            obj.put("daysOfWeek", daysArray)
-            obj.put("budgetEnabled", group.budgetEnabled)
-            obj.put("dailyBudgetMinutes", group.dailyBudgetMinutes)
-            obj.put("sessionLimitEnabled", group.sessionLimitEnabled)
-            obj.put("sessionLimitSeconds", group.sessionLimitSeconds)
-            obj.put("cooldownSeconds", group.cooldownSeconds)
-            groupsArray.put(obj)
-        }
-        root.put("appGroups", groupsArray)
-
-        // 4. Group Apps
-        val groupAppsArray = JSONArray()
-        dao.getAllGroupAppsSync().forEach { ga ->
-            val obj = JSONObject()
-            obj.put("groupId", ga.groupId)
-            obj.put("packageName", ga.packageName)
-            groupAppsArray.put(obj)
-        }
-        root.put("groupApps", groupAppsArray)
-
-        // 5. Blocked Websites (De-duplicated & Normalized)
-        val websitesArray = JSONArray()
-        dao.getAllBlockedWebsitesSync()
-            .distinctBy { com.example.util.WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }
-            .forEach { site ->
+            // 1. Blocked Apps
+            val blockedAppsArray = JSONArray()
+            dao.getAllBlockedAppsSync().forEach { app ->
                 val obj = JSONObject()
-                obj.put("domainOrUrl", com.example.util.WebRuleHelper.normalizeDomain(site.domainOrUrl))
-                obj.put("dateAdded", site.dateAdded)
-                websitesArray.put(obj)
+                obj.put("packageName", app.packageName)
+                obj.put("appName", app.appName)
+                obj.put("dateAdded", app.dateAdded)
+                blockedAppsArray.put(obj)
             }
-        root.put("blockedWebsites", websitesArray)
+            root.put("blockedApps", blockedAppsArray)
 
-        // 6. Blocked Keywords (De-duplicated & Normalized)
-        val keywordsArray = JSONArray()
-        dao.getAllBlockedKeywordsSync()
-            .distinctBy { com.example.util.WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }
-            .forEach { kw ->
+            // 2. Screen Time Limits (Preserves user configuration, omits volatile counters)
+            val limitsArray = JSONArray()
+            dao.getAllScreenTimeLimitsSync().forEach { limit ->
                 val obj = JSONObject()
-                obj.put("keyword", com.example.util.WebRuleHelper.normalizeKeyword(kw.keyword))
-                obj.put("caseSensitive", kw.caseSensitive)
-                obj.put("dateAdded", kw.dateAdded)
-                keywordsArray.put(obj)
+                obj.put("packageName", limit.packageName)
+                obj.put("dailyLimitMinutes", limit.dailyLimitMinutes)
+                obj.put("sessionLimitSeconds", limit.sessionLimitSeconds)
+                obj.put("cooldownSeconds", limit.cooldownSeconds)
+                limitsArray.put(obj)
             }
-        root.put("blockedKeywords", keywordsArray)
+            root.put("screenTimeLimits", limitsArray)
 
-        // 7. Preferences Snapshot
-        val prefsObj = JSONObject()
-        preferencesRepository.getPreferencesSnapshot().forEach { (k, v) ->
-            if (v != null) {
-                prefsObj.put(k, v)
+            // 3. App Groups
+            val groupsArray = JSONArray()
+            dao.getAllGroupsSync().forEach { group ->
+                val obj = JSONObject()
+                obj.put("id", group.id)
+                obj.put("name", group.name)
+                obj.put("scheduleEnabled", group.scheduleEnabled)
+                obj.put("scheduleStart", group.scheduleStart)
+                obj.put("scheduleEnd", group.scheduleEnd)
+                val daysArray = JSONArray()
+                group.daysOfWeek.forEach { daysArray.put(it) }
+                obj.put("daysOfWeek", daysArray)
+                obj.put("budgetEnabled", group.budgetEnabled)
+                obj.put("dailyBudgetMinutes", group.dailyBudgetMinutes)
+                obj.put("sessionLimitEnabled", group.sessionLimitEnabled)
+                obj.put("sessionLimitSeconds", group.sessionLimitSeconds)
+                obj.put("cooldownSeconds", group.cooldownSeconds)
+                groupsArray.put(obj)
             }
+            root.put("appGroups", groupsArray)
+
+            // 4. Group Apps
+            val groupAppsArray = JSONArray()
+            dao.getAllGroupAppsSync().forEach { ga ->
+                val obj = JSONObject()
+                obj.put("groupId", ga.groupId)
+                obj.put("packageName", ga.packageName)
+                groupAppsArray.put(obj)
+            }
+            root.put("groupApps", groupAppsArray)
+
+            // 5. Blocked Websites (De-duplicated & Normalized)
+            val websitesArray = JSONArray()
+            dao.getAllBlockedWebsitesSync()
+                .distinctBy { com.example.util.WebRuleHelper.normalizeDomain(it.domainOrUrl).lowercase() }
+                .forEach { site ->
+                    val obj = JSONObject()
+                    obj.put("domainOrUrl", com.example.util.WebRuleHelper.normalizeDomain(site.domainOrUrl))
+                    obj.put("dateAdded", site.dateAdded)
+                    websitesArray.put(obj)
+                }
+            root.put("blockedWebsites", websitesArray)
+
+            // 6. Blocked Keywords (De-duplicated & Normalized)
+            val keywordsArray = JSONArray()
+            dao.getAllBlockedKeywordsSync()
+                .distinctBy { com.example.util.WebRuleHelper.normalizeKeyword(it.keyword).lowercase() }
+                .forEach { kw ->
+                    val obj = JSONObject()
+                    obj.put("keyword", com.example.util.WebRuleHelper.normalizeKeyword(kw.keyword))
+                    obj.put("caseSensitive", kw.caseSensitive)
+                    obj.put("dateAdded", kw.dateAdded)
+                    keywordsArray.put(obj)
+                }
+            root.put("blockedKeywords", keywordsArray)
+
+            // 7. Preferences Snapshot
+            val prefsObj = JSONObject()
+            preferencesRepository.getPreferencesSnapshot().forEach { (k, v) ->
+                if (v != null) {
+                    prefsObj.put(k, v)
+                }
+            }
+            root.put("preferences", prefsObj)
+        } catch (e: Exception) {
+            android.util.Log.e("BackupManager", "Error generating backup JSON", e)
         }
-        root.put("preferences", prefsObj)
 
         return@withContext root.toString(2)
     }

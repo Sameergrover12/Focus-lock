@@ -23,6 +23,32 @@ class FocusApplication : Application() {
         com.example.util.TimeIntegrityManager.init(this)
         backupManager
         createNotificationChannels()
+
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private var startedActivities = 0
+
+            override fun onActivityStarted(activity: android.app.Activity) {
+                startedActivities++
+                com.example.util.AppForegroundTracker.isFocusLockInForeground = true
+            }
+
+            override fun onActivityStopped(activity: android.app.Activity) {
+                startedActivities--
+                if (startedActivities <= 0) {
+                    startedActivities = 0
+                    com.example.util.AppForegroundTracker.isFocusLockInForeground = false
+                }
+            }
+
+            override fun onActivityResumed(activity: android.app.Activity) {
+                com.example.util.AppForegroundTracker.isFocusLockInForeground = true
+            }
+
+            override fun onActivityPaused(activity: android.app.Activity) {}
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        })
     }
 
     private fun createNotificationChannels() {

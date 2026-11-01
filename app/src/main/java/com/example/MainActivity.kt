@@ -129,6 +129,21 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Exception) {}
     }
+
+    override fun onStart() {
+        super.onStart()
+        com.example.util.AppForegroundTracker.isFocusLockInForeground = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        com.example.util.AppForegroundTracker.isFocusLockInForeground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.example.util.AppForegroundTracker.isFocusLockInForeground = false
+    }
 }
 
 sealed class NavigationTab(

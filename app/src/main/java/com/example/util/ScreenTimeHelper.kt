@@ -132,6 +132,54 @@ object ScreenTimeHelper {
     }
 
     /**
+     * Calculates the daily screen dwell in milliseconds for a specific historical day interval.
+     * 1. Primary: Uses raw UsageEvents between startOfDay and endOfDay.
+     * 2. Fallback: If events are pruned and return 0, queries UsageStatsManager.queryUsageStats(INTERVAL_DAILY)
+     *    and sums foreground screen time of interactive apps.
+     */
+    fun queryHistoricalDayDwell(context: Context, startOfDay: Long, endOfDay: Long): Long {
+        if (!PermissionHelper.isUsageStatsPermissionGranted(context)) {
+            return 0L
+        }
+
+        val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            ?: return 0L
+
+        // Primary: raw UsageEvents
+        try {
+            val events = usageStatsManager.queryEvents(startOfDay, endOfDay)
+            if (events != null) {
+                val parsed = parseUsageEvents(events, startOfDay, endOfDay)
+                if (parsed.totalScreenOnMillis > 0L) {
+                    return parsed.totalScreenOnMillis
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to query UsageEvents for day range [$startOfDay, $endOfDay]", e)
+        }
+
+        // Fallback: UsageStatsManager.queryUsageStats(INTERVAL_DAILY)
+        try {
+            val statsList = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startOfDay, endOfDay)
+            if (!statsList.isNullOrEmpty()) {
+                var totalForeground = 0L
+                for (stat in statsList) {
+                    if (!isIgnoredSystemPackage(stat.packageName, context)) {
+                        totalForeground += stat.totalTimeInForeground
+                    }
+                }
+                if (totalForeground > 0L) {
+                    return minOf(totalForeground, 24 * 60 * 60 * 1000L)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to query UsageStats for day range [$startOfDay, $endOfDay]", e)
+        }
+
+        return 0L
+    }
+
+    /**
      * Pure parser for UsageEvents respecting exact architectural rules:
      * 1. Total Screen Time: ONLY durations between Event.SCREEN_INTERACTIVE (15) and Event.SCREEN_NON_INTERACTIVE (16).
      * 2. Individual App Time: exact durations between Event.ACTIVITY_RESUMED (1) and Event.ACTIVITY_PAUSED (2).

@@ -10,6 +10,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,7 +22,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import com.example.data.model.DayBarData
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -95,7 +99,8 @@ fun AnalyticsScreen(
     val recentScreenTimes by viewModel.recentDailyScreenTimes.collectAsStateWithLifecycle()
     val reclaimedCommitment by viewModel.reclaimedCommitment.collectAsStateWithLifecycle()
     val blockedApps by viewModel.blockedApps.collectAsStateWithLifecycle()
-    val monthlyAverageMinutes by viewModel.monthlyAverageScreenTimeMinutes.collectAsStateWithLifecycle()
+    val thirtyDayHistory by viewModel.thirtyDayHistory.collectAsStateWithLifecycle()
+    val real30DayAverageMinutes by viewModel.real30DayAverageMinutes.collectAsStateWithLifecycle()
 
     val totalMins = (totalMinutesToday ?: 0).coerceAtLeast(0)
     val blockedPackageSet = remember(blockedApps) { blockedApps.map { it.packageName }.toSet() }
@@ -126,15 +131,17 @@ fun AnalyticsScreen(
             AnalyticsHeroCard(
                 totalMinutes = totalMins,
                 reclaimedCommitment = reclaimedCommitment,
-                monthlyAverageMinutes = monthlyAverageMinutes
+                monthlyAverageMinutes = real30DayAverageMinutes.toDouble()
             )
         }
 
         // 2. 30-Day Screen Time Usage Trend (Horizontally Scrollable)
         item {
             MonthlyUsageTrendCard(
+                thirtyDayHistory = thirtyDayHistory,
                 recentScreenTimes = recentScreenTimes,
-                todayMinutes = totalMins
+                todayMinutes = totalMins,
+                realAvgMinutes = real30DayAverageMinutes
             )
         }
 
@@ -395,59 +402,65 @@ private fun AnalyticsHeroCard(
  */
 @Composable
 private fun MonthlyUsageTrendCard(
+    thirtyDayHistory: List<DayBarData>,
     recentScreenTimes: List<DailyScreenTime>,
-    todayMinutes: Int
+    todayMinutes: Int,
+    realAvgMinutes: Int
 ) {
     val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     val dayMonthFormat = SimpleDateFormat("MMM d", Locale.getDefault())
     val dayNumFormat = SimpleDateFormat("d", Locale.getDefault())
     val weekdayFormat = SimpleDateFormat("EE", Locale.getDefault())
 
-    val past30Days = remember(recentScreenTimes, todayMinutes) {
-        val list = mutableListOf<DayBarData>()
-        val screenTimeMap = recentScreenTimes.associate { it.date to it.screenOnMinutes }
+    val past30Days = remember(thirtyDayHistory, recentScreenTimes, todayMinutes) {
+        if (thirtyDayHistory.isNotEmpty()) {
+            thirtyDayHistory
+        } else {
+            val list = mutableListOf<DayBarData>()
+            val screenTimeMap = recentScreenTimes.associate { it.date to it.screenOnMinutes }
 
-        for (i in 29 downTo 0) {
-            val cal = Calendar.getInstance()
-            cal.add(Calendar.DAY_OF_YEAR, -i)
-            val dateStr = dateFormat.format(cal.time)
-            val dayNum = dayNumFormat.format(cal.time)
-            val weekday = weekdayFormat.format(cal.time).uppercase()
-            val fullLabel = dayMonthFormat.format(cal.time)
-            val mins = if (i == 0) todayMinutes else (screenTimeMap[dateStr] ?: 0)
-            list.add(
-                DayBarData(
-                    label = weekday,
-                    dayNumber = dayNum,
-                    fullDate = fullLabel,
-                    date = dateStr,
-                    minutes = mins,
-                    isToday = (i == 0)
+            for (i in 29 downTo 0) {
+                val cal = Calendar.getInstance()
+                cal.add(Calendar.DAY_OF_YEAR, -i)
+                val dateStr = dateFormat.format(cal.time)
+                val dayNum = dayNumFormat.format(cal.time)
+                val weekday = weekdayFormat.format(cal.time).uppercase()
+                val fullLabel = dayMonthFormat.format(cal.time)
+                val mins = if (i == 0) todayMinutes else (screenTimeMap[dateStr] ?: 0)
+                list.add(
+                    DayBarData(
+                        label = weekday,
+                        dayNumber = dayNum,
+                        fullDate = fullLabel,
+                        date = dateStr,
+                        minutes = mins,
+                        isToday = (i == 0)
+                    )
                 )
-            )
+            }
+            list
         }
-        list
     }
 
     val maxMinutes = remember(past30Days) {
         past30Days.maxOfOrNull { it.minutes }?.coerceAtLeast(60) ?: 60
     }
 
-    val avgMinutes = remember(past30Days) {
-        val daysWithUsage = past30Days.filter { it.minutes > 0 }
-        if (daysWithUsage.isNotEmpty()) {
-            daysWithUsage.map { it.minutes }.average().toInt()
+    val avgMinutes = remember(realAvgMinutes, past30Days) {
+        if (realAvgMinutes > 0) {
+            realAvgMinutes
         } else {
-            past30Days.map { it.minutes }.average().toInt()
+            val daysWithUsage = past30Days.filter { it.minutes > 0 }
+            if (daysWithUsage.isNotEmpty()) {
+                daysWithUsage.map { it.minutes }.average().toInt()
+            } else {
+                past30Days.map { it.minutes }.average().toInt()
+            }
         }
     }
 
     var selectedDay by remember { mutableStateOf<DayBarData?>(null) }
-    val scrollState = rememberScrollState()
-
-    LaunchedEffect(Unit) {
-        scrollState.scrollTo(scrollState.maxValue)
-    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = 23)
 
     val primaryColor = MaterialTheme.colorScheme.primary
     val errorColor = MaterialTheme.colorScheme.error
@@ -532,99 +545,94 @@ private fun MonthlyUsageTrendCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Horizontally Scrollable 30-Day Bar Chart
-            Row(
+            // Horizontally Scrollable 30-Day Bar Chart showing exactly 7 days at a time
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(scrollState)
-                    .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Bottom
+                    .padding(vertical = 4.dp)
             ) {
-                past30Days.forEach { day ->
-                    val isSelected = selectedDay?.date == day.date
-                    val ratio = (day.minutes.toFloat() / maxMinutes.toFloat()).coerceIn(0.05f, 1f)
+                val columnWidth = maxWidth / 7f
 
-                    Column(
-                        modifier = Modifier
-                            .width(36.dp)
-                            .clickable {
-                                selectedDay = if (selectedDay?.date == day.date) null else day
-                            },
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Bar Canvas
-                        Box(
+                LazyRow(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    itemsIndexed(past30Days, key = { _, day -> day.date }) { _, day ->
+                        val isSelected = selectedDay?.date == day.date
+                        val ratio = (day.minutes.toFloat() / maxMinutes.toFloat()).coerceIn(0.05f, 1f)
+
+                        Column(
                             modifier = Modifier
-                                .width(36.dp)
-                                .height(110.dp),
-                            contentAlignment = Alignment.BottomCenter
+                                .width(columnWidth)
+                                .clickable {
+                                    selectedDay = if (selectedDay?.date == day.date) null else day
+                                },
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Canvas(modifier = Modifier.fillMaxSize()) {
-                                val canvasWidth = size.width
-                                val canvasHeight = size.height
-                                val barWidth = 14.dp.toPx()
-                                val barHeight = canvasHeight * ratio
-                                val xOffset = (canvasWidth - barWidth) / 2f
-                                val yOffset = canvasHeight - barHeight
+                            // Bar Canvas
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(110.dp),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val canvasWidth = size.width
+                                    val canvasHeight = size.height
+                                    val barWidth = 14.dp.toPx()
+                                    val barHeight = canvasHeight * ratio
+                                    val xOffset = (canvasWidth - barWidth) / 2f
+                                    val yOffset = canvasHeight - barHeight
 
-                                val barColor = when {
-                                    day.isToday -> primaryColor
-                                    isSelected -> primaryColor
-                                    day.minutes > avgMinutes -> errorColor
-                                    day.minutes > 0 -> outlineColor
-                                    else -> surfaceVariantColor
-                                }
+                                    val barColor = when {
+                                        day.isToday -> primaryColor
+                                        isSelected -> primaryColor
+                                        day.minutes > avgMinutes -> errorColor
+                                        day.minutes > 0 -> outlineColor
+                                        else -> surfaceVariantColor
+                                    }
 
-                                drawRoundRect(
-                                    color = barColor,
-                                    topLeft = Offset(xOffset, yOffset),
-                                    size = Size(barWidth, barHeight),
-                                    cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
-                                )
-
-                                if (day.isToday) {
-                                    // Subtle primary highlight indicator
-                                    drawCircle(
-                                        color = primaryColor,
-                                        radius = 3.dp.toPx(),
-                                        center = Offset(canvasWidth / 2f, yOffset - 6.dp.toPx())
+                                    drawRoundRect(
+                                        color = barColor,
+                                        topLeft = Offset(xOffset, yOffset),
+                                        size = Size(barWidth, barHeight),
+                                        cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
                                     )
+
+                                    if (day.isToday) {
+                                        // Subtle primary highlight indicator dot
+                                        drawCircle(
+                                            color = primaryColor,
+                                            radius = 3.dp.toPx(),
+                                            center = Offset(canvasWidth / 2f, yOffset - 6.dp.toPx())
+                                        )
+                                    }
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Day number & weekday label
+                            Text(
+                                text = day.dayNumber,
+                                color = if (day.isToday) primaryColor else if (isSelected) onSurfaceColor else onSurfaceVariantColor,
+                                fontSize = 10.sp,
+                                fontWeight = if (day.isToday || isSelected) FontWeight.Bold else FontWeight.Normal,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = day.label.take(1),
+                                color = if (day.isToday) primaryColor else onSurfaceVariantColor.copy(alpha = 0.7f),
+                                fontSize = 9.sp,
+                                textAlign = TextAlign.Center
+                            )
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Day number & weekday label
-                        Text(
-                            text = day.dayNumber,
-                            color = if (day.isToday) primaryColor else if (isSelected) onSurfaceColor else onSurfaceVariantColor,
-                            fontSize = 10.sp,
-                            fontWeight = if (day.isToday || isSelected) FontWeight.Bold else FontWeight.Normal,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = day.label.take(1),
-                            color = if (day.isToday) primaryColor else onSurfaceVariantColor.copy(alpha = 0.7f),
-                            fontSize = 9.sp,
-                            textAlign = TextAlign.Center
-                        )
                     }
                 }
             }
         }
     }
 }
-
-private data class DayBarData(
-    val label: String,
-    val dayNumber: String,
-    val fullDate: String,
-    val date: String,
-    val minutes: Int,
-    val isToday: Boolean
-)
 
 /**
  * Focus Drain Spectrum: Segmented proportion of top focus drainers

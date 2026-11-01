@@ -64,7 +64,20 @@ import com.example.ui.viewmodel.FocusViewModel
 import com.example.ui.viewmodel.FocusViewModelFactory
 import com.example.ui.webwords.WebKeywordsScreen
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.example.receiver.FocusNotificationScheduler
+
 class MainActivity : ComponentActivity() {
+
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        android.util.Log.d("MainActivity", "POST_NOTIFICATIONS granted: $isGranted")
+    }
 
     private val viewModel: FocusViewModel by viewModels {
         val app = application as FocusApplication
@@ -81,6 +94,20 @@ class MainActivity : ComponentActivity() {
 
         // Start the enforcement background tracking service
         FocusForegroundService.startService(this)
+
+        // Request notification permission on Android 13+ if needed
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        // Schedule daily 9:00 PM notification engine
+        FocusNotificationScheduler.scheduleNext9PmAlarm(this)
 
         setContent {
             val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()

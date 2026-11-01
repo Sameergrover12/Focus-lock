@@ -16,9 +16,11 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 TimeIntegrityManager.onBootCompleted(context)
                 FocusForegroundService.startService(context)
+                FocusNotificationScheduler.scheduleNext9PmAlarm(context)
             }
             Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED -> {
                 TimeIntegrityManager.onTimeChanged()
+                FocusNotificationScheduler.scheduleNext9PmAlarm(context)
             }
         }
     }

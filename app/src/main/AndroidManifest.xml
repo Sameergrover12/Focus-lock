@@ -77,6 +77,14 @@
         </receiver>
 
         <receiver
+            android:name=".receiver.FocusNotificationReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.action.FOCUS_9PM_CHECKIN" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".receiver.FocusDeviceAdminReceiver"
             android:description="@string/app_name"
             android:exported="true"

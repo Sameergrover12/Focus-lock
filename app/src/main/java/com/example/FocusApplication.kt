@@ -23,6 +23,7 @@ class FocusApplication : Application() {
         com.example.util.TimeIntegrityManager.init(this)
         backupManager
         createNotificationChannels()
+        com.example.receiver.FocusNotificationScheduler.scheduleNext9PmAlarm(this)
 
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var startedActivities = 0

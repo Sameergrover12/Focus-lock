@@ -18,7 +18,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import android.content.Context
+import com.example.data.model.DayBarData
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Collections
+import java.util.Locale
 
 class FocusRepository(private val focusDao: FocusDao) {
 
@@ -292,6 +299,78 @@ class FocusRepository(private val focusDao: FocusDao) {
     val recentDailyScreenTimes: Flow<List<DailyScreenTime>> = focusDao.getRecentDailyScreenTimes()
     suspend fun getRecentDailyScreenTimesSync(): List<DailyScreenTime> = focusDao.getRecentDailyScreenTimesSync()
     val allRecentUsageLogs: Flow<List<DailyUsageLog>> = focusDao.getAllRecentUsageLogs()
+
+    /**
+     * Backfills 30 days of historical screen time data (Day -29 to Today).
+     * - Past days (Day -29 to Yesterday) are retrieved from SharedPreferences cache ("dwell_day_yyyy-MM-dd")
+     *   or computed on Dispatchers.IO via ScreenTimeHelper.queryHistoricalDayDwell and cached.
+     * - Today is always computed live.
+     */
+    suspend fun get30DayHistory(context: Context): List<DayBarData> = withContext(Dispatchers.IO) {
+        val list = mutableListOf<DayBarData>()
+        val cachePrefs = context.getSharedPreferences("historical_dwell_cache", Context.MODE_PRIVATE)
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val dayMonthFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+        val dayNumFormat = SimpleDateFormat("d", Locale.getDefault())
+        val weekdayFormat = SimpleDateFormat("EE", Locale.getDefault())
+
+        val todayDate = getTodayDateString()
+
+        for (i in 29 downTo 0) {
+            val cal = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                add(Calendar.DAY_OF_YEAR, -i)
+            }
+            val startOfDay = cal.timeInMillis
+            val endOfDay = startOfDay + 24 * 60 * 60 * 1000L - 1L
+            val dateStr = dateFormat.format(cal.time)
+            val dayNum = dayNumFormat.format(cal.time)
+            val weekday = weekdayFormat.format(cal.time).uppercase()
+            val fullLabel = dayMonthFormat.format(cal.time)
+            val isToday = (i == 0 || dateStr == todayDate)
+
+            val mins: Int = if (isToday) {
+                // Today is always computed live
+                val liveToday = ScreenTimeHelper.queryDeviceScreenOnMinutes(context)
+                val recordedToday = focusDao.getScreenOnMinutesForDateSync(dateStr) ?: 0
+                maxOf(liveToday ?: 0, recordedToday)
+            } else {
+                val cacheKey = "dwell_day_$dateStr"
+                if (cachePrefs.contains(cacheKey)) {
+                    cachePrefs.getInt(cacheKey, 0)
+                } else {
+                    val roomVal = focusDao.getScreenOnMinutesForDateSync(dateStr)
+                    if (roomVal != null && roomVal > 0) {
+                        cachePrefs.edit().putInt(cacheKey, roomVal).apply()
+                        roomVal
+                    } else {
+                        val dwellMillis = ScreenTimeHelper.queryHistoricalDayDwell(context, startOfDay, endOfDay)
+                        val computedMins = (dwellMillis / 60000L).toInt()
+                        if (computedMins > 0) {
+                            focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = dateStr, screenOnMinutes = computedMins))
+                        }
+                        cachePrefs.edit().putInt(cacheKey, computedMins).apply()
+                        computedMins
+                    }
+                }
+            }
+
+            list.add(
+                DayBarData(
+                    label = weekday,
+                    dayNumber = dayNum,
+                    fullDate = fullLabel,
+                    date = dateStr,
+                    minutes = mins,
+                    isToday = isToday
+                )
+            )
+        }
+        list
+    }
 
     suspend fun pruneHistoricalData() {
         try {

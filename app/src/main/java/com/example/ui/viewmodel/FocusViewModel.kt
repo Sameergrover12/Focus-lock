@@ -15,6 +15,7 @@ import com.example.data.local.entity.DailyUsageLog
 import com.example.data.local.entity.GroupApp
 import com.example.data.local.entity.ScreenTimeLimit
 import com.example.data.model.AppInfo
+import com.example.data.model.DayBarData
 import com.example.data.preferences.ThemeMode
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FocusRepository
@@ -280,13 +281,35 @@ class FocusViewModel(
         initialValue = emptyList()
     )
 
-    val monthlyAverageScreenTimeMinutes: StateFlow<Double> = repository.recentDailyScreenTimes.map { list ->
-        if (list.isEmpty()) 0.0 else list.map { it.screenOnMinutes }.average()
+    private val _thirtyDayHistory = MutableStateFlow<List<DayBarData>>(emptyList())
+    val thirtyDayHistory: StateFlow<List<DayBarData>> = _thirtyDayHistory.asStateFlow()
+
+    val real30DayAverageMinutes: StateFlow<Int> = _thirtyDayHistory.map { list ->
+        val activeDays = list.filter { it.minutes > 0 }
+        if (activeDays.isNotEmpty()) {
+            activeDays.map { it.minutes }.average().toInt()
+        } else {
+            val todayMins = list.lastOrNull()?.minutes ?: (totalMinutesUsedToday.value ?: 0)
+            todayMins
+        }
     }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0
+    )
+
+    val monthlyAverageScreenTimeMinutes: StateFlow<Double> = real30DayAverageMinutes.map { it.toDouble() }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = 0.0
     )
+
+    fun refresh30DayHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val history = repository.get30DayHistory(getApplication())
+            _thirtyDayHistory.value = history
+        }
+    }
 
     val allRecentUsageLogs: StateFlow<List<DailyUsageLog>> = repository.allRecentUsageLogs.stateIn(
         scope = viewModelScope,
@@ -333,6 +356,7 @@ class FocusViewModel(
     init {
         loadInstalledApps()
         refreshDailyUsageStats()
+        refresh30DayHistory()
 
         // React immediately to Cloud or JSON restore
         viewModelScope.launch {
@@ -340,6 +364,23 @@ class FocusViewModel(
                 if (version > 0) {
                     loadInstalledApps()
                     refreshDailyUsageStats()
+                    refresh30DayHistory()
+                }
+            }
+        }
+
+        // Keep Today's bar item synchronized live when today's dwell updates
+        viewModelScope.launch {
+            totalMinutesUsedToday.collect { todayMins ->
+                val currentList = _thirtyDayHistory.value
+                if (currentList.isNotEmpty() && todayMins != null) {
+                    val updated = currentList.toMutableList()
+                    val lastIdx = updated.lastIndex
+                    val todayItem = updated[lastIdx]
+                    if (todayItem.isToday && todayItem.minutes != todayMins) {
+                        updated[lastIdx] = todayItem.copy(minutes = maxOf(todayItem.minutes, todayMins))
+                        _thirtyDayHistory.value = updated
+                    }
                 }
             }
         }

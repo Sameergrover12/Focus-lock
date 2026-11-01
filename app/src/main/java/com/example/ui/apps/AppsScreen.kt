@@ -1,6 +1,9 @@
 package com.example.ui.apps
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -41,14 +47,21 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -62,16 +75,25 @@ import com.example.data.model.AppInfo
 import com.example.data.repository.FocusRepository
 import com.example.ui.common.AppIconImage
 import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.FocusTabIndicator
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
+import com.example.util.FocusHaptics
 import com.example.util.SessionLimitHelper
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 
 @Composable
 fun AppsScreen(
     viewModel: FocusViewModel
 ) {
     // 3 Tabs: 0: Hard Block, 1: Daily Screen Time, 2: Session Limits
-    var selectedSubTab by remember { mutableIntStateOf(0) }
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
+    val coroutineScope = rememberCoroutineScope()
+    val view = LocalView.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val blockedApps by viewModel.blockedApps.collectAsStateWithLifecycle()
@@ -84,14 +106,26 @@ fun AppsScreen(
     var appToSetSessionLimit by remember { mutableStateOf<AppInfo?>(null) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
 
-    val filteredApps = remember(searchQuery, installedApps) {
-        if (searchQuery.isBlank()) {
-            installedApps
-        } else {
-            installedApps.filter {
-                it.appName.contains(searchQuery, ignoreCase = true) ||
-                        it.packageName.contains(searchQuery, ignoreCase = true)
+    // Preserve scroll position for each tab independently
+    val hardBlockListState = rememberLazyListState()
+    val screenTimeListState = rememberLazyListState()
+    val sessionListState = rememberLazyListState()
+
+    // 1. Hardware Haptic Feedback: Tier 1 Tick when HorizontalPager settles on a NEW page
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .drop(1)
+            .distinctUntilChanged()
+            .collect {
+                FocusHaptics.tick(view)
             }
+    }
+
+    // 2. Auto-Dismiss Keyboard on Horizontal Swipe
+    LaunchedEffect(pagerState.isScrollInProgress) {
+        if (pagerState.isScrollInProgress) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
         }
     }
 
@@ -113,6 +147,75 @@ fun AppsScreen(
         screenLimits.count { it.sessionLimitSeconds > 0 }
     }
 
+    // Filter apps based on stationary search query
+    val filteredApps = remember(searchQuery, installedApps) {
+        if (searchQuery.isBlank()) {
+            installedApps
+        } else {
+            installedApps.filter {
+                it.appName.contains(searchQuery, ignoreCase = true) ||
+                        it.packageName.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    // Smart Restricted-First App Sorting using derivedStateOf
+    // Page 0: Hard Blocked apps sorted to top, followed by unrestricted
+    val sortedHardBlockApps by remember(filteredApps, blockedSet) {
+        derivedStateOf {
+            val blocked = ArrayList<AppInfo>()
+            val unblocked = ArrayList<AppInfo>()
+            for (app in filteredApps) {
+                if (blockedSet.contains(app.packageName)) {
+                    blocked.add(app)
+                } else {
+                    unblocked.add(app)
+                }
+            }
+            blocked.sortBy { it.appName.lowercase() }
+            unblocked.sortBy { it.appName.lowercase() }
+            blocked + unblocked
+        }
+    }
+
+    // Page 1: Screen Time daily limit apps sorted to top, followed by unrestricted
+    val sortedDailyLimitApps by remember(filteredApps, limitsMap) {
+        derivedStateOf {
+            val restricted = ArrayList<AppInfo>()
+            val unrestricted = ArrayList<AppInfo>()
+            for (app in filteredApps) {
+                val hasLimit = (limitsMap[app.packageName]?.dailyLimitMinutes ?: 0) > 0
+                if (hasLimit) {
+                    restricted.add(app)
+                } else {
+                    unrestricted.add(app)
+                }
+            }
+            restricted.sortBy { it.appName.lowercase() }
+            unrestricted.sortBy { it.appName.lowercase() }
+            restricted + unrestricted
+        }
+    }
+
+    // Page 2: Session limit apps sorted to top, followed by unrestricted
+    val sortedSessionLimitApps by remember(filteredApps, limitsMap) {
+        derivedStateOf {
+            val restricted = ArrayList<AppInfo>()
+            val unrestricted = ArrayList<AppInfo>()
+            for (app in filteredApps) {
+                val hasLimit = (limitsMap[app.packageName]?.sessionLimitSeconds ?: 0) > 0
+                if (hasLimit) {
+                    restricted.add(app)
+                } else {
+                    unrestricted.add(app)
+                }
+            }
+            restricted.sortBy { it.appName.lowercase() }
+            unrestricted.sortBy { it.appName.lowercase() }
+            restricted + unrestricted
+        }
+    }
+
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(
             action = action,
@@ -126,13 +229,28 @@ fun AppsScreen(
             .fillMaxSize()
             .testTag("apps_screen")
     ) {
+        // Continuous 1:1 finger tracking TabRow
         TabRow(
-            selectedTabIndex = selectedSubTab,
-            containerColor = MaterialTheme.colorScheme.surface
+            selectedTabIndex = pagerState.currentPage,
+            containerColor = MaterialTheme.colorScheme.surface,
+            indicator = { tabPositions ->
+                FocusTabIndicator(tabPositions = tabPositions, pagerState = pagerState)
+            }
         ) {
             Tab(
-                selected = selectedSubTab == 0,
-                onClick = { selectedSubTab = 0 },
+                selected = pagerState.currentPage == 0,
+                onClick = {
+                    FocusHaptics.tick(view)
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(
+                            0,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            )
+                        )
+                    }
+                },
                 modifier = Modifier.testTag("tab_hard_block"),
                 selectedContentColor = MaterialTheme.colorScheme.primary,
                 unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -156,13 +274,24 @@ fun AppsScreen(
                         softWrap = false,
                         fontSize = 13.sp,
                         letterSpacing = (-0.2).sp,
-                        fontWeight = if (selectedSubTab == 0) FontWeight.SemiBold else FontWeight.Normal
+                        fontWeight = if (pagerState.currentPage == 0) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }
             }
             Tab(
-                selected = selectedSubTab == 1,
-                onClick = { selectedSubTab = 1 },
+                selected = pagerState.currentPage == 1,
+                onClick = {
+                    FocusHaptics.tick(view)
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(
+                            1,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            )
+                        )
+                    }
+                },
                 modifier = Modifier.testTag("tab_screen_time"),
                 selectedContentColor = MaterialTheme.colorScheme.primary,
                 unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -186,13 +315,24 @@ fun AppsScreen(
                         softWrap = false,
                         fontSize = 13.sp,
                         letterSpacing = (-0.2).sp,
-                        fontWeight = if (selectedSubTab == 1) FontWeight.SemiBold else FontWeight.Normal
+                        fontWeight = if (pagerState.currentPage == 1) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }
             }
             Tab(
-                selected = selectedSubTab == 2,
-                onClick = { selectedSubTab = 2 },
+                selected = pagerState.currentPage == 2,
+                onClick = {
+                    FocusHaptics.tick(view)
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(
+                            2,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            )
+                        )
+                    }
+                },
                 modifier = Modifier.testTag("tab_session_limits"),
                 selectedContentColor = MaterialTheme.colorScheme.primary,
                 unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -216,13 +356,13 @@ fun AppsScreen(
                         softWrap = false,
                         fontSize = 13.sp,
                         letterSpacing = (-0.2).sp,
-                        fontWeight = if (selectedSubTab == 2) FontWeight.SemiBold else FontWeight.Normal
+                        fontWeight = if (pagerState.currentPage == 2) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }
             }
         }
 
-        // Search Bar
+        // Stationary Search Bar above HorizontalPager
         Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             OutlinedTextField(
                 value = searchQuery,
@@ -232,7 +372,7 @@ fun AppsScreen(
                     .testTag("app_search_field"),
                 placeholder = {
                     Text(
-                        when (selectedSubTab) {
+                        when (pagerState.currentPage) {
                             0 -> "Search apps to block..."
                             1 -> "Search apps for daily limits..."
                             else -> "Search apps for session limits..."
@@ -254,77 +394,128 @@ fun AppsScreen(
             )
         }
 
-        // Content List
-        LazyColumn(
+        // 120Hz HorizontalPager for smooth swiping between the 3 sub-tabs
+        HorizontalPager(
+            state = pagerState,
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (filteredApps.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(40.dp),
-                        contentAlignment = Alignment.Center
+            beyondViewportPageCount = 1
+        ) { page ->
+            when (page) {
+                0 -> {
+                    // Page 0: Hard Block
+                    LazyColumn(
+                        state = hardBlockListState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = if (installedApps.isEmpty()) "Loading installed applications..." else "No matching applications found",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (sortedHardBlockApps.isEmpty()) {
+                            item(key = "empty_hard_block") {
+                                EmptyAppsState(installedApps.isEmpty())
+                            }
+                        }
+
+                        items(sortedHardBlockApps, key = { it.packageName }) { app ->
+                            val isBlocked = blockedSet.contains(app.packageName)
+                            AppBlockRow(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(180),
+                                    fadeOutSpec = tween(150),
+                                    placementSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                ),
+                                app = app,
+                                isBlocked = isBlocked,
+                                onToggle = { shouldBlock ->
+                                    FocusHaptics.confirm(view)
+                                    if (!shouldBlock && isCheatProtectionEnabled) {
+                                        pendingCheatAction = PendingLooseningAction(
+                                            title = "Unblock ${app.appName}",
+                                            description = "Removing the block will restore unrestricted access to ${app.appName}.",
+                                            onAuthorized = { viewModel.toggleAppBlock(app, false) }
+                                        )
+                                    } else {
+                                        viewModel.toggleAppBlock(app, shouldBlock)
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
-            }
+                1 -> {
+                    // Page 1: Daily Screen Time Limits
+                    LazyColumn(
+                        state = screenTimeListState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (sortedDailyLimitApps.isEmpty()) {
+                            item(key = "empty_screen_time") {
+                                EmptyAppsState(installedApps.isEmpty())
+                            }
+                        }
 
-            items(filteredApps, key = { it.packageName }) { app ->
-                when (selectedSubTab) {
-                    0 -> {
-                        // Tab 1: Hard Block Toggle
-                        val isBlocked = blockedSet.contains(app.packageName)
-                        AppBlockRow(
-                            app = app,
-                            isBlocked = isBlocked,
-                            onToggle = { shouldBlock ->
-                                if (!shouldBlock && isCheatProtectionEnabled) {
-                                    pendingCheatAction = PendingLooseningAction(
-                                        title = "Unblock ${app.appName}",
-                                        description = "Removing the block will restore unrestricted access to ${app.appName}.",
-                                        onAuthorized = { viewModel.toggleAppBlock(app, false) }
+                        items(sortedDailyLimitApps, key = { it.packageName }) { app ->
+                            val limitEntity = limitsMap[app.packageName]
+                            val usageLog = usageLogsMap[app.packageName]
+                            val actualUsedMinutes = usageLog?.minutesUsed
+                                ?: (if (limitEntity?.lastResetDate == todayDateStr) limitEntity.usedMinutesToday else 0)
+                            AppScreenLimitRow(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(180),
+                                    fadeOutSpec = tween(150),
+                                    placementSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
                                     )
-                                } else {
-                                    viewModel.toggleAppBlock(app, shouldBlock)
+                                ),
+                                app = app,
+                                limitEntity = limitEntity,
+                                usedMinutes = actualUsedMinutes,
+                                onConfigure = {
+                                    appToSetDailyLimit = app
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
-                    1 -> {
-                        // Tab 2: Daily Screen Time Limit Row
-                        val limitEntity = limitsMap[app.packageName]
-                        val usageLog = usageLogsMap[app.packageName]
-                        val actualUsedMinutes = usageLog?.minutesUsed
-                            ?: (if (limitEntity?.lastResetDate == todayDateStr) limitEntity.usedMinutesToday else 0)
-                        AppScreenLimitRow(
-                            app = app,
-                            limitEntity = limitEntity,
-                            usedMinutes = actualUsedMinutes,
-                            onConfigure = {
-                                appToSetDailyLimit = app
+                }
+                2 -> {
+                    // Page 2: Dedicated Session Limits & Cooldown
+                    LazyColumn(
+                        state = sessionListState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (sortedSessionLimitApps.isEmpty()) {
+                            item(key = "empty_session_limits") {
+                                EmptyAppsState(installedApps.isEmpty())
                             }
-                        )
-                    }
-                    2 -> {
-                        // Tab 3: Dedicated Session Limit & Cooldown Row
-                        val limitEntity = limitsMap[app.packageName]
-                        AppSessionLimitRow(
-                            app = app,
-                            limitEntity = limitEntity,
-                            onConfigure = {
-                                appToSetSessionLimit = app
-                            }
-                        )
+                        }
+
+                        items(sortedSessionLimitApps, key = { it.packageName }) { app ->
+                            val limitEntity = limitsMap[app.packageName]
+                            AppSessionLimitRow(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(180),
+                                    fadeOutSpec = tween(150),
+                                    placementSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                ),
+                                app = app,
+                                limitEntity = limitEntity,
+                                onConfigure = {
+                                    appToSetSessionLimit = app
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -345,6 +536,7 @@ fun AppsScreen(
             alreadyUsedTodayMinutes = usedToday,
             onDismiss = { appToSetDailyLimit = null },
             onSave = { newDailyMinutes ->
+                FocusHaptics.confirm(view)
                 val prevDaily = currentLimit?.dailyLimitMinutes ?: 0
                 val isLoosening = prevDaily > 0 && newDailyMinutes > prevDaily
 
@@ -360,6 +552,7 @@ fun AppsScreen(
                 appToSetDailyLimit = null
             },
             onRemove = {
+                FocusHaptics.rejectOrDelete(view)
                 val prevDaily = currentLimit?.dailyLimitMinutes ?: 0
                 if (prevDaily > 0 && isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
@@ -386,6 +579,7 @@ fun AppsScreen(
             currentCooldownSeconds = currentLimit?.cooldownSeconds ?: 0,
             onDismiss = { appToSetSessionLimit = null },
             onSave = { sessionSeconds, cooldownSeconds ->
+                FocusHaptics.confirm(view)
                 val prevSession = currentLimit?.sessionLimitSeconds ?: 0
                 val prevCooldown = currentLimit?.cooldownSeconds ?: 0
 
@@ -404,6 +598,7 @@ fun AppsScreen(
                 appToSetSessionLimit = null
             },
             onRemove = {
+                FocusHaptics.rejectOrDelete(view)
                 val prevSession = currentLimit?.sessionLimitSeconds ?: 0
                 if (prevSession > 0 && isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
@@ -421,23 +616,43 @@ fun AppsScreen(
 }
 
 @Composable
+private fun EmptyAppsState(isLoading: Boolean) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(40.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = if (isLoading) "Loading installed applications..." else "No matching applications found",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
 private fun AppBlockRow(
     app: AppInfo,
     isBlocked: Boolean,
-    onToggle: (Boolean) -> Unit
+    onToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag("app_block_row_${app.packageName}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isBlocked) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
             } else {
                 MaterialTheme.colorScheme.surface
             }
         ),
+        border = if (isBlocked) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+        } else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
@@ -460,6 +675,7 @@ private fun AppBlockRow(
                     text = if (isBlocked) "Locked — Opening blocked" else "Unrestricted",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isBlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (isBlocked) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -478,7 +694,8 @@ private fun AppScreenLimitRow(
     app: AppInfo,
     limitEntity: com.example.data.local.entity.ScreenTimeLimit?,
     usedMinutes: Int,
-    onConfigure: () -> Unit
+    onConfigure: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val limitMinutes = limitEntity?.dailyLimitMinutes ?: 0
     val hasDailyLimit = limitMinutes > 0
@@ -502,12 +719,21 @@ private fun AppScreenLimitRow(
     }
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable { onConfigure() }
             .testTag("app_limit_row_${app.packageName}"),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (hasDailyLimit) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
+        border = if (hasDailyLimit) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+        } else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
@@ -529,7 +755,12 @@ private fun AppScreenLimitRow(
                     Text(
                         text = subtitleText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (hasDailyLimit && usedMinutes >= limitMinutes) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (hasDailyLimit) {
+                            if (usedMinutes >= limitMinutes) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        fontWeight = if (hasDailyLimit) FontWeight.Medium else FontWeight.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -567,7 +798,8 @@ private fun AppScreenLimitRow(
 private fun AppSessionLimitRow(
     app: AppInfo,
     limitEntity: com.example.data.local.entity.ScreenTimeLimit?,
-    onConfigure: () -> Unit
+    onConfigure: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val sessionLimitSeconds = limitEntity?.sessionLimitSeconds ?: 0
     val cooldownSeconds = limitEntity?.cooldownSeconds ?: 0
@@ -589,7 +821,7 @@ private fun AppSessionLimitRow(
     }
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable { onConfigure() }
             .testTag("app_session_row_${app.packageName}"),
@@ -597,10 +829,17 @@ private fun AppSessionLimitRow(
         colors = CardDefaults.cardColors(
             containerColor = if (isCooldownActive) {
                 MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
+            } else if (hasSessionLimit) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
             } else {
                 MaterialTheme.colorScheme.surface
             }
         ),
+        border = if (isCooldownActive) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
+        } else if (hasSessionLimit) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+        } else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
@@ -629,9 +868,10 @@ private fun AppSessionLimitRow(
                         style = MaterialTheme.typography.bodySmall,
                         color = when {
                             isCooldownActive -> MaterialTheme.colorScheme.error
-                            currentSessionUsedMs > 0L -> MaterialTheme.colorScheme.primary
+                            hasSessionLimit -> MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
+                        fontWeight = if (hasSessionLimit || isCooldownActive) FontWeight.Medium else FontWeight.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )

@@ -164,6 +164,7 @@ class BlockedActivity : ComponentActivity() {
                         prefRepo?.triggerEmergencyBreak(phrase) ?: false
                     },
                     onEmergencyBreakActivated = {
+                        com.example.util.FocusHaptics.rejectOrDelete(window.decorView)
                         finish()
                     }
                 )

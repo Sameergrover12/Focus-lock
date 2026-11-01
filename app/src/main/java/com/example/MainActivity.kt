@@ -182,6 +182,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
         },
         bottomBar = {
             val navOutlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+            val view = androidx.compose.ui.platform.LocalView.current
             NavigationBar(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -204,6 +205,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                         alwaysShowLabel = false,
                         selected = !isViewingAnalytics && currentTabIndex == tab.routeIndex,
                         onClick = {
+                            com.example.util.FocusHaptics.tick(view)
                             isViewingAnalytics = false
                             currentTabIndex = tab.routeIndex
                         },

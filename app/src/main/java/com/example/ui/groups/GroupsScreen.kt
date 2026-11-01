@@ -1,6 +1,9 @@
 package com.example.ui.groups
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +21,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -47,14 +53,18 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -69,18 +79,25 @@ import com.example.service.GroupRuleEvaluator
 import com.example.ui.common.AppIconImage
 import com.example.ui.common.AppPickerDialog
 import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.FocusTabIndicator
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.ui.viewmodel.GroupWithAppDetails
+import com.example.util.FocusHaptics
 import com.example.util.SessionLimitHelper
 import com.example.util.TimeIntegrityManager
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 
 @Composable
 fun GroupsScreen(
     viewModel: FocusViewModel
 ) {
     // 2 Top Tabs: 0: Schedules & Daily Budget, 1: Session Groups
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
+    val coroutineScope = rememberCoroutineScope()
+    val view = LocalView.current
 
     val scheduleGroups by viewModel.scheduleAndDailyGroups.collectAsStateWithLifecycle()
     val sessionGroups by viewModel.sessionGroups.collectAsStateWithLifecycle()
@@ -92,6 +109,19 @@ fun GroupsScreen(
     var isCreatingScheduleGroup by remember { mutableStateOf(false) }
     var isCreatingSessionGroup by remember { mutableStateOf(false) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
+
+    val scheduleListState = rememberLazyListState()
+    val sessionGroupListState = rememberLazyListState()
+
+    // 1. Hardware Haptic Feedback: Tier 1 Tick when HorizontalPager settles on a NEW page
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .drop(1)
+            .distinctUntilChanged()
+            .collect {
+                FocusHaptics.tick(view)
+            }
+    }
 
     pendingCheatAction?.let { action ->
         CheatProtectionAuthDialog(
@@ -107,7 +137,8 @@ fun GroupsScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    if (selectedTab == 0) {
+                    FocusHaptics.tick(view)
+                    if (pagerState.currentPage == 0) {
                         isCreatingScheduleGroup = true
                     } else {
                         isCreatingSessionGroup = true
@@ -127,12 +158,26 @@ fun GroupsScreen(
                 .padding(innerPadding)
         ) {
             TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = MaterialTheme.colorScheme.surface
+                selectedTabIndex = pagerState.currentPage,
+                containerColor = MaterialTheme.colorScheme.surface,
+                indicator = { tabPositions ->
+                    FocusTabIndicator(tabPositions = tabPositions, pagerState = pagerState)
+                }
             ) {
                 Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    selected = pagerState.currentPage == 0,
+                    onClick = {
+                        FocusHaptics.tick(view)
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(
+                                0,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                )
+                            )
+                        }
+                    },
                     modifier = Modifier.testTag("tab_schedules_daily"),
                     selectedContentColor = MaterialTheme.colorScheme.primary,
                     unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -156,13 +201,24 @@ fun GroupsScreen(
                             softWrap = false,
                             fontSize = 13.sp,
                             letterSpacing = (-0.2).sp,
-                            fontWeight = if (selectedTab == 0) FontWeight.SemiBold else FontWeight.Normal
+                            fontWeight = if (pagerState.currentPage == 0) FontWeight.SemiBold else FontWeight.Normal
                         )
                     }
                 }
                 Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    selected = pagerState.currentPage == 1,
+                    onClick = {
+                        FocusHaptics.tick(view)
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(
+                                1,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                )
+                            )
+                        }
+                    },
                     modifier = Modifier.testTag("tab_session_groups"),
                     selectedContentColor = MaterialTheme.colorScheme.primary,
                     unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -186,104 +242,147 @@ fun GroupsScreen(
                             softWrap = false,
                             fontSize = 13.sp,
                             letterSpacing = (-0.2).sp,
-                            fontWeight = if (selectedTab == 1) FontWeight.SemiBold else FontWeight.Normal
+                            fontWeight = if (pagerState.currentPage == 1) FontWeight.SemiBold else FontWeight.Normal
                         )
                     }
                 }
             }
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                if (selectedTab == 0) {
-                    // TAB 1: Schedules & Daily Budget Groups
-                    item {
-                        Text(
-                            text = "Schedules & Daily Budget Groups",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = "Group multiple apps together under scheduled focus windows or a shared daily allowance.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                beyondViewportPageCount = 1
+            ) { page ->
+                when (page) {
+                    0 -> {
+                        // TAB 1: Schedules & Daily Budget Groups
+                        LazyColumn(
+                            state = scheduleListState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            item(key = "header_schedule_groups") {
+                                Text(
+                                    text = "Schedules & Daily Budget Groups",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = "Group multiple apps together under scheduled focus windows or a shared daily allowance.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
 
-                    if (scheduleGroups.isEmpty()) {
-                        item {
-                            EmptyGroupsCard(
-                                title = "No Schedule or Budget Groups",
-                                description = "Create a group like 'Social Media' or 'Entertainment' to enforce shared daily budgets or scheduled blackout windows.",
-                                buttonLabel = "Create Schedule Group",
-                                onClick = { isCreatingScheduleGroup = true }
-                            )
-                        }
-                    }
-
-                    items(scheduleGroups, key = { it.group.id }) { groupDetail ->
-                        ScheduleGroupCard(
-                            groupDetail = groupDetail,
-                            onEdit = { groupToEditSchedule = groupDetail },
-                            onDelete = {
-                                if (isCheatProtectionEnabled) {
-                                    pendingCheatAction = PendingLooseningAction(
-                                        title = "Delete Group '${groupDetail.group.name}'",
-                                        description = "Deleting this group removes all schedules and time budgets for its member apps.",
-                                        onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                            if (scheduleGroups.isEmpty()) {
+                                item(key = "empty_schedule_groups") {
+                                    EmptyGroupsCard(
+                                        title = "No Schedule or Budget Groups",
+                                        description = "Create a group like 'Social Media' or 'Entertainment' to enforce shared daily budgets or scheduled blackout windows.",
+                                        buttonLabel = "Create Schedule Group",
+                                        onClick = {
+                                            FocusHaptics.tick(view)
+                                            isCreatingScheduleGroup = true
+                                        }
                                     )
-                                } else {
-                                    viewModel.deleteGroup(groupDetail.group.id)
                                 }
                             }
-                        )
-                    }
-                } else {
-                    // TAB 2: Dedicated Session Groups
-                    item {
-                        Text(
-                            text = "Session Groups",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = "Multiple apps share a continuous session timer. When the session limit is reached, all apps in the group are locked into cooldown together.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
 
-                    if (sessionGroups.isEmpty()) {
-                        item {
-                            EmptyGroupsCard(
-                                title = "No Session Groups Configured",
-                                description = "Create a session group to enforce a combined session timer (e.g. 15m session, 45m break) across multiple distracting apps.",
-                                buttonLabel = "Create Session Group",
-                                onClick = { isCreatingSessionGroup = true }
-                            )
+                            items(scheduleGroups, key = { it.group.id }) { groupDetail ->
+                                ScheduleGroupCard(
+                                    modifier = Modifier.animateItem(
+                                        fadeInSpec = tween(180),
+                                        fadeOutSpec = tween(150),
+                                        placementSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                    ),
+                                    groupDetail = groupDetail,
+                                    onEdit = { groupToEditSchedule = groupDetail },
+                                    onDelete = {
+                                        FocusHaptics.rejectOrDelete(view)
+                                        if (isCheatProtectionEnabled) {
+                                            pendingCheatAction = PendingLooseningAction(
+                                                title = "Delete Group '${groupDetail.group.name}'",
+                                                description = "Deleting this group removes all schedules and time budgets for its member apps.",
+                                                onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                                            )
+                                        } else {
+                                            viewModel.deleteGroup(groupDetail.group.id)
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
+                    1 -> {
+                        // TAB 2: Dedicated Session Groups
+                        LazyColumn(
+                            state = sessionGroupListState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            item(key = "header_session_groups") {
+                                Text(
+                                    text = "Session Groups",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = "Multiple apps share a continuous session timer. When the session limit is reached, all apps in the group are locked into cooldown together.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
 
-                    items(sessionGroups, key = { it.group.id }) { groupDetail ->
-                        SessionGroupCard(
-                            groupDetail = groupDetail,
-                            onEdit = { groupToEditSession = groupDetail },
-                            onDelete = {
-                                if (isCheatProtectionEnabled) {
-                                    pendingCheatAction = PendingLooseningAction(
-                                        title = "Delete Session Group '${groupDetail.group.name}'",
-                                        description = "Deleting this session group disables shared session tracking and cooldown protection across its member apps.",
-                                        onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                            if (sessionGroups.isEmpty()) {
+                                item(key = "empty_session_groups") {
+                                    EmptyGroupsCard(
+                                        title = "No Session Groups Configured",
+                                        description = "Create a session group to enforce a combined session timer (e.g. 15m session, 45m break) across multiple distracting apps.",
+                                        buttonLabel = "Create Session Group",
+                                        onClick = {
+                                            FocusHaptics.tick(view)
+                                            isCreatingSessionGroup = true
+                                        }
                                     )
-                                } else {
-                                    viewModel.deleteGroup(groupDetail.group.id)
                                 }
                             }
-                        )
+
+                            items(sessionGroups, key = { it.group.id }) { groupDetail ->
+                                SessionGroupCard(
+                                    modifier = Modifier.animateItem(
+                                        fadeInSpec = tween(180),
+                                        fadeOutSpec = tween(150),
+                                        placementSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                    ),
+                                    groupDetail = groupDetail,
+                                    onEdit = { groupToEditSession = groupDetail },
+                                    onDelete = {
+                                        FocusHaptics.rejectOrDelete(view)
+                                        if (isCheatProtectionEnabled) {
+                                            pendingCheatAction = PendingLooseningAction(
+                                                title = "Delete Session Group '${groupDetail.group.name}'",
+                                                description = "Deleting this session group disables shared session tracking and cooldown protection across its member apps.",
+                                                onAuthorized = { viewModel.deleteGroup(groupDetail.group.id) }
+                                            )
+                                        } else {
+                                            viewModel.deleteGroup(groupDetail.group.id)
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -305,6 +404,7 @@ fun GroupsScreen(
                 groupToEditSchedule = null
             },
             onSave = { updatedGroup, selectedPkgs ->
+                FocusHaptics.confirm(view)
                 val isLoosening = currentEdit != null && (
                         (currentEdit.group.scheduleEnabled && !updatedGroup.scheduleEnabled) ||
                                 (currentEdit.group.budgetEnabled && !updatedGroup.budgetEnabled) ||
@@ -351,6 +451,7 @@ fun GroupsScreen(
                 groupToEditSession = null
             },
             onSave = { updatedGroup, selectedPkgs ->
+                FocusHaptics.confirm(view)
                 val prevSession = currentEdit?.group?.sessionLimitSeconds ?: 0
                 val prevCooldown = currentEdit?.group?.cooldownSeconds ?: 0
 
@@ -429,7 +530,8 @@ private fun EmptyGroupsCard(
 private fun ScheduleGroupCard(
     groupDetail: GroupWithAppDetails,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val group = groupDetail.group
     val isScheduleActive = remember(group.scheduleEnabled, group.scheduleStart, group.scheduleEnd, group.daysOfWeek) {
@@ -441,7 +543,7 @@ private fun ScheduleGroupCard(
     val isCurrentlyBlocked = isScheduleActive || isBudgetExhausted
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag("group_card_${group.id}"),
         shape = RoundedCornerShape(16.dp),
@@ -574,7 +676,8 @@ private fun ScheduleGroupCard(
 private fun SessionGroupCard(
     groupDetail: GroupWithAppDetails,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val group = groupDetail.group
     val isCooldownActive = remember(group.cooldownEndTimestamp) {
@@ -591,7 +694,7 @@ private fun SessionGroupCard(
     }
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag("session_group_card_${group.id}"),
         shape = RoundedCornerShape(16.dp),

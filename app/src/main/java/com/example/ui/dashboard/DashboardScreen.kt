@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -73,6 +74,7 @@ import com.example.data.local.entity.DailyUsageLog
 import com.example.ui.common.CheatProtectionAuthDialog
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.viewmodel.FocusViewModel
+import com.example.util.FocusHaptics
 import com.example.util.PermissionHelper
 
 @Composable
@@ -82,6 +84,7 @@ fun DashboardScreen(
     onNavigateToAnalytics: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val isMasterEnabled by viewModel.isMasterEnabled.collectAsStateWithLifecycle()
@@ -270,6 +273,7 @@ fun DashboardScreen(
                     Switch(
                         checked = isMasterEnabled,
                         onCheckedChange = { willEnable ->
+                            FocusHaptics.confirm(view)
                             if (!willEnable && isCheatProtectionEnabled) {
                                 pendingCheatAction = PendingLooseningAction(
                                     title = "Disable Master Protection",

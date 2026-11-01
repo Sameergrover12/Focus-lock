@@ -264,6 +264,8 @@ fun SettingsScreen(
         )
     }
 
+    val view = androidx.compose.ui.platform.LocalView.current
+
     if (showEmergencyBreakConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showEmergencyBreakConfirmDialog = false },
@@ -272,6 +274,7 @@ fun SettingsScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        com.example.util.FocusHaptics.rejectOrDelete(view)
                         showEmergencyBreakConfirmDialog = false
                         viewModel.takeEmergencyBreak()
                     },

@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -97,6 +98,17 @@ fun DashboardScreen(
     val keywords by viewModel.blockedKeywords.collectAsStateWithLifecycle()
     val totalMinutesToday by viewModel.totalMinutesUsedToday.collectAsStateWithLifecycle()
     val todayUsageLogs by viewModel.todayUsageLogs.collectAsStateWithLifecycle()
+    val todayTotalIntercepts by viewModel.todayTotalIntercepts.collectAsStateWithLifecycle()
+
+    var showInterceptsScreen by rememberSaveable { mutableStateOf(false) }
+
+    if (showInterceptsScreen) {
+        InterceptsScreen(
+            viewModel = viewModel,
+            onBack = { showInterceptsScreen = false }
+        )
+        return
+    }
 
     var isAccessibilityEnabled by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var pendingCheatAction by remember { mutableStateOf<PendingLooseningAction?>(null) }
@@ -457,16 +469,22 @@ fun DashboardScreen(
             ) {
                 DashboardStatCard(
                     title = "App Blocking",
-                    count = "${blockedApps.size} blocked",
+                    count = "${blockedApps.size + screenLimits.size} active",
                     icon = Icons.Default.Apps,
-                    onClick = { onNavigateToTab(2) },
+                    onClick = {
+                        FocusHaptics.tick(context)
+                        onNavigateToTab(1)
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 DashboardStatCard(
-                    title = "Screen Time",
-                    count = "${screenLimits.size} limits",
-                    icon = Icons.Default.HourglassTop,
-                    onClick = { onNavigateToTab(2) }, // Apps & limits tab
+                    title = "Intercepts",
+                    count = "$todayTotalIntercepts blocked today",
+                    icon = Icons.Default.Shield,
+                    onClick = {
+                        FocusHaptics.tick(context)
+                        showInterceptsScreen = true
+                    },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -481,14 +499,20 @@ fun DashboardScreen(
                     title = "App Groups",
                     count = "${groups.size} active",
                     icon = Icons.Default.Lock,
-                    onClick = { onNavigateToTab(3) },
+                    onClick = {
+                        FocusHaptics.tick(context)
+                        onNavigateToTab(2)
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 DashboardStatCard(
                     title = "Web & Keywords",
                     count = "${websites.size + keywords.size} rules",
                     icon = Icons.Default.Language,
-                    onClick = { onNavigateToTab(4) },
+                    onClick = {
+                        FocusHaptics.tick(context)
+                        onNavigateToTab(3)
+                    },
                     modifier = Modifier.weight(1f)
                 )
             }

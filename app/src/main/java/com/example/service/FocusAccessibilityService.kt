@@ -209,6 +209,7 @@ class FocusAccessibilityService : AccessibilityService() {
                 ) {
                     val currentPkg = currentForegroundPackage ?: withContext(Dispatchers.Main) { getCurrentlyFocusedPackage() }
                     if (!currentPkg.isNullOrEmpty() && !com.example.util.KillswitchManager.isAllowedKillswitchPackage(this@FocusAccessibilityService, currentPkg)) {
+                        com.example.util.InterceptTracker.recordAppIntercept(this@FocusAccessibilityService, currentPkg)
                         withContext(Dispatchers.Main) {
                             performGlobalAction(GLOBAL_ACTION_HOME)
                             launchMainActivityForKillswitch()
@@ -612,6 +613,7 @@ class FocusAccessibilityService : AccessibilityService() {
             !com.example.util.KillswitchManager.isEmergencyBreakActive(this)
         ) {
             if (!com.example.util.KillswitchManager.isAllowedKillswitchPackage(this, eventPkg)) {
+                com.example.util.InterceptTracker.recordAppIntercept(this, eventPkg)
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 launchMainActivityForKillswitch()
                 return
@@ -1370,6 +1372,9 @@ class FocusAccessibilityService : AccessibilityService() {
         lastBlockedTime = now
         lastBlockedPackage = pkgName
 
+        // Record intercept via InterceptTracker
+        com.example.util.InterceptTracker.recordKeywordOrWebIntercept(this, "Keyword: \"${match.rule.keyword}\"")
+
         // Eject user from the view displaying the restricted keyword
         val backed = performGlobalAction(GLOBAL_ACTION_BACK)
         if (!backed) {
@@ -1393,6 +1398,9 @@ class FocusAccessibilityService : AccessibilityService() {
             "Target App: $pkgName"
         )
 
+        // Record intercept via InterceptTracker
+        com.example.util.InterceptTracker.recordKeywordOrWebIntercept(this, match.rule.domainOrUrl)
+
         // Category A: Full-Screen Block Overlay (Use FULL_SCREEN_QUOTES)
         executeBlock(
             pkgName = pkgName,
@@ -1409,6 +1417,9 @@ class FocusAccessibilityService : AccessibilityService() {
         }
         lastBlockedPackage = packageName
         lastBlockedTime = now
+
+        // Record intercept via InterceptTracker
+        com.example.util.InterceptTracker.recordAppIntercept(this, packageName)
 
         // Step 1: Force the OS to collapse/minimize floating or split-screen windows
         performGlobalAction(GLOBAL_ACTION_BACK)
@@ -1458,6 +1469,13 @@ class FocusAccessibilityService : AccessibilityService() {
 
         lastBlockedTime = now
         lastBlockedPackage = pkgName
+
+        // Record intercept via InterceptTracker
+        if (type == BlockedActivity.TYPE_WEBSITE) {
+            com.example.util.InterceptTracker.recordKeywordOrWebIntercept(this, title)
+        } else {
+            com.example.util.InterceptTracker.recordAppIntercept(this, pkgName)
+        }
 
         // Step 1: Force the OS to collapse/minimize floating or split-screen windows
         performGlobalAction(GLOBAL_ACTION_BACK)

@@ -25,6 +25,7 @@ class FocusApplication : Application() {
         createNotificationChannels()
         com.example.util.EmergencyBreakManager.init(this)
         com.example.util.KillswitchManager.init(this)
+        com.example.util.InterceptTracker.init(this)
         com.example.receiver.FocusNotificationScheduler.scheduleNext9PmAlarm(this)
 
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {

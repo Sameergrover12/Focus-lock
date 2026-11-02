@@ -641,6 +641,9 @@ class FocusForegroundService : Service() {
         lastSessionBlockPackage = pkgName
         lastSessionBlockTime = now
 
+        // Record intercept via InterceptTracker
+        com.example.util.InterceptTracker.recordAppIntercept(this, pkgName)
+
         val quote = MotivationLibrary.getRandomFullScreenQuote()
         val title = groupName ?: getAppMetadata(pkgName).first
         val reason = if (groupName != null) {

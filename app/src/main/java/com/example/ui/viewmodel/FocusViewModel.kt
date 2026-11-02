@@ -329,6 +329,12 @@ class FocusViewModel(
         initialValue = 0
     )
 
+    // Intercept Tracking Flows
+    val todayTotalIntercepts: StateFlow<Int> = com.example.util.InterceptTracker.todayTotalIntercepts
+    val todayAppIntercepts: StateFlow<Map<String, Int>> = com.example.util.InterceptTracker.todayAppIntercepts
+    val todayKeywordWebIntercepts: StateFlow<Map<String, Int>> = com.example.util.InterceptTracker.todayKeywordWebIntercepts
+    val sevenDayTotalIntercepts: StateFlow<Int> = com.example.util.InterceptTracker.sevenDayTotalIntercepts
+
     val monthlyAverageScreenTimeMinutes: StateFlow<Double> = real30DayAverageMinutes.map { it.toDouble() }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),

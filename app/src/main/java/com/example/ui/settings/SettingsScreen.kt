@@ -581,17 +581,6 @@ fun SettingsScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "• 10-Minute Hard Cap: 3 breaks per 7-day cycle.\n• The Phantom Cutoff: Zero visual countdown timers.\n• The Abrupt Snapback: Immediate lock restoration at 10:00:00.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 18.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
                     Spacer(modifier = Modifier.height(14.dp))
 
                     if (isBreakActive) {
@@ -951,15 +940,6 @@ fun SettingsScreen(
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "• 100% Offline: Anchors wall clock against hardware elapsedRealtime (zero internet needed).\n• Reboots Protected: Monotonic time progression guarantees time cannot be rolled back.\n• Date & Time Lock: System date/time settings are blocked during active sessions.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 18.sp
-                    )
                 }
             }
         }

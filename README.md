@@ -89,11 +89,12 @@ Focus-lock is distributed under the license included in this repository.
 ---
 
 **Focus-lock — Take control of your attention.**
- <img width="1279" height="2560" alt="54473" src="https://github.com/user-attachments/assets/45b252c5-327f-43da-b541-7aa8e67d0690" />
-<img width="1279" height="2560" alt="54465" src="https://github.com/user-attachments/assets/e60141a9-5d77-4f38-866c-bc9396da9099" />
-<img width="1280" height="2560" alt="54479" src="https://github.com/user-attachments/assets/5f36d7a4-e5b7-4784-94ef-111d509360a4" />
-<img width="1280" height="2560" alt="54459" src="https://github.com/user-attachments/assets/b308115f-3bb6-472f-9512-8eb9c6881e35" />
-<img width="1280" height="2560" alt="54455" src="https://github.com/user-attachments/assets/3c34a40d-5ee7-4d3c-b703-8975cc8afbdd" />
-<img width="1280" height="2560" alt="54451" src="https://github.com/user-attachments/assets/96b2fd03-e51f-4456-afef-8e64ed2b97a8" />
-<img width="1280" height="2560" alt="54443" src="https://github.com/user-attachments/assets/b0c1269a-f248-45d0-834e-0d7a6263e2d7" />
+ <img width="1280" height="2560" alt="54443" src="https://github.com/user-attachments/assets/8ad132d2-be7b-4de9-af38-4ad8f2e60f0e" />
+<img width="1280" height="2560" alt="54451" src="https://github.com/user-attachments/assets/28bcc7f1-78b9-4e0d-81f5-344a8afdcf1b" />
+<img width="1280" height="2560" alt="54455" src="https://github.com/user-attachments/assets/2d7bcd79-9c3e-43ee-8149-1e65603ed08d" />
+<img width="1280" height="2560" alt="54459" src="https://github.com/user-attachments/assets/2ffebe02-d1c1-478a-8846-4336887526c6" />
+<img width="1280" height="2560" alt="54479" src="https://github.com/user-attachments/assets/7d153380-ec52-4eef-b67c-1380bf496c7c" />
+<img width="1279" height="2560" alt="54465" src="https://github.com/user-attachments/assets/685b2dd8-8bb9-48e7-bd21-9439480d1f70" />
+<img width="1279" height="2560" alt="54473" src="https://github.com/user-attachments/assets/049663e8-6de9-4ba5-954f-20e88a8d8e32" />
+
 

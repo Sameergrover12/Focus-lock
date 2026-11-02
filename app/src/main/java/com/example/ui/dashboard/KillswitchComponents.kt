@@ -1,14 +1,15 @@
 package com.example.ui.dashboard
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -28,12 +28,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,12 +54,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.FocusHaptics
 import kotlinx.coroutines.delay
+
+private val KillswitchRedAccent = Color(0xFFEF4444)
 
 const val EXACT_KILLSWITCH_PLEDGE =
     "This break is only for an actual emergency. I will handle my work and close the phone immediately after, because I am committed to investing my time into building my future."
@@ -94,7 +96,7 @@ fun KillswitchCard(
     if (showSetupDialog) {
         KillswitchSetupDialog(
             onDismiss = { showSetupDialog = false },
-            onEngage = { durationMinutes ->
+            onStart = { durationMinutes ->
                 FocusHaptics.confirm(view)
                 viewModel.startKillswitch(durationMinutes)
                 showSetupDialog = false
@@ -116,7 +118,7 @@ fun KillswitchCard(
     }
 
     if (!isKillswitchActive) {
-        // Inactive State Card
+        // Inactive State Card: Dynamically inherits theme surface/tones with a crisp red boundary border
         Card(
             modifier = modifier
                 .fillMaxWidth()
@@ -125,7 +127,7 @@ fun KillswitchCard(
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
             ),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f))
+            border = BorderStroke(1.dp, KillswitchRedAccent)
         ) {
             Row(
                 modifier = Modifier
@@ -142,12 +144,12 @@ fun KillswitchCard(
                         modifier = Modifier
                             .size(44.dp)
                             .background(
-                                color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f),
+                                color = KillswitchRedAccent.copy(alpha = 0.15f),
                                 shape = CircleShape
                             )
                             .border(
                                 1.dp,
-                                MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f),
+                                KillswitchRedAccent.copy(alpha = 0.4f),
                                 CircleShape
                             ),
                         contentAlignment = Alignment.Center
@@ -155,7 +157,7 @@ fun KillswitchCard(
                         Icon(
                             imageVector = Icons.Default.PowerSettingsNew,
                             contentDescription = "Killswitch Icon",
-                            tint = MaterialTheme.colorScheme.tertiary,
+                            tint = KillswitchRedAccent,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -168,40 +170,39 @@ fun KillswitchCard(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Emergency full-phone lockdown",
+                            text = "Full phone lockdown",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Button(
                     onClick = {
                         FocusHaptics.tick(context)
                         showSetupDialog = true
                     },
-                    modifier = Modifier.testTag("killswitch_engage_button"),
+                    modifier = Modifier.testTag("killswitch_start_button"),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiary,
-                        contentColor = MaterialTheme.colorScheme.onTertiary
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
+                    border = BorderStroke(1.dp, KillswitchRedAccent),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Bolt,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Engage",
+                        text = "Start",
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
     } else {
-        // Active Vault Card
+        // Active Vault Card: Hard lockdown state with red boundary border and dynamic theme surfaces
         val isBreakNow = isBreakActive && breakEndTime > currentTimeMs
         val remainingMs = if (isBreakNow) {
             maxOf(0L, breakEndTime - currentTimeMs)
@@ -225,16 +226,9 @@ fun KillswitchCard(
                 .testTag("killswitch_card_active"),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = if (isBreakNow) {
-                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                }
+                containerColor = MaterialTheme.colorScheme.surface
             ),
-            border = BorderStroke(
-                1.5.dp,
-                if (isBreakNow) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
-            )
+            border = BorderStroke(1.5.dp, KillswitchRedAccent)
         ) {
             Column(
                 modifier = Modifier
@@ -251,15 +245,15 @@ fun KillswitchCard(
                     Icon(
                         imageVector = if (isBreakNow) Icons.Default.HourglassBottom else Icons.Default.Lock,
                         contentDescription = null,
-                        tint = if (isBreakNow) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                        tint = KillswitchRedAccent,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isBreakNow) "EMERGENCY BREAK ACTIVE" else "KILLSWITCH ENGAGED • TOTAL LOCKDOWN",
+                        text = if (isBreakNow) "BREAK ACTIVE • 10M WINDOW" else "KILLSWITCH ENGAGED • TOTAL LOCKDOWN",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.ExtraBold,
-                        color = if (isBreakNow) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                        color = KillswitchRedAccent,
                         letterSpacing = 1.sp
                     )
                 }
@@ -283,7 +277,7 @@ fun KillswitchCard(
                     text = if (isBreakNow) {
                         "Focus lockdown resumes abruptly when timer reaches 00:00"
                     } else {
-                        "All non-essential apps locked • Only phone calls permitted"
+                        "All non-essential apps locked • Only essential calls permitted"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -303,9 +297,10 @@ fun KillswitchCard(
                             .fillMaxWidth()
                             .testTag("killswitch_end_break_early_button"),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiary,
-                            contentColor = MaterialTheme.colorScheme.onTertiary
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
                         ),
+                        border = BorderStroke(1.dp, KillswitchRedAccent),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
@@ -324,17 +319,19 @@ fun KillswitchCard(
                                 .fillMaxWidth()
                                 .testTag("killswitch_take_break_button"),
                             shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                            border = BorderStroke(1.dp, KillswitchRedAccent.copy(alpha = 0.6f))
                         ) {
                             Icon(
                                 imageVector = Icons.Default.HourglassBottom,
                                 contentDescription = null,
+                                tint = KillswitchRedAccent,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Take 10m Emergency Break (1 of 1 remaining)",
-                                fontWeight = FontWeight.SemiBold
+                                text = "Take 10m Break (1 of 1 remaining)",
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     } else {
@@ -344,7 +341,7 @@ fun KillswitchCard(
                             modifier = Modifier.padding(top = 4.dp)
                         ) {
                             Text(
-                                text = "Emergency Break Used (0 of 1 remaining)",
+                                text = "Break Used (0 of 1 remaining)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -361,15 +358,16 @@ fun KillswitchCard(
 @Composable
 fun KillswitchSetupDialog(
     onDismiss: () -> Unit,
-    onEngage: (minutes: Int) -> Unit
+    onStart: (minutes: Int) -> Unit
 ) {
+    // 5 Duration Presets: 15m, 30m, 1hr, 2hr, 3hr
     val presets = listOf(15, 30, 60, 120, 180)
     val presetLabels = mapOf(
         15 to "15m",
         30 to "30m",
-        60 to "1h",
-        120 to "2h",
-        180 to "3h"
+        60 to "1hr",
+        120 to "2hr",
+        180 to "3hr"
     )
 
     var selectedMinutes by remember { mutableIntStateOf(60) }
@@ -382,14 +380,15 @@ fun KillswitchSetupDialog(
                 Icon(
                     imageVector = Icons.Default.PowerSettingsNew,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
+                    tint = KillswitchRedAccent,
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Engage Killswitch",
+                    text = "Killswitch",
                     fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleLarge
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         },
@@ -402,39 +401,52 @@ fun KillswitchSetupDialog(
                 Text(
                     text = "Select lockdown duration:",
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Preset Chips Row
+                // Equal-Sized Duration Preset Chips (15m, 30m, 1hr, 2hr, 3hr)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     presets.forEach { mins ->
                         val isSelected = selectedMinutes == mins && customText.isEmpty()
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = {
-                                selectedMinutes = mins
-                                customText = ""
-                            },
-                            label = {
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .clickable {
+                                    selectedMinutes = mins
+                                    customText = ""
+                                },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                            )
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
                                 Text(
                                     text = presetLabels[mins] ?: "${mins}m",
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1
                                 )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.tertiary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onTertiary
-                            )
-                        )
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Custom Minutes Input
                 OutlinedTextField(
@@ -447,9 +459,16 @@ fun KillswitchSetupDialog(
                             selectedMinutes = parsed.coerceIn(1, 1440)
                         }
                     },
-                    label = { Text("Or enter custom minutes (1–1440)") },
+                    label = { Text("Enter the time manually") },
+                    placeholder = { Text("Minutes (1–1440)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("killswitch_custom_minutes_input")
@@ -457,11 +476,11 @@ fun KillswitchSetupDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Warning Paraphrase Box
+                // Warning Box Copy (cleaned up copy without the word "emergency")
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                    color = KillswitchRedAccent.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, KillswitchRedAccent.copy(alpha = 0.35f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -471,16 +490,16 @@ fun KillswitchSetupDialog(
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
+                            tint = KillswitchRedAccent,
                             modifier = Modifier
                                 .size(20.dp)
                                 .padding(top = 2.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Warning: Engaging Killswitch locks all non-essential apps for the entire duration. Phone & Emergency calls remain active. Only 1 single 10-minute break is permitted, unlocked exclusively by typing an exact commitment pledge.",
+                            text = "Warning: Locking your phone restricts all non-essential apps for the entire duration. Phone & essential calls remain active. Only 1 single 10-minute break is permitted, unlocked exclusively by typing an exact commitment pledge.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            color = MaterialTheme.colorScheme.onSurface,
                             lineHeight = 17.sp
                         )
                     }
@@ -489,23 +508,27 @@ fun KillswitchSetupDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onEngage(selectedMinutes) },
+                onClick = { onStart(selectedMinutes) },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    contentColor = MaterialTheme.colorScheme.onTertiary
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
+                border = BorderStroke(1.dp, KillswitchRedAccent),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("killswitch_confirm_button")
             ) {
                 Text(
-                    text = "Engage ($selectedMinutes min)",
+                    text = "Start ($selectedMinutes min)",
                     fontWeight = FontWeight.Bold
                 )
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(
+                    text = "Cancel",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     )
@@ -528,14 +551,15 @@ fun KillswitchPledgeDialog(
                 Icon(
                     imageVector = Icons.Default.HourglassBottom,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
+                    tint = KillswitchRedAccent,
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Emergency Break Pledge",
+                    text = "Break Verification",
                     fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         },
@@ -593,6 +617,12 @@ fun KillswitchPledgeDialog(
                         autoCorrect = false,
                         keyboardType = KeyboardType.Text
                     ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
                     maxLines = 5
                 )
 
@@ -627,11 +657,12 @@ fun KillswitchPledgeDialog(
                 onClick = onUnlock,
                 enabled = isExactMatch,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    contentColor = MaterialTheme.colorScheme.onTertiary,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 ),
+                border = BorderStroke(1.dp, KillswitchRedAccent),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("killswitch_unlock_break_button")
             ) {
@@ -643,7 +674,10 @@ fun KillswitchPledgeDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(
+                    text = "Cancel",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     )

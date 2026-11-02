@@ -272,11 +272,34 @@ class FocusForegroundService : Service() {
         val prefRepo = app.preferencesRepository
         val repo = app.repository
 
+        // Killswitch lockdown takes priority even if master switch is off
+        if (com.example.util.KillswitchManager.isKillswitchActive(this) &&
+            !com.example.util.KillswitchManager.isEmergencyBreakActive(this)
+        ) {
+            if (!com.example.util.KillswitchManager.isAllowedKillswitchPackage(this, pkgName)) {
+                lastFallbackBlockPackage = pkgName
+                lastFallbackBlockTime = now
+                try {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(homeIntent)
+                    val mainIntent = Intent(this, com.example.MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    startActivity(mainIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Fallback killswitch launch failed", e)
+                }
+                return
+            }
+        }
+
         val isMaster = prefRepo.isMasterEnabled.first()
         if (!isMaster) return
 
-        val emergencyUntil = prefRepo.activeEmergencyBreakUntil.first()
-        if (emergencyUntil > now) return
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) return
 
         val isBlocked = blockedPackagesCache.contains(pkgName) || repo.isAppBlocked(pkgName)
 

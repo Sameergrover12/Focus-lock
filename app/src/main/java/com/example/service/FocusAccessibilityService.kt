@@ -97,7 +97,8 @@ class FocusAccessibilityService : AccessibilityService() {
         val isServiceRunning = _isServiceRunning.asStateFlow()
 
         @Volatile
-        private var instance: FocusAccessibilityService? = null
+        var instance: FocusAccessibilityService? = null
+            private set
 
         @Volatile
         var currentForegroundPackage: String? = null
@@ -197,19 +198,29 @@ class FocusAccessibilityService : AccessibilityService() {
             while (isActive) {
                 delay(350) // Roughly 300–500ms lightweight periodic rescan
 
-                if (!isMasterEnabled) continue
-
-                // Pauses immediately when screen is off
-                val isInteractive = powerManager?.isInteractive ?: true
-                if (!isInteractive) continue
-
                 // Pauses immediately when Focus Lock itself is in foreground
                 if (AppForegroundTracker.isFocusLockInForeground) {
                     continue
                 }
 
+                // Killswitch Lockdown scan (runs regardless of master switch)
+                if (com.example.util.KillswitchManager.isKillswitchActive(this@FocusAccessibilityService) &&
+                    !com.example.util.KillswitchManager.isEmergencyBreakActive(this@FocusAccessibilityService)
+                ) {
+                    val currentPkg = currentForegroundPackage ?: withContext(Dispatchers.Main) { getCurrentlyFocusedPackage() }
+                    if (!currentPkg.isNullOrEmpty() && !com.example.util.KillswitchManager.isAllowedKillswitchPackage(this@FocusAccessibilityService, currentPkg)) {
+                        withContext(Dispatchers.Main) {
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            launchMainActivityForKillswitch()
+                        }
+                        continue
+                    }
+                }
+
+                if (!isMasterEnabled) continue
+
                 // Bypass during active emergency break
-                if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
+                if (com.example.util.EmergencyBreakManager.isBreakActive(this@FocusAccessibilityService)) {
                     continue
                 }
 
@@ -523,6 +534,9 @@ class FocusAccessibilityService : AccessibilityService() {
      * including apps running in freeform floating or split-screen windows.
      */
     private fun findBlockedPackageInVisibleWindows(eventPkg: String?): String? {
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) {
+            return null
+        }
         if (AppForegroundTracker.isFocusLockInForeground) {
             return null
         }
@@ -576,7 +590,6 @@ class FocusAccessibilityService : AccessibilityService() {
         // a. Immediately return if event == null or event.packageName == null
         if (event == null) return
         val eventPkg = event.packageName?.toString() ?: return
-        if (!isMasterEnabled) return
 
         val myPackageName = packageName
         val appPkg = applicationContext.packageName
@@ -594,6 +607,19 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
+        // KILLSWITCH ENFORCEMENT: Operates even if Master Switch is OFF
+        if (com.example.util.KillswitchManager.isKillswitchActive(this) &&
+            !com.example.util.KillswitchManager.isEmergencyBreakActive(this)
+        ) {
+            if (!com.example.util.KillswitchManager.isAllowedKillswitchPackage(this, eventPkg)) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                launchMainActivityForKillswitch()
+                return
+            }
+        }
+
+        if (!isMasterEnabled) return
+
         val eventType = event.eventType
 
         // d. Throttle Window Content Scans: run at most once every 300ms and avoid recursive scans for unmonitored apps
@@ -610,7 +636,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // 0. The Emergency Failsafe System: 10-Minute Hard Cap
-        if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) {
             if (!isSystemOverlay(eventPkg) && eventPkg != myPackageName) {
                 currentForegroundPackage = eventPkg
                 FocusForegroundService.onForegroundPackageChanged(eventPkg)
@@ -664,6 +690,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun checkAndInterceptDateTimeSettings(event: AccessibilityEvent): Boolean {
         if (!isMasterEnabled || !isClockTamperProtectionEnabled) return false
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) return false
 
         // Only enforce if any protection, schedule, or limit is active
         val hasActiveRestrictions = isCheatProtectionEnabled ||
@@ -765,6 +792,7 @@ class FocusAccessibilityService : AccessibilityService() {
      * Security apps, and native System Settings.
      */
     private fun checkAndInterceptHideApps(event: AccessibilityEvent): Boolean {
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) return false
         // ONLY execute the "Hide apps" text scanner if the package name contains:
         // "settings", "launcher", "security", or "safecenter"
         val eventPkg = event.packageName?.toString()
@@ -1094,9 +1122,7 @@ class FocusAccessibilityService : AccessibilityService() {
         if (pkgName == packageName) return
 
         // 0. The Emergency Failsafe System: 10-Minute Hard Cap
-        // If an active 10-minute emergency break is currently running, bypass the block.
-        // Once the 10 minutes elapse, the break expires silently and access is terminated immediately (The Abrupt Snapback).
-        if (TimeIntegrityManager.getTrueTimeMillis() < activeEmergencyBreakUntil) {
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) {
             return
         }
 
@@ -1233,6 +1259,7 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun scanContentOnScreen(pkgName: String, rootNode: AccessibilityNodeInfo? = null) {
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) return
         if (AppForegroundTracker.isFocusLockInForeground) return
         if (pkgName == packageName || isInputMethod(pkgName)) return
         val root = rootNode ?: try {
@@ -1511,6 +1538,53 @@ class FocusAccessibilityService : AccessibilityService() {
                 pm.getApplicationLabel(info).toString()
             } catch (e: Exception) {
                 pkgName
+            }
+        }
+    }
+
+    fun handleEmergencyBreakExpired() {
+        Log.w(TAG, "Emergency break expired! Immediately re-evaluating active window to enforce restrictions.")
+        serviceScope.launch(Dispatchers.Main) {
+            val rootNode = try { rootInActiveWindow } catch (_: Exception) { null }
+            val currentPkg = rootNode?.packageName?.toString() ?: currentForegroundPackage
+            if (!currentPkg.isNullOrEmpty() && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
+                if (isPackageRestricted(currentPkg)) {
+                    Log.w(TAG, "User still inside restricted app ($currentPkg) after break expiration! Forcefully ejecting.")
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    triggerBlockScreen(currentPkg)
+                } else if (rootNode != null) {
+                    scanContentOnScreen(currentPkg, rootNode)
+                }
+            }
+        }
+    }
+
+    private var lastKillswitchLaunchTime = 0L
+
+    fun launchMainActivityForKillswitch() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastKillswitchLaunchTime > 1500L) {
+            lastKillswitchLaunchTime = now
+            try {
+                val intent = Intent(this, com.example.MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch MainActivity for Killswitch", e)
+            }
+        }
+    }
+
+    fun handleKillswitchBreakExpired() {
+        Log.w(TAG, "Killswitch emergency break expired! Immediately re-evaluating active window.")
+        serviceScope.launch(Dispatchers.Main) {
+            val rootNode = try { rootInActiveWindow } catch (_: Exception) { null }
+            val currentPkg = rootNode?.packageName?.toString() ?: currentForegroundPackage ?: getCurrentlyFocusedPackage()
+            if (!currentPkg.isNullOrEmpty() && !com.example.util.KillswitchManager.isAllowedKillswitchPackage(this@FocusAccessibilityService, currentPkg)) {
+                Log.w(TAG, "User still inside non-allowed app ($currentPkg) after Killswitch break expiration! Forcefully ejecting.")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                launchMainActivityForKillswitch()
             }
         }
     }

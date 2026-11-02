@@ -85,6 +85,23 @@
         </receiver>
 
         <receiver
+            android:name=".receiver.EmergencyBreakReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.action.EMERGENCY_BREAK_EXPIRED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".receiver.KillswitchReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.action.KILLSWITCH_BREAK_EXPIRED" />
+                <action android:name="com.example.action.KILLSWITCH_SESSION_EXPIRED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".receiver.FocusDeviceAdminReceiver"
             android:description="@string/app_name"
             android:exported="true"

@@ -145,17 +145,22 @@ class FocusViewModel(
         initialValue = UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
     )
 
-    val emergencyBreaksRemaining: StateFlow<Int> = preferencesRepository.emergencyBreaksRemaining.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS
-    )
+    val isEmergencyBreakActive: StateFlow<Boolean> = com.example.util.EmergencyBreakManager.isBreakActiveFlow
+
+    val emergencyBreaksRemaining: StateFlow<Int> = com.example.util.EmergencyBreakManager.breaksRemainingFlow
 
     val activeEmergencyBreakUntil: StateFlow<Long> = preferencesRepository.activeEmergencyBreakUntil.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = 0L
     )
+
+    // Killswitch State Flows
+    val isKillswitchActive: StateFlow<Boolean> = com.example.util.KillswitchManager.isKillswitchActiveFlow
+    val isKillswitchEmergencyBreakActive: StateFlow<Boolean> = com.example.util.KillswitchManager.isEmergencyBreakActiveFlow
+    val killswitchEndTime: StateFlow<Long> = com.example.util.KillswitchManager.killswitchEndTimeFlow
+    val killswitchBreakEndTime: StateFlow<Long> = com.example.util.KillswitchManager.breakEndTimeFlow
+    val isKillswitchBreakUsed: StateFlow<Boolean> = com.example.util.KillswitchManager.breakUsedFlow
 
     fun setReclaimedCommitment(commitment: String) {
         viewModelScope.launch {
@@ -171,24 +176,50 @@ class FocusViewModel(
         }
     }
 
+    fun startEmergencyBreak(context: android.content.Context): Boolean {
+        val started = com.example.util.EmergencyBreakManager.startTenMinuteBreak(context)
+        if (started) {
+            triggerAutoBackup()
+        }
+        return started
+    }
+
     suspend fun triggerEmergencyBreak(typedPhrase: String): Boolean {
-        return preferencesRepository.triggerEmergencyBreak(typedPhrase)
+        val expectedPhrase = preferencesRepository.getCognitivePassphrase()
+        if (typedPhrase.trim() != expectedPhrase.trim()) {
+            return false
+        }
+        val started = com.example.util.EmergencyBreakManager.startTenMinuteBreak(getApplication())
+        if (started) {
+            triggerAutoBackup()
+        }
+        return started
     }
 
     fun takeEmergencyBreak() {
-        viewModelScope.launch {
-            preferencesRepository.takeEmergencyBreak()
-        }
+        startEmergencyBreak(getApplication())
     }
 
     fun endEmergencyBreakEarly() {
-        viewModelScope.launch {
-            preferencesRepository.endEmergencyBreakEarly()
-        }
+        com.example.util.EmergencyBreakManager.onBreakExpired(getApplication())
+        triggerAutoBackup()
     }
 
     suspend fun isEmergencyBreakActive(): Boolean {
-        return preferencesRepository.isEmergencyBreakActive()
+        return com.example.util.EmergencyBreakManager.isBreakActive(getApplication())
+    }
+
+    // Killswitch Operations
+    fun startKillswitch(minutes: Int) {
+        com.example.util.KillswitchManager.startKillswitch(getApplication(), minutes)
+    }
+
+    fun startKillswitchEmergencyBreak(): Boolean {
+        return com.example.util.KillswitchManager.startEmergencyBreak(getApplication())
+    }
+
+    fun endKillswitchEmergencyBreakEarly() {
+        com.example.util.KillswitchManager.endEmergencyBreakEarly(getApplication())
     }
 
     fun setInvincibleModeEnabled(enabled: Boolean) {

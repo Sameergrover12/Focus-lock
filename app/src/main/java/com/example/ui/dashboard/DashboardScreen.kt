@@ -88,6 +88,7 @@ fun DashboardScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val isMasterEnabled by viewModel.isMasterEnabled.collectAsStateWithLifecycle()
+    val isBreakActive by viewModel.isEmergencyBreakActive.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
     val blockedApps by viewModel.blockedApps.collectAsStateWithLifecycle()
     val screenLimits by viewModel.screenTimeLimits.collectAsStateWithLifecycle()
@@ -145,13 +146,13 @@ fun DashboardScreen(
                 modifier = Modifier
                     .size(8.dp)
                     .background(
-                        color = if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        color = if (isBreakActive) MaterialTheme.colorScheme.tertiary else if (isMasterEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                         shape = CircleShape
                     )
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = if (isMasterEnabled) "Active" else "Paused",
+                text = if (isBreakActive) "Paused (10m Break)" else if (isMasterEnabled) "Active" else "Paused",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp
@@ -257,15 +258,16 @@ fun DashboardScreen(
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
-                                text = if (isMasterEnabled) "Focus Protection ON" else "Protection Paused",
+                                text = if (isBreakActive) "Protection Paused" else if (isMasterEnabled) "Focus Protection ON" else "Protection Paused",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (isMasterEnabled) "Enforcing 5 control rules" else "Rules temporarily bypassed",
+                                text = if (isBreakActive) "Paused • 10m Emergency Break Active" else if (isMasterEnabled) "Enforcing 5 control rules" else "Rules temporarily bypassed",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isBreakActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (isBreakActive) FontWeight.SemiBold else FontWeight.Normal
                             )
                         }
                     }
@@ -293,6 +295,11 @@ fun DashboardScreen(
                     )
                 }
             }
+        }
+
+        // Killswitch Lockdown Vault Card
+        item(key = "killswitch_card") {
+            KillswitchCard(viewModel = viewModel)
         }
 
         // Today's Usage Overview Card: Interactive TOTAL SCREEN DWELL Tile

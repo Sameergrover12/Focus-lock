@@ -378,24 +378,11 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun isEmergencyBreakActive(): Boolean {
-        val prefs = context.dataStore.data.first()
-        val until = prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] ?: 0L
-        return TimeIntegrityManager.getTrueTimeMillis() < until
+        return com.example.util.EmergencyBreakManager.isBreakActive(context)
     }
 
     suspend fun getEmergencyBreaksRemaining(): Int {
-        val prefs = context.dataStore.data.first()
-        val now = TimeIntegrityManager.getTrueTimeMillis()
-        val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
-        if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
-            // Reset weekly allowance
-            context.dataStore.edit { editPrefs ->
-                editPrefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] = now
-                editPrefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = MAX_WEEKLY_EMERGENCY_BREAKS
-            }
-            return MAX_WEEKLY_EMERGENCY_BREAKS
-        }
-        return prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] ?: MAX_WEEKLY_EMERGENCY_BREAKS
+        return com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
     }
 
     suspend fun triggerEmergencyBreak(typedPhrase: String): Boolean {
@@ -404,52 +391,29 @@ class UserPreferencesRepository(private val context: Context) {
             return false
         }
 
-        var success = false
-        val now = TimeIntegrityManager.getTrueTimeMillis()
-
-        context.dataStore.edit { prefs ->
-            val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
-            val currentRemaining = if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
-                prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] = now
-                MAX_WEEKLY_EMERGENCY_BREAKS
-            } else {
-                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] ?: MAX_WEEKLY_EMERGENCY_BREAKS
-            }
-
-            if (currentRemaining > 0) {
-                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = currentRemaining - 1
-                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = now + EMERGENCY_BREAK_DURATION_MS
-                success = true
+        val started = com.example.util.EmergencyBreakManager.startTenMinuteBreak(context)
+        if (started) {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = System.currentTimeMillis() + 10 * 60 * 1000L
+                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
             }
         }
-
-        return success
+        return started
     }
 
     suspend fun takeEmergencyBreak(): Boolean {
-        var success = false
-        val now = TimeIntegrityManager.getTrueTimeMillis()
-
-        context.dataStore.edit { prefs ->
-            val weekStart = prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
-            val currentRemaining = if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
-                prefs[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] = now
-                MAX_WEEKLY_EMERGENCY_BREAKS
-            } else {
-                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] ?: MAX_WEEKLY_EMERGENCY_BREAKS
-            }
-
-            if (currentRemaining > 0) {
-                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = currentRemaining - 1
-                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = now + EMERGENCY_BREAK_DURATION_MS
-                success = true
+        val started = com.example.util.EmergencyBreakManager.startTenMinuteBreak(context)
+        if (started) {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = System.currentTimeMillis() + 10 * 60 * 1000L
+                prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
             }
         }
-
-        return success
+        return started
     }
 
     suspend fun endEmergencyBreakEarly() {
+        com.example.util.EmergencyBreakManager.onBreakExpired(context)
         context.dataStore.edit { prefs ->
             prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = 0L
         }

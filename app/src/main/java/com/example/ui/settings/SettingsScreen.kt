@@ -202,7 +202,7 @@ fun SettingsScreen(
         googleSignInLauncher.launch(client.signInIntent)
     }
 
-    val isBreakActive = activeEmergencyBreakUntil > System.currentTimeMillis()
+    val isBreakActive by viewModel.isEmergencyBreakActive.collectAsStateWithLifecycle()
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -583,93 +583,50 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    if (isBreakActive) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Emergency Break Active (10m)",
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "All app & website blocking is paused.",
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                                Button(
-                                    onClick = { viewModel.endEmergencyBreakEarly() },
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error,
-                                        contentColor = MaterialTheme.colorScheme.onError
-                                    ),
-                                    modifier = Modifier.testTag("end_emergency_break_button")
-                                ) {
-                                    Text("End Early", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                    val buttonText = when {
+                        isBreakActive -> "Emergency Break Active (Resumes Automatically)"
+                        emergencyBreaksRemaining > 0 -> "Take Emergency Break (10m)"
+                        else -> "No Emergency Breaks Left This Week"
+                    }
+                    val buttonEnabled = !isBreakActive && emergencyBreaksRemaining > 0
+
+                    Button(
+                        onClick = {
+                            com.example.util.FocusHaptics.rejectOrDelete(view)
+                            val started = viewModel.startEmergencyBreak(context)
+                            if (started) {
+                                Toast.makeText(
+                                    context,
+                                    "10-minute emergency break started. All restrictions paused.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                Toast.makeText(context, "Could not start emergency break.", Toast.LENGTH_SHORT).show()
                             }
-                        }
-                    } else if (emergencyBreaksRemaining > 0) {
-                        Button(
-                            onClick = {
-                                if (!isInvincibleModeEnabled && !isCheatProtectionEnabled) {
-                                    Toast.makeText(context, "No active restrictions to break.", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    showEmergencyBreakConfirmDialog = true
-                                }
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("take_emergency_break_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.HourglassBottom,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Take Emergency Break (10m)",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                    } else {
-                        Button(
-                            onClick = {},
-                            enabled = false,
-                            shape = RoundedCornerShape(10.dp),
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("take_emergency_break_button")
-                        ) {
-                            Text(
-                                text = "No Breaks Remaining",
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 13.sp
-                            )
-                        }
+                        },
+                        enabled = buttonEnabled,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("take_emergency_break_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HourglassBottom,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = buttonText,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
                     }
                 }
             }

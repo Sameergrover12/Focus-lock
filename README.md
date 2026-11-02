@@ -4,46 +4,41 @@
 
 Focus-lock is an open-source Android productivity and digital wellbeing app designed to help users reduce distractions, control screen time, and stay focused.
 
-It lets users block distracting apps and websites, set screen-time limits, create scheduled groups, and protect their focus rules from being easily bypassed.
+It lets users block distracting apps and websites, set screen-time limits, create scheduled groups, deploy full-device lockdowns, and protect their focus rules from being easily bypassed.
 
 🚧 **Focus-lock is actively developed and continuously improved.**
 
 ## ✨ Features
 
-### 📱 App Control
+### ⚡ Full-Device Lockdown (Killswitch)
+- **Killswitch Mode** — Instant, device-wide isolation mode for deep focus sessions.
+- **Flexible Duration Presets** — Quick selection chips (`15m`, `30m`, `1h`, `2h`, `3h`) plus custom manual minute inputs.
+- **Honesty Pledge Emergency Pass** — Includes a secure 10-minute emergency break per session, unlocked exclusively by typing a strict multi-line commitment pledge with copy-paste disabled.
+- **Clock Tamper Protection** — Offline wall-clock anchoring and monotonic time progression to prevent date/time rollback cheating during active locks.
+
+### 📊 Advanced Analytics & Dwell
+- **30-Day Historical Backfill** — Instantly tracks and caches past daily dwell times for a comprehensive 30-day view.
+- **Swipeable 30-Day Chart** — Smoothly scrollable 7-day-window bar chart to review your entire monthly progress.
+- **Live Intercepts Telemetry** — Real-time tracking and categorized breakdowns of all blocked apps, websites, and keyword triggers.
+
+### 🔔 Smart Notification Engine
+- **9:00 PM Daily Check-ins** — Smart evening notifications comparing today's usage against your calculated 30-day daily average.
+- **Non-Repeating Message Pools** — Over 90+ custom tone variations ensuring fresh, engaging motivation every day.
+- **Sunday Weekly Recaps** — Dedicated weekly summaries celebrating total time saved over the past 7 days.
+
+### 📱 App Control & Web Blocking
 - **Hard Block** — Block selected applications completely during active protection.
-- **Screen Time Limits** — Set daily usage limits for individual apps.
-- **Session Limits & Cooldowns** — Configure maximum continuous session duration with mandatory cooldown breaks.
-- **App Usage Tracking** — Monitor today's screen time and application usage.
+- **Screen Time & Session Limits** — Set daily usage limits and session durations with cooldown breaks.
+- **Website & Keyword Blocking** — Restrict specific web domains and case-sensitive phrases.
+- **Scheduled Groups** — Group applications together and run rules dynamically based on your daily routine.
 
-### 🌐 Web & Content Blocking
-- **Website Blocking** — Block selected websites.
-- **Keyword Blocking** — Block pages containing specified words or phrases.
-- **Case-sensitive matching** — Optional precise keyword matching.
+### 🛡️ Cheat & System Protection
+- **Passphrase Security** — Sensitive rule changes require a verification passcode.
+- **Invincible Mode** — Hardened against unauthorized uninstalls and system-setting bypasses.
 
-### 👥 Groups & Scheduling
-- Create groups containing multiple applications.
-- Schedule groups for specific times and days.
-- Set shared daily time budgets and shared session cooldowns.
-- Create different focus schedules for studying, work, sleep, or breaks.
-- Run multiple control rules according to your schedule.
-
-### 🛡️ Cheat Protection
-Focus-lock includes protection mechanisms designed to make distraction rules harder to bypass.
-
-- **Cheat Protection Lock** — Sensitive rule changes require a passphrase.
-- **Invincible Mode** — Adds additional protection against disabling Focus-lock through system settings or uninstall attempts.
-
-### 📊 Digital Wellbeing
-- Track total daily screen time.
-- View individual application usage.
-- See which apps consume the most time.
-- Automatically reset daily statistics.
-
-### 🎨 Appearance
-- Dark Theme
-- Light Theme
-- Follow System Theme
+### 🎨 Dynamic Appearance
+- Follows your exact system and custom in-app color themes seamlessly.
+- Sleek dark-mode optimized cyberpunk and purple-accented UI architecture.
 
 ## 📸 Screenshots
 
@@ -55,7 +50,7 @@ Smartphones provide instant access to social media, entertainment, shopping, and
 
 Focus-lock is designed to give users more control over that access.
 
-Instead of relying only on willpower, users can create their own rules for when distracting applications and websites should be unavailable.
+Instead of relying only on willpower, users can create unbreakable rules, deploy instant Killswitch isolation, and track real behavioral progress over time.
 
 The goal is simple:
 
@@ -65,25 +60,21 @@ The goal is simple:
 
 Focus-lock is currently under active development.
 
-The core productivity and blocking features are implemented, while the project continues to receive improvements, bug fixes, performance optimizations, and UI/UX refinements.
+The core productivity, Killswitch, analytics, and blocking features are fully implemented, while the project continues to receive performance optimizations and UI/UX refinements.
 
 ## 🗺️ Roadmap
 
-- [x] Application blocking
-- [x] Application screen-time limits
-- [x] Website blocking
-- [x] Keyword blocking
-- [x] Scheduled groups
-- [x] Screen-time tracking
-- [x] Cheat protection
-- [x] Uninstall protection
-- [x] Light / Dark / System themes
-- [ ] Further improve blocking reliability
-- [ ] Expand statistics and analytics
-- [ ] Improve accessibility
-- [ ] Expand automated testing
-- [ ] Improve documentation
-- [ ] Community contributions
+- [x] Application & website blocking
+- [x] Application screen-time & session limits
+- [x] Keyword blocking & case-sensitive filters
+- [x] Scheduled app groups
+- [x] Killswitch full-device lockdown
+- [x] Pledge-locked 10-minute emergency breaks
+- [x] 30-day historical analytics & swipeable charts
+- [x] Live intercepts telemetry tracking
+- [x] 9:00 PM smart notification engine & weekly recaps
+- [x] Cheat protection & clock tampering defense
+- [x] Dynamic theme integration
 
 ## 🤝 Contributing
 
@@ -97,8 +88,12 @@ Focus-lock is distributed under the license included in this repository.
 
 ---
 
-**Focus-lock — Take control of your attention.<img width="1279" height="2558" alt="46578" src="https://github.com/user-attachments/assets/b886fb13-00d4-40e0-a58a-99bd5a495e85" />
-<img width="1280" height="2560" alt="46586" src="https://github.com/user-attachments/assets/146c61e4-5ff2-4de1-a8a1-6903bef72f7e" />
-<img width="1280" height="2560" alt="46612" src="https://github.com/user-attachments/assets/dde0df79-8cb1-4007-8a37-c8d34895741c" />
-<img width="1280" height="2560" alt="46590" src="https://github.com/user-attachments/assets/774dbc29-bf1e-4f82-aaba-a21b6234b75f" />
-<img width="1280" height="2561" alt="46598" src="https://github.com/user-attachments/assets/4a27bcb4-10f2-4190-b446-8c186e20239e" />
+**Focus-lock — Take control of your attention.**
+ <img width="1279" height="2560" alt="54473" src="https://github.com/user-attachments/assets/45b252c5-327f-43da-b541-7aa8e67d0690" />
+<img width="1279" height="2560" alt="54465" src="https://github.com/user-attachments/assets/e60141a9-5d77-4f38-866c-bc9396da9099" />
+<img width="1280" height="2560" alt="54479" src="https://github.com/user-attachments/assets/5f36d7a4-e5b7-4784-94ef-111d509360a4" />
+<img width="1280" height="2560" alt="54459" src="https://github.com/user-attachments/assets/b308115f-3bb6-472f-9512-8eb9c6881e35" />
+<img width="1280" height="2560" alt="54455" src="https://github.com/user-attachments/assets/3c34a40d-5ee7-4d3c-b703-8975cc8afbdd" />
+<img width="1280" height="2560" alt="54451" src="https://github.com/user-attachments/assets/96b2fd03-e51f-4456-afef-8e64ed2b97a8" />
+<img width="1280" height="2560" alt="54443" src="https://github.com/user-attachments/assets/b0c1269a-f248-45d0-834e-0d7a6263e2d7" />
+

@@ -6,6 +6,7 @@ import com.example.data.local.entity.BlockedWebsite
 import com.example.service.ContentScanner
 import com.example.service.FocusForegroundService
 import com.example.service.GroupRuleEvaluator
+import com.example.util.SettingsTamperDetector
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -679,6 +680,99 @@ class ExampleUnitTest {
         val existing = listOf("shorts")
         val toAdd = uniqueInBatch.filter { it.lowercase() !in existing }
         assertEquals(listOf("reels"), toAdd)
+    }
+
+    @Test
+    fun testSettingsTamperDetectorZeroFalsePositivesOnNormalSettings() {
+        val appPkg = "com.example.focuslock"
+
+        // 1. Wi-Fi
+        val wifiTexts = listOf("Network & internet", "Wi-Fi", "Connected to Office_5G", "Add network")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(wifiTexts, false, true, appPkg)
+        )
+
+        // 2. Bluetooth
+        val btTexts = listOf("Connected devices", "Bluetooth", "Pair new device", "Galaxy Buds")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(btTexts, false, true, appPkg)
+        )
+
+        // 3. Display & Sound & Battery & Storage
+        val displayTexts = listOf("Display", "Dark theme", "Adaptive brightness", "Screen timeout")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(displayTexts, true, true, appPkg)
+        )
+
+        // 4. App Info for another app (Chrome)
+        val chromeAppInfo = listOf("App info", "Chrome", "Google LLC", "Force stop", "Uninstall updates", "Storage & cache", "Notifications")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(chromeAppInfo, true, true, appPkg)
+        )
+
+        // 5. General All Apps list with Focus Lock visible (Anti-False-Positive Guard)
+        val allAppsList = listOf("All apps", "Chrome", "Drive", "Focus Lock", "Gmail", "Maps", "YouTube", "25 apps installed")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(allAppsList, false, true, appPkg)
+        )
+
+        // 6. System main menu (with Date & time mentioned in summary)
+        val systemMenu = listOf("System", "Languages & input", "Gestures", "Date & time", "Backup", "System update")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(systemMenu, false, true, appPkg)
+        )
+    }
+
+    @Test
+    fun testSettingsTamperDetectorCatchesExactFocusLockTamperPages() {
+        val appPkg = "com.example.focuslock"
+
+        // Signature A: Focus Lock Accessibility toggle page
+        val a1 = listOf("Accessibility", "Focus Lock", "Use Focus Lock", "Shortcut", "Help & feedback")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(a1, true, true, appPkg)
+        )
+
+        // Signature A: Stop Focus Lock dialog
+        val a2 = listOf("Stop Focus Lock?", "Turning off Focus Lock will stop tracking and blocking.", "Cancel", "Stop")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(a2, false, true, appPkg)
+        )
+
+        // Signature B: Focus Lock App Info page
+        val b = listOf("App info", "Focus Lock", "12.4 MB", "Force stop", "Uninstall", "Storage & cache")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_B_APP_INFO,
+            SettingsTamperDetector.matchTamperSignature(b, true, true, appPkg)
+        )
+
+        // Signature C: Device Admin deactivation for Focus Lock
+        val c = listOf("Device admin", "Focus Lock", "Deactivate this device admin app", "Cancel")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_C_DEVICE_ADMIN,
+            SettingsTamperDetector.matchTamperSignature(c, false, true, appPkg)
+        )
+
+        // Signature D: Date & time settings with clock tamper protection enabled
+        val d = listOf("Date & time", "Automatic date & time", "Use network-provided time", "Set date", "Time zone")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_D_DATE_TIME,
+            SettingsTamperDetector.matchTamperSignature(d, true, true, appPkg)
+        )
+
+        // Signature D: Date & time settings with clock tamper protection DISABLED
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(d, true, false, appPkg)
+        )
     }
 }
 

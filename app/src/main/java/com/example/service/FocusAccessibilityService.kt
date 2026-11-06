@@ -39,13 +39,21 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
 
+import android.graphics.PixelFormat
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+
 import com.example.ui.overlay.OverlayManager
 import com.example.util.AppForegroundTracker
+import com.example.util.FocusHaptics
 import com.example.util.PermissionHelper
+import com.example.util.SettingsTamperDetector
 import com.example.util.TimeIntegrityManager
 
 class FocusAccessibilityService : AccessibilityService() {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var serviceJob = SupervisorJob()
     private var serviceScope = CoroutineScope(serviceJob + Dispatchers.IO)
     private var periodicScanJob: Job? = null
@@ -188,6 +196,14 @@ class FocusAccessibilityService : AccessibilityService() {
             ruleCollectionJobs.clear()
         }
         serviceJob.cancel()
+        mainHandler.removeCallbacksAndMessages(null)
+        try {
+            if (touchShieldView != null) {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                wm?.removeViewImmediate(touchShieldView)
+                touchShieldView = null
+            }
+        } catch (_: Exception) {}
         Log.d(TAG, "FocusAccessibilityService destroyed")
     }
 
@@ -243,6 +259,14 @@ class FocusAccessibilityService : AccessibilityService() {
                 val currentPkg = currentForegroundPackage
                 // Pauses immediately when Focus Lock itself is foreground or system overlay
                 if (currentPkg.isNullOrEmpty() || currentPkg == packageName || isSystemOverlay(currentPkg)) {
+                    continue
+                }
+
+                // Surgical check if currently in Settings
+                if (currentPkg == "com.android.settings") {
+                    withContext(Dispatchers.Main) {
+                        checkAndInterceptSettingsTamper("com.android.settings")
+                    }
                     continue
                 }
 
@@ -543,6 +567,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
         val visiblePkgs = getAllVisiblePackages(eventPkg)
         for (pkg in visiblePkgs) {
+            if (pkg == "com.android.settings") continue
             if (cachedBlockedPackages.contains(pkg) || blockedAppsByPackage.containsKey(pkg) || isPackageRestricted(pkg)) {
                 return pkg
             }
@@ -658,14 +683,18 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // -------------------------------------------------------------------------
-        // 2. ANDROID DATE & TIME SETTINGS TAMPER INTERCEPTOR:
-        // Blocks user from accessing Date & Time settings while focus restrictions exist
+        // 2. SURGICAL SETTINGS ANTI-TAMPER INTERCEPTOR:
+        // Protects Accessibility toggle, App Info, Device Admin, and Date & Time
+        // Never blocks normal settings (Wi-Fi, Bluetooth, Display, Sound, Battery, etc.)
         // -------------------------------------------------------------------------
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-        ) {
-            if (checkAndInterceptDateTimeSettings(event)) {
-                return
+        if (eventPkg == "com.android.settings" || eventPkg == "android") {
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            ) {
+                if (checkAndInterceptSettingsTamper(eventPkg)) {
+                    return
+                }
             }
         }
 
@@ -688,105 +717,251 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
-    private var lastDateTimeInterceptTime = 0L
+    @Volatile
+    private var isExitingTamperPage = false
+    private var touchShieldView: View? = null
 
-    private fun checkAndInterceptDateTimeSettings(event: AccessibilityEvent): Boolean {
-        if (!isMasterEnabled || !isClockTamperProtectionEnabled) return false
-        if (com.example.util.EmergencyBreakManager.isBreakActive(this)) return false
-
-        // Only enforce if any protection, schedule, or limit is active
-        val hasActiveRestrictions = isCheatProtectionEnabled ||
-                isInvincibleModeEnabled ||
-                cachedBlockedPackages.isNotEmpty() ||
-                screenLimitsCache.isNotEmpty() ||
-                groupsCache.any { it.scheduleEnabled || it.budgetEnabled }
-
-        if (!hasActiveRestrictions) return false
-
-        val eventPkg = event.packageName?.toString() ?: return false
-        if (eventPkg != "com.android.settings") return false
-
-        val className = event.className?.toString() ?: ""
-        var isDateTimeTarget = false
-
-        if (className.contains("DateTime", ignoreCase = true) ||
-            className.contains("DateAndTime", ignoreCase = true) ||
-            className.contains("TimeSettings", ignoreCase = true) ||
-            className.contains("ZonePicker", ignoreCase = true)
-        ) {
-            isDateTimeTarget = true
+    private fun initTouchShield() {
+        if (touchShieldView != null) return
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+            val view = View(this).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                isClickable = true
+                isFocusable = true
+                setOnTouchListener { _, _ -> true }
+                visibility = View.GONE
+            }
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.CENTER
+            }
+            wm.addView(view, params)
+            touchShieldView = view
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to initialize touch shield overlay", e)
         }
+    }
 
-        if (!isDateTimeTarget) {
-            for (cs in event.text) {
-                val t = cs?.toString() ?: continue
-                if (isDateTimeKeyword(t)) {
-                    isDateTimeTarget = true
-                    break
+    private fun showTouchShield() {
+        mainHandler.post {
+            try {
+                if (touchShieldView == null) {
+                    initTouchShield()
                 }
+                touchShieldView?.visibility = View.VISIBLE
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed showing touch shield", e)
             }
         }
+    }
 
-        if (!isDateTimeTarget) {
-            val desc = event.contentDescription?.toString()
-            if (desc != null && isDateTimeKeyword(desc)) {
-                isDateTimeTarget = true
+    private fun hideTouchShield() {
+        mainHandler.post {
+            try {
+                touchShieldView?.visibility = View.GONE
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed hiding touch shield", e)
             }
         }
+    }
 
-        if (!isDateTimeTarget) {
-            val root = try { rootInActiveWindow } catch (e: Exception) { null }
-            if (root != null && root.packageName?.toString() == "com.android.settings") {
-                val targetQueries = listOf(
-                    "Date & time", "Date and time", "Set time", "Set date",
-                    "Automatic date & time", "Use network-provided time"
-                )
-                for (query in targetQueries) {
-                    val nodes = root.findAccessibilityNodeInfosByText(query)
-                    if (!nodes.isNullOrEmpty()) {
-                        for (node in nodes) {
-                            try { node.recycle() } catch (_: Exception) {}
-                        }
-                        isDateTimeTarget = true
-                        break
+    private fun dismissTamperConfirmationDialog(root: AccessibilityNodeInfo?) {
+        if (root == null) return
+        try {
+            val candidateNodes = mutableListOf<AccessibilityNodeInfo>()
+            fun searchNodes(node: AccessibilityNodeInfo?, depth: Int) {
+                if (node == null || depth > 30) return
+                val text = node.text?.toString()?.lowercase()?.trim() ?: ""
+                val desc = node.contentDescription?.toString()?.lowercase()?.trim() ?: ""
+                val viewId = node.viewIdResourceName?.lowercase() ?: ""
+                val isClickable = node.isClickable
+                if (isClickable && (
+                    text == "cancel" || text == "deny" || text.contains("cancel") ||
+                    desc == "cancel" || desc == "deny" ||
+                    viewId.endsWith(":id/button2") || viewId.endsWith(":id/cancel")
+                )) {
+                    candidateNodes.add(node)
+                }
+                val count = node.childCount
+                for (i in 0 until count) {
+                    val child = try { node.getChild(i) } catch (_: Exception) { null }
+                    if (child != null) {
+                        searchNodes(child, depth + 1)
                     }
                 }
             }
+            searchNodes(root, 0)
+            for (candidate in candidateNodes) {
+                try {
+                    val clicked = candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (clicked) {
+                        Log.d(TAG, "Auto-clicked Cancel button on confirmation dialog in 0ms")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed clicking cancel node", e)
+                } finally {
+                    try { candidate.recycle() } catch (_: Exception) {}
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error searching for cancel dialog button", e)
+        }
+    }
+
+    private fun executeTamperExitSequence(root: AccessibilityNodeInfo?) {
+        if (isExitingTamperPage) return
+        isExitingTamperPage = true
+
+        Log.w(TAG, "Surgical tamper protection triggered! Auto-clicking Cancel, flashing touch shield, and executing 4x rapid BACK + HOME sequence.")
+
+        // Step 1: Programmatically Auto-Click "Cancel" if a Confirmation Dialog is Open (0ms)
+        dismissTamperConfirmationDialog(root)
+        try {
+            val winList = windows
+            if (!winList.isNullOrEmpty()) {
+                for (win in winList) {
+                    val winRoot = try { win.root } catch (_: Exception) { null }
+                    if (winRoot != null) {
+                        dismissTamperConfirmationDialog(winRoot)
+                        try { winRoot.recycle() } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Step 2: Flash the Touch Shield Only During the Exit Sequence (0ms to 500ms)
+        showTouchShield()
+        FocusHaptics.rejectOrDelete(this)
+
+        // Step 3: Fire GLOBAL_ACTION_BACK 4 Times Rapidly + Close Settings (0ms to 150ms)
+        // At 0ms: First BACK
+        performGlobalAction(GLOBAL_ACTION_BACK)
+
+        // At +35ms: Second BACK
+        mainHandler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 35L)
+
+        // At +70ms: Third BACK
+        mainHandler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 70L)
+
+        // At +105ms: Fourth BACK
+        mainHandler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 105L)
+
+        // At +145ms: HOME action to close Settings app completely to the launcher
+        mainHandler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }, 145L)
+
+        // At +450ms: Hide the TYPE_ACCESSIBILITY_OVERLAY touch shield (View.GONE)
+        mainHandler.postDelayed({
+            hideTouchShield()
+        }, 450L)
+
+        // At +500ms: Release debounce guard
+        mainHandler.postDelayed({
+            isExitingTamperPage = false
+        }, 500L)
+    }
+
+    private fun checkAndInterceptSettingsTamper(eventPkg: String? = null): Boolean {
+        if (isExitingTamperPage) return true
+
+        if (com.example.util.EmergencyBreakManager.isBreakActive(this) ||
+            com.example.util.KillswitchManager.isEmergencyBreakActive(this)
+        ) {
+            return false
         }
 
-        if (isDateTimeTarget) {
-            val now = SystemClock.uptimeMillis()
-            if (now - lastDateTimeInterceptTime < 1500) {
+        val isProtectionActive = isMasterEnabled ||
+                com.example.util.KillswitchManager.isKillswitchActive(this) ||
+                isCheatProtectionEnabled ||
+                isInvincibleModeEnabled
+
+        if (!isProtectionActive) return false
+
+        val root = try { rootInActiveWindow } catch (_: Exception) { null }
+        val rootPkg = root?.packageName?.toString()
+        val isSettingsWindow = eventPkg == "com.android.settings" ||
+                currentForegroundPackage == "com.android.settings" ||
+                rootPkg == "com.android.settings" ||
+                (eventPkg == "android" && currentForegroundPackage == "com.android.settings")
+
+        if (!isSettingsWindow) {
+            try { root?.recycle() } catch (_: Exception) {}
+            return false
+        }
+
+        if (root == null) return false
+
+        try {
+            val textList = mutableListOf<String>()
+            var hasClickableSwitchOrCheckbox = false
+
+            fun traverse(node: AccessibilityNodeInfo?, depth: Int) {
+                if (node == null || depth > 35) return
+                node.text?.toString()?.takeIf { it.isNotBlank() }?.let { textList.add(it) }
+                node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { textList.add(it) }
+
+                val className = node.className?.toString() ?: ""
+                if (node.isClickable && (className.contains("Switch", ignoreCase = true) || className.contains("CheckBox", ignoreCase = true))) {
+                    hasClickableSwitchOrCheckbox = true
+                }
+
+                val count = try { node.childCount } catch (_: Exception) { 0 }
+                for (i in 0 until count) {
+                    val child = try { node.getChild(i) } catch (_: Exception) { null }
+                    if (child != null) {
+                        traverse(child, depth + 1)
+                        try { child.recycle() } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            traverse(root, 0)
+
+            try {
+                val winList = windows
+                if (!winList.isNullOrEmpty()) {
+                    for (win in winList) {
+                        val winRoot = try { win.root } catch (_: Exception) { null }
+                        if (winRoot != null && winRoot != root) {
+                            traverse(winRoot, 0)
+                            try { winRoot.recycle() } catch (_: Exception) {}
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val signature = SettingsTamperDetector.matchTamperSignature(
+                texts = textList,
+                hasClickableSwitchOrCheckbox = hasClickableSwitchOrCheckbox,
+                isClockTamperProtectionEnabled = isClockTamperProtectionEnabled,
+                appPackageName = packageName
+            )
+
+            if (signature != SettingsTamperDetector.TamperSignature.NONE) {
+                Log.w(TAG, "Surgical tamper protection triggered: $signature")
+                executeTamperExitSequence(root)
                 return true
             }
-            lastDateTimeInterceptTime = now
-
-            Log.w(TAG, "Date & Time settings intercepted! Forcefully ejecting user to protect true time.")
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            performGlobalAction(GLOBAL_ACTION_BACK)
-
-            executeBlock(
-                pkgName = "com.android.settings",
-                title = "Date & Time Settings",
-                reason = "Date & Time settings are locked while Focus Protection is active to prevent clock tampering.",
-                type = BlockedActivity.TYPE_APP
-            )
-            return true
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
         }
 
         return false
-    }
-
-    private fun isDateTimeKeyword(text: String): Boolean {
-        val lower = text.lowercase().trim()
-        return lower == "date & time" ||
-                lower == "date and time" ||
-                lower == "set time" ||
-                lower == "set date" ||
-                lower == "automatic date & time" ||
-                lower == "use network-provided time" ||
-                lower.contains("datetime") ||
-                lower.contains("time zone")
     }
 
     /**
@@ -894,8 +1069,6 @@ class FocusAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private var lastSettingsTamperTime = 0L
-
     private fun showQuickFeedback(customMessage: String? = null) {
         val message = customMessage ?: MotivationLibrary.getRandomQuickFeedback(cachedReclaimedCommitment)
         Handler(Looper.getMainLooper()).post {
@@ -941,73 +1114,8 @@ class FocusAccessibilityService : AccessibilityService() {
         showQuickFeedback()
     }
 
-    private fun triggerSettingsTamperIntercept(reason: String) {
-        val now = SystemClock.uptimeMillis()
-        if (now - lastSettingsTamperTime < 1500) {
-            return
-        }
-        lastSettingsTamperTime = now
-
-        Log.w(TAG, "Critical settings tamper intercepted ($reason)! Forcefully ejecting user.")
-
-        val homeKicked = performGlobalAction(GLOBAL_ACTION_HOME)
-        if (!homeKicked) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }
-
-        try {
-            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_HOME)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            startActivity(homeIntent)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to start HOME intent for settings tamper", e)
-        }
-
-        // Category B: Quick Toast / HUD with MotivationLibrary line
-        showQuickFeedback()
-    }
-
     private fun handleEventInBackground(eventPkg: String?, eventType: Int) {
         val myPackageName = packageName
-
-        // Invincible Mode Intercept: prevent disabling device admin, uninstallation, revoking accessibility, or changing time
-        if (isInvincibleModeEnabled && eventPkg == "com.android.settings") {
-            try {
-                val root = rootInActiveWindow
-                if (root != null) {
-                    val appName = packageManager.getApplicationLabel(applicationInfo).toString()
-                    // Quick check if the current settings screen mentions our app by name or package
-                    val foundNodesByName = root.findAccessibilityNodeInfosByText(appName)
-                    val foundNodesByPkg = root.findAccessibilityNodeInfosByText(myPackageName)
-                    
-                    if (foundNodesByName.isNotEmpty() || foundNodesByPkg.isNotEmpty()) {
-                        Log.d(TAG, "Invincible Mode: Intercepting settings access to $appName")
-                        triggerSettingsTamperIntercept("Disabling permissions/admin for $appName")
-                        return
-                    }
-
-                    // Check for Date & Time tampering attempts
-                    val timeKeywords = listOf("Date & time", "Date and time", "Set time", "Automatic date & time")
-                    var foundTimeTamper = false
-                    for (tk in timeKeywords) {
-                        val nodes = root.findAccessibilityNodeInfosByText(tk)
-                        if (!nodes.isNullOrEmpty()) {
-                            foundTimeTamper = true
-                            break
-                        }
-                    }
-                    if (foundTimeTamper) {
-                        Log.d(TAG, "Invincible Mode: Intercepting Date & Time tampering")
-                        triggerSettingsTamperIntercept("Date & Time tampering")
-                        return
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Invincible Mode: Failed to scan settings nodes", e)
-            }
-        }
 
         // Invincible Mode Intercept: prevent hiding apps via Launchers/Security apps/Settings
         if (isInvincibleModeEnabled && ContentScanner.isHideAppsTargetPackage(eventPkg)) {
@@ -1121,7 +1229,7 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun checkForegroundPackage(pkgName: String) {
-        if (pkgName == packageName) return
+        if (pkgName == packageName || pkgName == "com.android.settings") return
 
         // 0. The Emergency Failsafe System: 10-Minute Hard Cap
         if (com.example.util.EmergencyBreakManager.isBreakActive(this)) {
@@ -1411,6 +1519,8 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun triggerBlockScreen(packageName: String) {
+        if (packageName == "com.android.settings") return
+
         val now = SystemClock.uptimeMillis()
         if (lastBlockedPackage == packageName && now - lastBlockedTime < 1000) {
             return
@@ -1460,7 +1570,7 @@ class FocusAccessibilityService : AccessibilityService() {
         nextWindow: String? = null,
         cooldownEndTime: Long = 0L
     ) {
-        if (pkgName == packageName) return
+        if (pkgName == packageName || pkgName == "com.android.settings") return
 
         val now = SystemClock.uptimeMillis()
         if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1000) {

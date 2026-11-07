@@ -5,7 +5,8 @@ package com.example.util
  *
  * Ensures normal device functions (Wi-Fi, Bluetooth, Display, Sound, Battery, Storage,
  * scrolling the All Apps list, and App Info/Accessibility for OTHER apps) are completely
- * unhindered, while instantly catching exact Focus Lock tamper pages.
+ * unhindered, while instantly catching exact Focus Lock tamper pages across Stock Android,
+ * Samsung OneUI, Realme UI, ColorOS, and other OEM flavors.
  */
 object SettingsTamperDetector {
 
@@ -22,7 +23,7 @@ object SettingsTamperDetector {
      *
      * @param texts All visible text and content descriptions collected from the window.
      * @param hasClickableSwitchOrCheckbox True if a clickable Switch or CheckBox is present.
-     * @param isClockTamperProtectionEnabled True if clock tamper protection is currently on.
+     * @param isClockTamperProtectionEnabled True if clock tamper protection / strict mode is active.
      * @param appPackageName The package name of Focus Lock (e.g. context.packageName).
      * @return TamperSignature matching one of Signatures A, B, C, D, or NONE.
      */
@@ -38,14 +39,20 @@ object SettingsTamperDetector {
         val targetPkgLower = appPackageName.lowercase().trim()
 
         // -------------------------------------------------------------------------
-        // Signature D — System Date & Time Settings (ONLY when Clock Tamper Protection is enabled):
-        // - The screen contains "Date & time" (or "Set time") AND ("Automatic date" or "Time zone" or "Set date").
+        // Signature 4 (D) — System Date & Time Settings
+        // Trigger when isClockTamperProtectionEnabled / strict mode / killswitch is active.
+        // Screen contains "date & time" OR "set time" OR "automatic date & time".
+        // (Guards against the parent "System" settings menu which lists "Date & time" as a sub-item)
         // -------------------------------------------------------------------------
         if (isClockTamperProtectionEnabled) {
+            val hasSetTimeOrAuto = textsLower.any {
+                it.contains("automatic date & time") ||
+                it.contains("automatic date and time") ||
+                it.contains("set time")
+            }
             val hasDateTimeKeyword = textsLower.any {
                 it.contains("date & time") ||
-                it.contains("date and time") ||
-                it.contains("set time")
+                it.contains("date and time")
             }
             val hasDateTimeSettingMarker = textsLower.any {
                 it.contains("automatic date") ||
@@ -53,7 +60,7 @@ object SettingsTamperDetector {
                 it.contains("set date") ||
                 it.contains("network-provided time")
             }
-            if (hasDateTimeKeyword && hasDateTimeSettingMarker) {
+            if (hasSetTimeOrAuto || (hasDateTimeKeyword && hasDateTimeSettingMarker)) {
                 return TamperSignature.SIGNATURE_D_DATE_TIME
             }
         }
@@ -63,17 +70,84 @@ object SettingsTamperDetector {
             it.contains("focus lock") || (targetPkgLower.isNotEmpty() && it.contains(targetPkgLower))
         }
 
-        // Signatures A, B, and C strictly require "Focus Lock" (or our exact packageName) on the screen
+        // Signatures 1, 2, and 3 strictly require "Focus Lock" (or our exact packageName) on the screen
         if (!hasFocusLockName) {
             return TamperSignature.NONE
         }
 
         // -------------------------------------------------------------------------
-        // Anti-False-Positive Guard: Ignore General App Lists
-        // If the user is just scrolling through the general "App Management / All Apps" list
-        // (where many unrelated app rows are visible and neither "Use Focus Lock" nor
-        // "Use service" nor "Stop Focus Lock" is present), do NOT trigger!
+        // Signature 2 (B) — Focus Lock App Info Page (Force Stop / Uninstall)
+        // hasFocusLock AND ("force stop" OR "uninstall")
         // -------------------------------------------------------------------------
+        val hasForceStopOrUninstall = textsLower.any {
+            it.contains("force stop") || it.contains("uninstall")
+        }
+        val isAppInfoPage = textsLower.any {
+            it.contains("app info") || it.contains("storage") || it.contains("notifications") ||
+            it.contains("disable") || it.contains("open")
+        }
+        if (hasForceStopOrUninstall && (isAppInfoPage || textsLower.any { it.contains("force stop") })) {
+            return TamperSignature.SIGNATURE_B_APP_INFO
+        }
+
+        // -------------------------------------------------------------------------
+        // Signature 3 (C) — Device Admin Deactivation Page for Focus Lock
+        // hasFocusLock AND ("deactivate" OR "device admin")
+        // -------------------------------------------------------------------------
+        val hasDeviceAdminMarker = textsLower.any {
+            it.contains("deactivate") || it.contains("device admin")
+        }
+        if (hasDeviceAdminMarker) {
+            return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
+        }
+
+        // -------------------------------------------------------------------------
+        // Signature 1 (A) — Focus Lock Specific Accessibility Toggle Page or Dialog:
+        // hasFocusLock AND none of the main Accessibility menu items
+        // ("press power button to end calls", "accessibility menu", "shortcut from lock screen")
+        // are present, AND ANY of:
+        // 1. "focus lock uses this service" OR "detect foreground apps" OR "monitor screen time limits"
+        // 2. "about this function" OR "auto-launch management" (OneUI, Realme UI, ColorOS)
+        // 3. ("shortcut" AND "app info" on same screen as "focus lock")
+        // 4. "use focus lock" OR "use service" OR "stop focus lock" OR "turn off focus lock" OR "allow focus lock"
+        // 5. (!isGeneralAppList AND has "accessibility" AND ("on" or "off" or clickable Switch/Checkbox))
+        // -------------------------------------------------------------------------
+        val hasMainAccessibilityMenuItem = textsLower.any {
+            it.contains("press power button to end calls") ||
+            it.contains("accessibility menu") ||
+            it.contains("shortcut from lock screen")
+        }
+        if (hasMainAccessibilityMenuItem) {
+            return TamperSignature.NONE
+        }
+
+        // 1. Service description markers
+        val hasServiceDescription = textsLower.any {
+            it.contains("focus lock uses this service") ||
+            it.contains("detect foreground apps") ||
+            it.contains("monitor screen time limits")
+        }
+        if (hasServiceDescription) {
+            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
+        }
+
+        // 2. OEM sub-page markers (OneUI, Realme UI, ColorOS)
+        val hasOemSubPageMarker = textsLower.any {
+            it.contains("about this function") ||
+            it.contains("auto-launch management")
+        }
+        if (hasOemSubPageMarker) {
+            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
+        }
+
+        // 3. "shortcut" AND "app info" on same screen as "focus lock"
+        val hasShortcut = textsLower.any { it.contains("shortcut") }
+        val hasAppInfo = textsLower.any { it.contains("app info") }
+        if (hasShortcut && hasAppInfo) {
+            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
+        }
+
+        // 4. Specific toggle / dialog indicators
         val specificToggleIndicators = listOf(
             "use focus lock",
             "use service",
@@ -85,34 +159,26 @@ object SettingsTamperDetector {
         val hasSpecificToggleIndicator = textsLower.any { text ->
             specificToggleIndicators.any { ind -> text.contains(ind) }
         }
+        if (hasSpecificToggleIndicator) {
+            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
+        }
 
+        // 5. Accessibility toggle page when NOT a general app / service list
         val isGeneralAppList = textsLower.any {
             it == "all apps" ||
             it == "app management" ||
             it == "manage apps" ||
             it == "installed apps" ||
+            it == "installed services" ||
+            it == "downloaded apps" ||
+            it == "downloaded services" ||
             it == "see all apps" ||
             it == "default apps" ||
             it.contains("apps installed") ||
-            it.contains("apps found")
+            it.contains("apps found") ||
+            it.contains("downloaded apps") ||
+            it.contains("installed apps")
         }
-
-        // -------------------------------------------------------------------------
-        // Signature A — Focus Lock's Specific Accessibility Toggle Page or Turn-Off Dialog:
-        // - The screen contains "Focus Lock" (case-insensitive)
-        // - AND the screen contains at least ONE specific Accessibility toggle-page indicator:
-        //   * "Use Focus Lock"
-        //   * "Use service"
-        //   * "Focus Lock shortcut"
-        //   * "Stop Focus Lock"
-        //   * "Turn off Focus Lock"
-        //   * "Allow Focus Lock"
-        //   * OR ("Accessibility" AND ("On" or "Off" or a clickable android.widget.Switch / CheckBox on the same screen))
-        // -------------------------------------------------------------------------
-        if (hasSpecificToggleIndicator) {
-            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
-        }
-
         if (!isGeneralAppList) {
             val hasAccessibilityWord = textsLower.any { it.contains("accessibility") }
             val hasOnOffWord = textsLower.any {
@@ -121,32 +187,6 @@ object SettingsTamperDetector {
             if (hasAccessibilityWord && (hasOnOffWord || hasClickableSwitchOrCheckbox)) {
                 return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
             }
-        }
-
-        // -------------------------------------------------------------------------
-        // Signature B — Focus Lock's Specific "App Info" (Force Stop / Uninstall) Page:
-        // - The screen contains "Focus Lock" (or our exact packageName)
-        // - AND the screen contains "Force stop" (or "Force Stop") AND ("Uninstall" or "App info" or "Storage").
-        // -------------------------------------------------------------------------
-        val hasForceStop = textsLower.any { it.contains("force stop") }
-        val hasAppInfoMarker = textsLower.any {
-            it.contains("uninstall") || it.contains("app info") || it.contains("storage")
-        }
-        if (hasForceStop && hasAppInfoMarker) {
-            return TamperSignature.SIGNATURE_B_APP_INFO
-        }
-
-        // -------------------------------------------------------------------------
-        // Signature C — Device Admin Deactivation Page for Focus Lock:
-        // - The screen contains "Focus Lock" AND ("Deactivate this device admin app" or "Device admin").
-        // -------------------------------------------------------------------------
-        val hasDeviceAdminMarker = textsLower.any {
-            it.contains("deactivate this device admin app") ||
-            it.contains("deactivate this device admin") ||
-            it.contains("device admin")
-        }
-        if (hasDeviceAdminMarker) {
-            return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
         }
 
         return TamperSignature.NONE

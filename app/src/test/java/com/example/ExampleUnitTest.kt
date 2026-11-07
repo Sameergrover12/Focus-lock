@@ -727,6 +727,34 @@ class ExampleUnitTest {
             SettingsTamperDetector.TamperSignature.NONE,
             SettingsTamperDetector.matchTamperSignature(systemMenu, false, true, appPkg)
         )
+
+        // 7. Main Accessibility Menu (Anti-Tamper Exclusion: user browsing Accessibility menu)
+        val mainAccessibility = listOf(
+            "Accessibility",
+            "Press Power button to end calls",
+            "Accessibility Menu",
+            "Downloaded apps",
+            "Focus Lock",
+            "Shortcut from Lock screen"
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(mainAccessibility, true, true, appPkg)
+        )
+
+        // 8. Downloaded Apps / Installed Apps List (Anti-Tamper Exclusion: user viewing the list before clicking)
+        val downloadedAppsList = listOf(
+            "Downloaded apps",
+            "Focus Lock",
+            "Off",
+            "TalkBack",
+            "On",
+            "2 services downloaded"
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(downloadedAppsList, true, true, appPkg)
+        )
     }
 
     @Test
@@ -745,6 +773,27 @@ class ExampleUnitTest {
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
             SettingsTamperDetector.matchTamperSignature(a2, false, true, appPkg)
+        )
+
+        // Signature A: OEM flavor (Realme UI / ColorOS) with "About this function"
+        val a3 = listOf("Accessibility", "Focus Lock", "About this function", "Auto-launch management")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(a3, true, true, appPkg)
+        )
+
+        // Signature A: Service description marker "Focus Lock uses this service"
+        val a4 = listOf("Accessibility", "Focus Lock", "Focus Lock uses this service to detect foreground apps")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(a4, false, true, appPkg)
+        )
+
+        // Signature A: "shortcut" AND "app info" on the same screen with "Focus Lock"
+        val a5 = listOf("Focus Lock", "Shortcut", "App info", "Settings")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(a5, false, true, appPkg)
         )
 
         // Signature B: Focus Lock App Info page

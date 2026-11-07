@@ -170,7 +170,8 @@ class FocusAccessibilityService : AccessibilityService() {
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                     AccessibilityEvent.TYPE_WINDOWS_CHANGED or
                     AccessibilityEvent.TYPE_VIEW_FOCUSED or
-                    AccessibilityEvent.TYPE_VIEW_SCROLLED
+                    AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                    AccessibilityEvent.TYPE_VIEW_CLICKED
             info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             info.flags = info.flags or
                     AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
@@ -212,14 +213,29 @@ class FocusAccessibilityService : AccessibilityService() {
         periodicScanJob = serviceScope.launch(Dispatchers.Default) {
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
             while (isActive) {
-                delay(350) // Roughly 300–500ms lightweight periodic rescan
+                val isSettings = (currentForegroundPackage == "com.android.settings")
+                // 40ms rapid watchdog when in Settings to catch tamper pages instantly, 350ms otherwise
+                delay(if (isSettings) 40L else 350L)
 
                 // Pauses immediately when Focus Lock itself is in foreground
                 if (AppForegroundTracker.isFocusLockInForeground) {
                     continue
                 }
 
-                // Killswitch Lockdown scan (runs regardless of master switch)
+                // 1. Surgical Settings Anti-Tamper Check (runs 24/7, never paused by Emergency Break)
+                val isProtectionActive = isMasterEnabled ||
+                        com.example.util.KillswitchManager.isKillswitchActive(this@FocusAccessibilityService) ||
+                        isCheatProtectionEnabled ||
+                        isInvincibleModeEnabled
+
+                if (isProtectionActive && isSettings) {
+                    withContext(Dispatchers.Main) {
+                        checkAndInterceptSettingsTamper("com.android.settings")
+                    }
+                    continue
+                }
+
+                // 2. Killswitch Lockdown scan (runs regardless of master switch, bypassed during Killswitch emergency break)
                 if (com.example.util.KillswitchManager.isKillswitchActive(this@FocusAccessibilityService) &&
                     !com.example.util.KillswitchManager.isEmergencyBreakActive(this@FocusAccessibilityService)
                 ) {
@@ -236,12 +252,12 @@ class FocusAccessibilityService : AccessibilityService() {
 
                 if (!isMasterEnabled) continue
 
-                // Bypass during active emergency break
+                // 3. Bypass distraction rules during active emergency break
                 if (com.example.util.EmergencyBreakManager.isBreakActive(this@FocusAccessibilityService)) {
                     continue
                 }
 
-                // 1. HARD FLOATING WINDOW SCAN: inspect all visible interactive windows for any blocked app
+                // 4. HARD FLOATING WINDOW SCAN: inspect all visible interactive windows for any blocked app
                 val blockedInWindow = withContext(Dispatchers.Main) {
                     findBlockedPackageInVisibleWindows(currentForegroundPackage)
                 }
@@ -259,14 +275,6 @@ class FocusAccessibilityService : AccessibilityService() {
                 val currentPkg = currentForegroundPackage
                 // Pauses immediately when Focus Lock itself is foreground or system overlay
                 if (currentPkg.isNullOrEmpty() || currentPkg == packageName || isSystemOverlay(currentPkg)) {
-                    continue
-                }
-
-                // Surgical check if currently in Settings
-                if (currentPkg == "com.android.settings") {
-                    withContext(Dispatchers.Main) {
-                        checkAndInterceptSettingsTamper("com.android.settings")
-                    }
                     continue
                 }
 
@@ -633,6 +641,43 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
+        val eventType = event.eventType
+
+        // -------------------------------------------------------------------------
+        // 1. SURGICAL SETTINGS ANTI-TAMPER PROTECTION (24/7 Active, Independent of Breaks):
+        // Protects Accessibility toggle, App Info, Device Admin, and Date & Time.
+        // Tapping "Focus Lock" fires instant 0ms ejection on TYPE_VIEW_CLICKED.
+        // Never blocks normal settings (Wi-Fi, Bluetooth, Display, Sound, Battery, etc.)
+        // -------------------------------------------------------------------------
+        if (eventPkg == "com.android.settings" || eventPkg == "android") {
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && eventPkg == "com.android.settings") {
+                currentForegroundPackage = "com.android.settings"
+                FocusForegroundService.onForegroundPackageChanged("com.android.settings")
+            }
+
+            val isProtectionActive = isMasterEnabled ||
+                    com.example.util.KillswitchManager.isKillswitchActive(this) ||
+                    isCheatProtectionEnabled ||
+                    isInvincibleModeEnabled
+
+            if (isProtectionActive) {
+                if (eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                    if (isSettingsTamperClick(event)) {
+                        Log.w(TAG, "Instant 0ms anti-tamper ejection on Focus Lock item click in Settings!")
+                        triggerSurgicalTamperEjection()
+                        return
+                    }
+                } else if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                    eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                    eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                ) {
+                    if (checkAndInterceptSettingsTamper(eventPkg)) {
+                        return
+                    }
+                }
+            }
+        }
+
         // KILLSWITCH ENFORCEMENT: Operates even if Master Switch is OFF
         if (com.example.util.KillswitchManager.isKillswitchActive(this) &&
             !com.example.util.KillswitchManager.isEmergencyBreakActive(this)
@@ -647,8 +692,6 @@ class FocusAccessibilityService : AccessibilityService() {
 
         if (!isMasterEnabled) return
 
-        val eventType = event.eventType
-
         // d. Throttle Window Content Scans: run at most once every 300ms and avoid recursive scans for unmonitored apps
         if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             val now = SystemClock.uptimeMillis()
@@ -662,7 +705,7 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 0. The Emergency Failsafe System: 10-Minute Hard Cap
+        // 0. The Emergency Failsafe System: 10-Minute Hard Cap (Pauses distraction restrictions ONLY)
         if (com.example.util.EmergencyBreakManager.isBreakActive(this)) {
             if (!isSystemOverlay(eventPkg) && eventPkg != myPackageName) {
                 currentForegroundPackage = eventPkg
@@ -671,7 +714,7 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 1. FLOATING WINDOW & MULTI-WINDOW BLOCKING ENFORCEMENT
+        // 2. FLOATING WINDOW & MULTI-WINDOW BLOCKING ENFORCEMENT
         val blockedPkg = findBlockedPackageInVisibleWindows(eventPkg)
         if (blockedPkg != null) {
             if (cachedBlockedPackages.contains(blockedPkg) || blockedAppsByPackage.containsKey(blockedPkg)) {
@@ -682,26 +725,8 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        // -------------------------------------------------------------------------
-        // 2. SURGICAL SETTINGS ANTI-TAMPER INTERCEPTOR:
-        // Protects Accessibility toggle, App Info, Device Admin, and Date & Time
-        // Never blocks normal settings (Wi-Fi, Bluetooth, Display, Sound, Battery, etc.)
-        // -------------------------------------------------------------------------
-        if (eventPkg == "com.android.settings" || eventPkg == "android") {
-            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-                eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
-                eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
-            ) {
-                if (checkAndInterceptSettingsTamper(eventPkg)) {
-                    return
-                }
-            }
-        }
-
-        // -------------------------------------------------------------------------
         // 3. OS "HIDE APPS" TEXT INTERCEPTOR:
         // Blocks user from accessing OEM Settings or Launcher "Hide Apps" loophole
-        // -------------------------------------------------------------------------
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) {
@@ -816,11 +841,78 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun executeTamperExitSequence(root: AccessibilityNodeInfo?) {
+    private fun isSettingsTamperClick(event: AccessibilityEvent): Boolean {
+        val myPkg = packageName.lowercase()
+        fun matchesTarget(cs: CharSequence?): Boolean {
+            if (cs == null) return false
+            val s = cs.toString().lowercase()
+            return s.contains("focus lock") || s.contains(myPkg)
+        }
+
+        // 1. Check event text list
+        for (t in event.text) {
+            if (matchesTarget(t)) return true
+        }
+
+        // 2. Check event content description
+        if (matchesTarget(event.contentDescription)) return true
+
+        // 3. Check event source node and shallow children/parent
+        val source = try { event.source } catch (_: Exception) { null }
+        if (source != null) {
+            try {
+                if (matchesTarget(source.text) || matchesTarget(source.contentDescription)) {
+                    return true
+                }
+                val count = source.childCount
+                for (i in 0 until minOf(count, 15)) {
+                    val child = try { source.getChild(i) } catch (_: Exception) { null }
+                    if (child != null) {
+                        try {
+                            if (matchesTarget(child.text) || matchesTarget(child.contentDescription)) {
+                                return true
+                            }
+                        } finally {
+                            try { child.recycle() } catch (_: Exception) {}
+                        }
+                    }
+                }
+                val parent = try { source.parent } catch (_: Exception) { null }
+                if (parent != null) {
+                    try {
+                        if (matchesTarget(parent.text) || matchesTarget(parent.contentDescription)) {
+                            return true
+                        }
+                        val pCount = parent.childCount
+                        for (i in 0 until minOf(pCount, 15)) {
+                            val pChild = try { parent.getChild(i) } catch (_: Exception) { null }
+                            if (pChild != null) {
+                                try {
+                                    if (matchesTarget(pChild.text) || matchesTarget(pChild.contentDescription)) {
+                                        return true
+                                    }
+                                } finally {
+                                    try { pChild.recycle() } catch (_: Exception) {}
+                                }
+                            }
+                        }
+                    } finally {
+                        try { parent.recycle() } catch (_: Exception) {}
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { source.recycle() } catch (_: Exception) {}
+            }
+        }
+        return false
+    }
+
+    private fun triggerSurgicalTamperEjection(root: AccessibilityNodeInfo? = null) {
         if (isExitingTamperPage) return
         isExitingTamperPage = true
 
-        Log.w(TAG, "Surgical tamper protection triggered! Auto-clicking Cancel, flashing touch shield, and executing 4x rapid BACK + HOME sequence.")
+        Log.w(TAG, "Surgical tamper protection triggered! Auto-clicking Cancel, flashing touch shield, and executing rapid 4x BACK + HOME sequence.")
 
         // Step 1: Programmatically Auto-Click "Cancel" if a Confirmation Dialog is Open (0ms)
         dismissTamperConfirmationDialog(root)
@@ -837,53 +929,43 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         } catch (_: Exception) {}
 
-        // Step 2: Flash the Touch Shield Only During the Exit Sequence (0ms to 500ms)
+        // Step 2: Flash the Touch Shield Only During the Exit Sequence (0ms)
         showTouchShield()
         FocusHaptics.rejectOrDelete(this)
 
-        // Step 3: Fire GLOBAL_ACTION_BACK 4 Times Rapidly + Close Settings (0ms to 150ms)
+        // Step 3: Rapid Backstack Wipe Sequence (0ms, +30ms, +60ms, +90ms BACK, +130ms HOME, +400ms reset)
         // At 0ms: First BACK
         performGlobalAction(GLOBAL_ACTION_BACK)
 
-        // At +35ms: Second BACK
+        // At +30ms: Second BACK
         mainHandler.postDelayed({
             performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 35L)
+        }, 30L)
 
-        // At +70ms: Third BACK
+        // At +60ms: Third BACK
         mainHandler.postDelayed({
             performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 70L)
+        }, 60L)
 
-        // At +105ms: Fourth BACK
+        // At +90ms: Fourth BACK
         mainHandler.postDelayed({
             performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 105L)
+        }, 90L)
 
-        // At +145ms: HOME action to close Settings app completely to the launcher
+        // At +130ms: HOME action to close Settings app completely to the launcher
         mainHandler.postDelayed({
             performGlobalAction(GLOBAL_ACTION_HOME)
-        }, 145L)
+        }, 130L)
 
-        // At +450ms: Hide the TYPE_ACCESSIBILITY_OVERLAY touch shield (View.GONE)
+        // At +400ms: Hide the TYPE_ACCESSIBILITY_OVERLAY touch shield (View.GONE) and release debounce guard
         mainHandler.postDelayed({
             hideTouchShield()
-        }, 450L)
-
-        // At +500ms: Release debounce guard
-        mainHandler.postDelayed({
             isExitingTamperPage = false
-        }, 500L)
+        }, 400L)
     }
 
     private fun checkAndInterceptSettingsTamper(eventPkg: String? = null): Boolean {
         if (isExitingTamperPage) return true
-
-        if (com.example.util.EmergencyBreakManager.isBreakActive(this) ||
-            com.example.util.KillswitchManager.isEmergencyBreakActive(this)
-        ) {
-            return false
-        }
 
         val isProtectionActive = isMasterEnabled ||
                 com.example.util.KillswitchManager.isKillswitchActive(this) ||
@@ -945,16 +1027,20 @@ class FocusAccessibilityService : AccessibilityService() {
                 }
             } catch (_: Exception) {}
 
+            val isClockProtectionActive = isClockTamperProtectionEnabled ||
+                    isCheatProtectionEnabled ||
+                    com.example.util.KillswitchManager.isKillswitchActive(this)
+
             val signature = SettingsTamperDetector.matchTamperSignature(
                 texts = textList,
                 hasClickableSwitchOrCheckbox = hasClickableSwitchOrCheckbox,
-                isClockTamperProtectionEnabled = isClockTamperProtectionEnabled,
+                isClockTamperProtectionEnabled = isClockProtectionActive,
                 appPackageName = packageName
             )
 
             if (signature != SettingsTamperDetector.TamperSignature.NONE) {
                 Log.w(TAG, "Surgical tamper protection triggered: $signature")
-                executeTamperExitSequence(root)
+                triggerSurgicalTamperEjection(root)
                 return true
             }
         } finally {

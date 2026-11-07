@@ -823,5 +823,59 @@ class ExampleUnitTest {
             SettingsTamperDetector.matchTamperSignature(d, true, false, appPkg)
         )
     }
+
+    @Test
+    fun testSettingsTamperDetectorNeverBlocksPermissionScreens() {
+        val appPkg = "com.example.focuslock"
+
+        // Display over other apps (Draw over other apps / appear on top)
+        val p1 = listOf("Display over other apps", "Focus Lock", "Allow display over other apps", "Use of this feature...")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(p1, true, true, appPkg)
+        )
+
+        // Appear on top
+        val p2 = listOf("Appear on top", "Focus Lock", "Allow permission", "Off")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(p2, true, true, appPkg)
+        )
+
+        // Usage access
+        val p3 = listOf("Usage access", "Focus Lock", "Permit usage access", "Special app access")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(p3, true, true, appPkg)
+        )
+
+        // Notification access
+        val p4 = listOf("Notification access", "Focus Lock", "Allow notification access")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(p4, true, true, appPkg)
+        )
+
+        // Battery optimization
+        val p5 = listOf("Battery optimization", "All apps", "Focus Lock", "Don't optimize")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(p5, true, true, appPkg)
+        )
+
+        // Device Admin ACTIVATION (granting permission) must be allowed
+        val p6 = listOf("Device admin", "Focus Lock", "Activate this device admin app", "Cancel")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(p6, true, true, appPkg)
+        )
+
+        // Device Admin DEACTIVATION (tampering) must be caught
+        val p7 = listOf("Device admin", "Focus Lock", "Deactivate this device admin app", "Cancel")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_C_DEVICE_ADMIN,
+            SettingsTamperDetector.matchTamperSignature(p7, true, true, appPkg)
+        )
+    }
 }
 

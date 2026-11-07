@@ -288,6 +288,10 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
+    fun reloadAllRules() {
+        observeDatabaseRules()
+    }
+
     private fun observeDatabaseRules() {
         val app = application as? FocusApplication ?: return
         val repo = app.repository
@@ -841,6 +845,26 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun collectWindowTexts(root: AccessibilityNodeInfo?): List<String> {
+        if (root == null) return emptyList()
+        val list = mutableListOf<String>()
+        fun traverse(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 25) return
+            node.text?.toString()?.takeIf { it.isNotBlank() }?.let { list.add(it) }
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { list.add(it) }
+            val count = try { node.childCount } catch (_: Exception) { 0 }
+            for (i in 0 until minOf(count, 30)) {
+                val child = try { node.getChild(i) } catch (_: Exception) { null }
+                if (child != null) {
+                    traverse(child, depth + 1)
+                    try { child.recycle() } catch (_: Exception) {}
+                }
+            }
+        }
+        traverse(root, 0)
+        return list
+    }
+
     private fun isSettingsTamperClick(event: AccessibilityEvent): Boolean {
         val myPkg = packageName.lowercase()
         fun matchesTarget(cs: CharSequence?): Boolean {
@@ -848,30 +872,37 @@ class FocusAccessibilityService : AccessibilityService() {
             val s = cs.toString().lowercase()
             return s.contains("focus lock") || s.contains(myPkg)
         }
-
-        // 1. Check event text list
-        for (t in event.text) {
-            if (matchesTarget(t)) return true
+        fun isDangerousAction(cs: CharSequence?): Boolean {
+            if (cs == null) return false
+            val s = cs.toString().lowercase().trim()
+            return s == "force stop" || s == "uninstall" || s == "stop" || s == "turn off" || s == "deactivate" ||
+                   s.contains("force stop") || s.contains("turn off focus lock") || s.contains("stop focus lock")
         }
 
-        // 2. Check event content description
-        if (matchesTarget(event.contentDescription)) return true
+        // 1. Check if the clicked target is Focus Lock or a dangerous button
+        var clickedFocusLock = false
+        var clickedDangerousAction = false
 
-        // 3. Check event source node and shallow children/parent
+        for (t in event.text) {
+            if (matchesTarget(t)) clickedFocusLock = true
+            if (isDangerousAction(t)) clickedDangerousAction = true
+        }
+        if (matchesTarget(event.contentDescription)) clickedFocusLock = true
+        if (isDangerousAction(event.contentDescription)) clickedDangerousAction = true
+
         val source = try { event.source } catch (_: Exception) { null }
         if (source != null) {
             try {
-                if (matchesTarget(source.text) || matchesTarget(source.contentDescription)) {
-                    return true
-                }
+                if (matchesTarget(source.text) || matchesTarget(source.contentDescription)) clickedFocusLock = true
+                if (isDangerousAction(source.text) || isDangerousAction(source.contentDescription)) clickedDangerousAction = true
+
                 val count = source.childCount
                 for (i in 0 until minOf(count, 15)) {
                     val child = try { source.getChild(i) } catch (_: Exception) { null }
                     if (child != null) {
                         try {
-                            if (matchesTarget(child.text) || matchesTarget(child.contentDescription)) {
-                                return true
-                            }
+                            if (matchesTarget(child.text) || matchesTarget(child.contentDescription)) clickedFocusLock = true
+                            if (isDangerousAction(child.text) || isDangerousAction(child.contentDescription)) clickedDangerousAction = true
                         } finally {
                             try { child.recycle() } catch (_: Exception) {}
                         }
@@ -880,22 +911,8 @@ class FocusAccessibilityService : AccessibilityService() {
                 val parent = try { source.parent } catch (_: Exception) { null }
                 if (parent != null) {
                     try {
-                        if (matchesTarget(parent.text) || matchesTarget(parent.contentDescription)) {
-                            return true
-                        }
-                        val pCount = parent.childCount
-                        for (i in 0 until minOf(pCount, 15)) {
-                            val pChild = try { parent.getChild(i) } catch (_: Exception) { null }
-                            if (pChild != null) {
-                                try {
-                                    if (matchesTarget(pChild.text) || matchesTarget(pChild.contentDescription)) {
-                                        return true
-                                    }
-                                } finally {
-                                    try { pChild.recycle() } catch (_: Exception) {}
-                                }
-                            }
-                        }
+                        if (matchesTarget(parent.text) || matchesTarget(parent.contentDescription)) clickedFocusLock = true
+                        if (isDangerousAction(parent.text) || isDangerousAction(parent.contentDescription)) clickedDangerousAction = true
                     } finally {
                         try { parent.recycle() } catch (_: Exception) {}
                     }
@@ -905,7 +922,42 @@ class FocusAccessibilityService : AccessibilityService() {
                 try { source.recycle() } catch (_: Exception) {}
             }
         }
-        return false
+
+        if (!clickedFocusLock && !clickedDangerousAction) {
+            return false
+        }
+
+        // 2. Inspect rootInActiveWindow for Safe Whitelist & Screen context
+        val root = try { rootInActiveWindow } catch (_: Exception) { null }
+        val screenTexts = try {
+            collectWindowTexts(root).map { it.lowercase().trim() }
+        } finally {
+            try { root?.recycle() } catch (_: Exception) {}
+        }
+
+        // Safe Whitelist: NEVER block clicks on permission grant screens!
+        if (SettingsTamperDetector.isSafePermissionScreen(screenTexts)) {
+            Log.d(TAG, "isSettingsTamperClick: Safe permission grant screen detected, ignoring click.")
+            return false
+        }
+
+        // If clicking a direct dangerous destructive action on Focus Lock, always trigger
+        if (clickedDangerousAction) {
+            return true
+        }
+
+        // If clicking Focus Lock row: ONLY fire if confirmed to be the Accessibility services list!
+        val isAccessibilityList = screenTexts.any {
+            it == "downloaded apps" ||
+            it == "installed apps" ||
+            it == "installed services" ||
+            it == "downloaded services" ||
+            it.contains("downloaded apps") ||
+            it.contains("installed apps") ||
+            it.contains("installed services")
+        } || (screenTexts.any { it.contains("accessibility") } && screenTexts.any { it.contains("talkback") || it.contains("services") })
+
+        return isAccessibilityList
     }
 
     private fun triggerSurgicalTamperEjection(root: AccessibilityNodeInfo? = null) {
@@ -1026,6 +1078,11 @@ class FocusAccessibilityService : AccessibilityService() {
                     }
                 }
             } catch (_: Exception) {}
+
+            val textsLower = textList.map { it.lowercase().trim() }
+            if (SettingsTamperDetector.isSafePermissionScreen(textsLower)) {
+                return false
+            }
 
             val isClockProtectionActive = isClockTamperProtectionEnabled ||
                     isCheatProtectionEnabled ||

@@ -71,7 +71,10 @@ object OverlayManager {
         nextWindow: String? = null,
         isAccessibilityOverlay: Boolean = false
     ) {
-        val useAccessibilityOverlay = isAccessibilityOverlay || context is android.accessibilityservice.AccessibilityService
+        val activeAccessibilityService = com.example.service.FocusAccessibilityService.instance
+        val useAccessibilityOverlay = isAccessibilityOverlay ||
+                context is android.accessibilityservice.AccessibilityService ||
+                activeAccessibilityService != null
 
         if (!useAccessibilityOverlay && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
             // Cannot draw overlay directly; launch BlockedActivity as fallback
@@ -79,11 +82,17 @@ object OverlayManager {
             return
         }
 
+        val targetContext = if (context is android.accessibilityservice.AccessibilityService) {
+            context
+        } else {
+            activeAccessibilityService ?: context
+        }
+
         mainHandler.post {
             try {
-                removeOverlay(context)
+                removeOverlay(targetContext)
 
-                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
+                val windowManager = targetContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
 
                 val layoutType = if (useAccessibilityOverlay) {
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY

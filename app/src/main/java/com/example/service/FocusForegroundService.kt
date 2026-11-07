@@ -216,6 +216,16 @@ class FocusForegroundService : Service() {
                 loopCounter++
                 checkMidnightReset()
 
+                // Every 60 seconds (1 minute), automatically sync minute-by-minute usage data and session stats to cloud
+                if (loopCounter % 60 == 0) {
+                    try {
+                        val app = application as? FocusApplication
+                        app?.backupManager?.backupToCloudAsync(this@FocusForegroundService)
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Minute-by-minute cloud sync notice: ${e.message}")
+                    }
+                }
+
                 // Every 2 minutes (120 * 1s), reconcile full-day usage with UsageStatsManager
                 if (loopCounter % 120 == 0) {
                     try {

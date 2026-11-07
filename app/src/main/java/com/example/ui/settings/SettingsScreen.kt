@@ -338,6 +338,11 @@ fun SettingsScreen(
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             },
+            onRestoreBackup = {
+                viewModel.restoreBackupNow { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
             onExportJson = {
                 exportDocumentLauncher.launch("focus_lock_backup_${System.currentTimeMillis()}.json")
             },
@@ -1118,6 +1123,7 @@ private fun BackupRestoreDialog(
     onSignInGoogle: () -> Unit,
     onSignOutGoogle: () -> Unit,
     onSyncNow: () -> Unit,
+    onRestoreBackup: () -> Unit,
     onExportJson: () -> Unit,
     onImportJson: () -> Unit,
     onDismiss: () -> Unit
@@ -1125,7 +1131,7 @@ private fun BackupRestoreDialog(
     val context = LocalContext.current
     val formattedLastBackup = remember(lastCloudBackupTime) {
         if (lastCloudBackupTime > 0) {
-            SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()).format(Date(lastCloudBackupTime))
+            SimpleDateFormat("HH:mm:ss (MMM d)", Locale.getDefault()).format(Date(lastCloudBackupTime))
         } else {
             "Never"
         }
@@ -1221,7 +1227,7 @@ private fun BackupRestoreDialog(
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "Last Cloud Sync: $formattedLastBackup",
+                                        text = "Last cloud sync: $formattedLastBackup",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1232,7 +1238,7 @@ private fun BackupRestoreDialog(
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(
                                     onClick = onSyncNow,
@@ -1258,22 +1264,47 @@ private fun BackupRestoreDialog(
                                             contentDescription = null,
                                             modifier = Modifier.size(16.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Sync Now", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Backup Now", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                                     }
                                 }
 
                                 OutlinedButton(
-                                    onClick = onSignOutGoogle,
+                                    onClick = onRestoreBackup,
+                                    enabled = !isSyncing,
                                     shape = RoundedCornerShape(10.dp),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
                                     colors = ButtonDefaults.outlinedButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.onSurface
+                                        contentColor = MaterialTheme.colorScheme.primary
                                     ),
-                                    modifier = Modifier.testTag("sign_out_google_button")
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("restore_backup_button")
                                 ) {
-                                    Text("Sign Out", fontSize = 13.sp)
+                                    Icon(
+                                        imageVector = Icons.Default.FileDownload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Restore Backup", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                                 }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OutlinedButton(
+                                onClick = onSignOutGoogle,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("sign_out_google_button")
+                            ) {
+                                Text("Sign Out", fontSize = 13.sp)
                             }
                         } else {
                             Text(

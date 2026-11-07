@@ -18,6 +18,43 @@ object SettingsTamperDetector {
         SIGNATURE_D_DATE_TIME
     }
 
+    val SAFE_PERMISSION_WHITELIST = listOf(
+        "display over other apps",
+        "appear on top",
+        "allow display over other apps",
+        "usage access",
+        "permit usage access",
+        "usage data access",
+        "special app access",
+        "notification access",
+        "alarms & reminders",
+        "alarms and reminders",
+        "battery optimization",
+        "ignore battery optimizations",
+        "background usage",
+        "auto-launch permission",
+        "background auto-launch",
+        "activate this device admin app"
+    )
+
+    fun isSafePermissionScreen(textsLower: List<String>): Boolean {
+        // If this screen contains Accessibility toggle markers, it's not a safe permission screen
+        val hasAccessibilityMarker = textsLower.any {
+            it.contains("accessibility") || it.contains("use service") || it.contains("downloaded apps") || it.contains("installed apps")
+        }
+        return textsLower.any { text ->
+            SAFE_PERMISSION_WHITELIST.any { safe ->
+                if (safe == "activate this device admin app") {
+                    text.contains(safe) && !textsLower.any { it.contains("deactivate") }
+                } else if (safe == "auto-launch permission" || safe == "background auto-launch") {
+                    text.contains(safe)
+                } else {
+                    text.contains(safe)
+                }
+            }
+        }
+    }
+
     /**
      * Evaluates collected screen text and view state against exact tamper signatures.
      *
@@ -37,6 +74,15 @@ object SettingsTamperDetector {
 
         val textsLower = texts.map { it.lowercase().trim() }
         val targetPkgLower = appPackageName.lowercase().trim()
+
+        // -------------------------------------------------------------------------
+        // Safe Whitelist: NEVER block or trigger anti-tamper on permission grant screens!
+        // Allows user to grant Usage Access, Display over other apps, Notification Access,
+        // Battery Optimization, or Activate Device Admin without being kicked out.
+        // -------------------------------------------------------------------------
+        if (isSafePermissionScreen(textsLower)) {
+            return TamperSignature.NONE
+        }
 
         // -------------------------------------------------------------------------
         // Signature 4 (D) — System Date & Time Settings

@@ -704,12 +704,35 @@ class FocusViewModel(
         viewModelScope.launch {
             _isSyncing.value = true
             com.example.util.FirebaseInitializer.ensureInitialized(getApplication())
-            val syncResult = backupManager.syncToCloudDirect(email)
+            val syncResult = backupManager.syncToCloudDirect(email, isManual = true)
             _isSyncing.value = false
             if (syncResult.isSuccess) {
                 onResult(true, "Cloud backup completed successfully.")
             } else {
-                onResult(false, "Cloud sync failed: ${syncResult.exceptionOrNull()?.message}")
+                onResult(false, "Cloud backup failed: ${syncResult.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun restoreBackupNow(onResult: (Boolean, String) -> Unit) {
+        val email = connectedGmailAccount.value ?: preferencesRepository.getConnectedGmailAccountSync()
+        if (email.isNullOrEmpty()) {
+            onResult(false, "No Google account connected.")
+            return
+        }
+        viewModelScope.launch {
+            _isSyncing.value = true
+            com.example.util.FirebaseInitializer.ensureInitialized(getApplication())
+            val restoreResult = backupManager.restoreFromCloud(email, isInitialStartup = false)
+            _isSyncing.value = false
+            if (restoreResult.isSuccess) {
+                if (restoreResult.getOrNull() == true) {
+                    onResult(true, "Cloud backup restored successfully!")
+                } else {
+                    onResult(true, "Cloud connected & synchronized.")
+                }
+            } else {
+                onResult(false, "Restore failed: ${restoreResult.exceptionOrNull()?.message}")
             }
         }
     }

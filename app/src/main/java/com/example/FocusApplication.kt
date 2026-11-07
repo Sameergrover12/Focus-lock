@@ -21,7 +21,7 @@ class FocusApplication : Application() {
         instance = this
         com.example.util.FirebaseInitializer.ensureInitialized(this)
         com.example.util.TimeIntegrityManager.init(this)
-        backupManager
+        backupManager.resolveInitialCloudSyncOnStartup()
         createNotificationChannels()
         com.example.util.EmergencyBreakManager.init(this)
         com.example.util.KillswitchManager.init(this)

@@ -64,6 +64,9 @@ object PermissionHelper {
     }
 
     fun canDrawOverlays(context: Context): Boolean {
+        if (FocusAccessibilityService.isServiceRunning.value || isAccessibilityServiceEnabled(context)) {
+            return true
+        }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(context)
         } else {

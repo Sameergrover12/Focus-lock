@@ -118,6 +118,9 @@ fun DashboardScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = PermissionHelper.isAccessibilityServiceEnabled(context)
                 viewModel.refreshDailyUsageStats()
+                if (PermissionHelper.isUsageStatsPermissionGranted(context)) {
+                    viewModel.refresh30DayHistory()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

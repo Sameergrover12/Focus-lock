@@ -308,6 +308,7 @@ class FocusRepository(private val focusDao: FocusDao) {
      */
     suspend fun get30DayHistory(context: Context): List<DayBarData> = withContext(Dispatchers.IO) {
         val list = mutableListOf<DayBarData>()
+        val hasPermission = com.example.util.PermissionHelper.isUsageStatsPermissionGranted(context)
         val cachePrefs = context.getSharedPreferences("historical_dwell_cache", Context.MODE_PRIVATE)
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val dayMonthFormat = SimpleDateFormat("MMM d", Locale.getDefault())
@@ -334,26 +335,43 @@ class FocusRepository(private val focusDao: FocusDao) {
 
             val mins: Int = if (isToday) {
                 // Today is always computed live
-                val liveToday = ScreenTimeHelper.queryDeviceScreenOnMinutes(context)
+                val liveToday = if (hasPermission) ScreenTimeHelper.queryDeviceScreenOnMinutes(context) else null
                 val recordedToday = focusDao.getScreenOnMinutesForDateSync(dateStr) ?: 0
                 maxOf(liveToday ?: 0, recordedToday)
             } else {
-                val cacheKey = "dwell_day_$dateStr"
-                if (cachePrefs.contains(cacheKey)) {
-                    cachePrefs.getInt(cacheKey, 0)
+                val cacheKey = "daily_dwell_$dateStr"
+                val legacyCacheKey = "dwell_day_$dateStr"
+                val cachedVal = when {
+                    cachePrefs.contains(cacheKey) -> cachePrefs.getInt(cacheKey, 0)
+                    cachePrefs.contains(legacyCacheKey) -> cachePrefs.getInt(legacyCacheKey, 0)
+                    else -> 0
+                }
+
+                if (cachedVal > 0) {
+                    cachedVal
                 } else {
                     val roomVal = focusDao.getScreenOnMinutesForDateSync(dateStr)
                     if (roomVal != null && roomVal > 0) {
-                        cachePrefs.edit().putInt(cacheKey, roomVal).apply()
+                        cachePrefs.edit()
+                            .putInt(cacheKey, roomVal)
+                            .putInt(legacyCacheKey, roomVal)
+                            .apply()
                         roomVal
-                    } else {
+                    } else if (hasPermission) {
+                        // Dynamically backfill from UsageStatsManager
                         val dwellMillis = ScreenTimeHelper.queryHistoricalDayDwell(context, startOfDay, endOfDay)
                         val computedMins = (dwellMillis / 60000L).toInt()
                         if (computedMins > 0) {
                             focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = dateStr, screenOnMinutes = computedMins))
+                            cachePrefs.edit()
+                                .putInt(cacheKey, computedMins)
+                                .putInt(legacyCacheKey, computedMins)
+                                .apply()
                         }
-                        cachePrefs.edit().putInt(cacheKey, computedMins).apply()
                         computedMins
+                    } else {
+                        // Permission NOT granted yet: do NOT write 0L to cache so it self-heals when permission is granted
+                        0
                     }
                 }
             }

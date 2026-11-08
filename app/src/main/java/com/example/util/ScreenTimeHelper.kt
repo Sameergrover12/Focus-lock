@@ -145,7 +145,7 @@ object ScreenTimeHelper {
         val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
             ?: return 0L
 
-        // Primary: raw UsageEvents
+        // 1. Primary: raw UsageEvents between startOfDay and endOfDay
         try {
             val events = usageStatsManager.queryEvents(startOfDay, endOfDay)
             if (events != null) {
@@ -153,18 +153,36 @@ object ScreenTimeHelper {
                 if (parsed.totalScreenOnMillis > 0L) {
                     return parsed.totalScreenOnMillis
                 }
+                // If device OEM does not log SCREEN_INTERACTIVE/SCREEN_NON_INTERACTIVE in events,
+                // check if parsed user app intervals were found
+                if (parsed.appUsageMillis.isNotEmpty()) {
+                    var appForegroundSum = 0L
+                    for ((pkg, duration) in parsed.appUsageMillis) {
+                        if (!isIgnoredSystemPackage(pkg, context)) {
+                            appForegroundSum += duration
+                        }
+                    }
+                    if (appForegroundSum > 0L) {
+                        return minOf(appForegroundSum, 24 * 60 * 60 * 1000L)
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to query UsageEvents for day range [$startOfDay, $endOfDay]", e)
         }
 
-        // Fallback: UsageStatsManager.queryUsageStats(INTERVAL_DAILY)
+        // 2. Fallback for Days Older Than 7 Days (Crucial on Android):
+        // Android purges raw events after ~7 days but retains aggregated daily buckets for days 8–30.
+        // Try queryUsageStats(INTERVAL_DAILY, startOfDay, endOfDay)
         try {
             val statsList = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startOfDay, endOfDay)
             if (!statsList.isNullOrEmpty()) {
                 var totalForeground = 0L
                 for (stat in statsList) {
-                    if (!isIgnoredSystemPackage(stat.packageName, context)) {
+                    // Filter to stats whose timestamps intersect with this day's window
+                    val intersects = (stat.lastTimeStamp >= startOfDay && stat.firstTimeStamp <= endOfDay) ||
+                            (stat.firstTimeStamp in startOfDay..endOfDay)
+                    if (intersects && !isIgnoredSystemPackage(stat.packageName, context)) {
                         totalForeground += stat.totalTimeInForeground
                     }
                 }
@@ -174,6 +192,24 @@ object ScreenTimeHelper {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to query UsageStats for day range [$startOfDay, $endOfDay]", e)
+        }
+
+        // 3. Additional Fallback: queryAndAggregateUsageStats
+        try {
+            val aggMap = usageStatsManager.queryAndAggregateUsageStats(startOfDay, endOfDay)
+            if (!aggMap.isNullOrEmpty()) {
+                var totalForeground = 0L
+                for ((pkg, stat) in aggMap) {
+                    if (!isIgnoredSystemPackage(pkg, context)) {
+                        totalForeground += stat.totalTimeInForeground
+                    }
+                }
+                if (totalForeground > 0L) {
+                    return minOf(totalForeground, 24 * 60 * 60 * 1000L)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to queryAndAggregateUsageStats for day range [$startOfDay, $endOfDay]", e)
         }
 
         return 0L

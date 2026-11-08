@@ -257,8 +257,24 @@ class BackupManager(
                 val value = entry["value"]
                 when (type) {
                     "BOOLEAN" -> (value as? Boolean)?.let { editor.putBoolean(key, it) }
-                    "INT" -> (value as? Number)?.let { editor.putInt(key, it.toInt()) }
-                    "LONG" -> (value as? Number)?.let { editor.putLong(key, it.toLong()) }
+                    "INT" -> {
+                        val cloudInt = (value as? Number)?.toInt() ?: 0
+                        if (key.startsWith("daily_dwell_") || key.startsWith("dwell_day_")) {
+                            val localInt = prefs.getInt(key, 0)
+                            editor.putInt(key, maxOf(localInt, cloudInt))
+                        } else {
+                            editor.putInt(key, cloudInt)
+                        }
+                    }
+                    "LONG" -> {
+                        val cloudLong = (value as? Number)?.toLong() ?: 0L
+                        if (key.startsWith("daily_dwell_") || key.startsWith("dwell_day_")) {
+                            val localLong = prefs.getLong(key, 0L)
+                            editor.putLong(key, maxOf(localLong, cloudLong))
+                        } else {
+                            editor.putLong(key, cloudLong)
+                        }
+                    }
                     "FLOAT" -> (value as? Number)?.let { editor.putFloat(key, it.toFloat()) }
                     "STRING" -> editor.putString(key, value?.toString())
                     "STRING_SET" -> {

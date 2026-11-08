@@ -165,6 +165,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         com.example.util.AppForegroundTracker.isFocusLockInForeground = true
+        if (com.example.util.PermissionHelper.isUsageStatsPermissionGranted(this)) {
+            viewModel.refreshDailyUsageStats()
+            viewModel.refresh30DayHistory()
+        }
     }
 
     override fun onStop() {

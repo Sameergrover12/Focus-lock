@@ -102,6 +102,31 @@ fun AnalyticsScreen(
     val thirtyDayHistory by viewModel.thirtyDayHistory.collectAsStateWithLifecycle()
     val real30DayAverageMinutes by viewModel.real30DayAverageMinutes.collectAsStateWithLifecycle()
 
+    val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+    LaunchedEffect(Unit) {
+        if (com.example.util.PermissionHelper.isUsageStatsPermissionGranted(context)) {
+            viewModel.refreshDailyUsageStats()
+            viewModel.refresh30DayHistory()
+        }
+    }
+
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                if (com.example.util.PermissionHelper.isUsageStatsPermissionGranted(context)) {
+                    viewModel.refreshDailyUsageStats()
+                    viewModel.refresh30DayHistory()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     val totalMins = (totalMinutesToday ?: 0).coerceAtLeast(0)
     val blockedPackageSet = remember(blockedApps) { blockedApps.map { it.packageName }.toSet() }
 

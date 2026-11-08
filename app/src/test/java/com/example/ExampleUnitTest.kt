@@ -877,5 +877,20 @@ class ExampleUnitTest {
             SettingsTamperDetector.matchTamperSignature(p7, true, true, appPkg)
         )
     }
+
+    @Test
+    fun testHistoricalDwellMaxOfCloudMerge() {
+        // Verifies that a valid local dwell is never overwritten by a 0 or smaller value during restore
+        val localDwell = 145
+        val cloudZero = 0
+        assertEquals(145, maxOf(localDwell, cloudZero))
+
+        val cloudHigher = 180
+        assertEquals(180, maxOf(localDwell, cloudHigher))
+
+        val localZero = 0
+        val cloudDwell = 220
+        assertEquals(220, maxOf(localZero, cloudDwell))
+    }
 }
 

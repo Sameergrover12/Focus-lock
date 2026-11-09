@@ -537,6 +537,11 @@ class UserPreferencesRepository(private val context: Context) {
         return computedHash == storedHash
     }
 
+    suspend fun clearAllLocalPreferences() {
+        syncPrefs.edit().clear().commit()
+        context.dataStore.edit { it.clear() }
+    }
+
     private fun hashPassphrase(passphrase: String, salt: String): String {
         val md = MessageDigest.getInstance("SHA-256")
         val bytes = md.digest((salt + passphrase).toByteArray(Charsets.UTF_8))

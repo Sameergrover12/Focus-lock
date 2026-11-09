@@ -56,6 +56,11 @@ class BackupManager(
         private const val TAG = "BackupManager"
         const val BACKUP_VERSION = 2
         const val FIRESTORE_USERS_COLLECTION = "users"
+        const val FIRESTORE_BACKUP_COLLECTION = "focus_lock_backup"
+        const val FIRESTORE_MASTER_VAULT_DOC = "master_vault"
+
+        const val META_PREFS_NAME = "auth_session_meta"
+        const val KEY_LAST_ACTIVE_UID = "last_active_gmail_uid"
 
         val ALL_PREF_FILES = listOf(
             UserPreferencesRepository.SYNC_PREFS_NAME,
@@ -67,6 +72,15 @@ class BackupManager(
             "historical_dwell_cache",
             "focus_lock_preferences"
         )
+
+        fun shouldIncludePrefFile(name: String): Boolean {
+            if (name == META_PREFS_NAME) return false
+            if (name.startsWith("com.google.")) return false
+            if (name.contains("firebase", ignoreCase = true)) return false
+            if (name.startsWith("androidx.")) return false
+            if (name.contains("WebView", ignoreCase = true)) return false
+            return true
+        }
 
         fun isFirebaseAvailable(context: Context): Boolean {
             return FirebaseInitializer.ensureInitialized(context)
@@ -115,17 +129,19 @@ class BackupManager(
         }
     }
 
-    // Critical race-condition guard: blocks automatic uploads until initial cloud sync is checked & resolved
-    val isInitialCloudSyncResolved = AtomicBoolean(false)
+    // Critical canonical guards: blocks uploads until cloud session is ready; prevents reverse overwrite during restore
+    val isCloudSessionReady = AtomicBoolean(false)
+    val isApplyingCloudRestore = AtomicBoolean(false)
 
-    // Critical guard: prevents fresh installs or restore operations from reverse overwriting cloud backup
-    val isRestoringFromCloud = AtomicBoolean(false)
+    // Backward-compatible aliases for existing references
+    val isInitialCloudSyncResolved: AtomicBoolean get() = isCloudSessionReady
+    val isRestoringFromCloud: AtomicBoolean get() = isApplyingCloudRestore
 
     // Global reactive restore version: incremented ONLY when external Cloud or JSON restore finishes
     private val _restoreVersion = MutableStateFlow(0)
     val restoreVersion: StateFlow<Int> = _restoreVersion.asStateFlow()
 
-    // 1500ms Debounce scope on Dispatchers.IO for real-time automatic cloud sync
+    // Debounce scope on Dispatchers.IO for real-time automatic cloud sync
     private val backupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var autoBackupJob: Job? = null
 
@@ -134,17 +150,45 @@ class BackupManager(
 
     init {
         registerPreferenceChangeListeners()
+        startPeriodicBackgroundSync()
+    }
+
+    /**
+     * Dynamically discovers all app-owned SharedPreferences XML files on disk
+     * in addition to all known app preference files.
+     */
+    fun discoverAllSharedPreferencesNames(): Set<String> {
+        val discovered = mutableSetOf<String>()
+        discovered.addAll(ALL_PREF_FILES)
+        try {
+            val sharedPrefsDir = java.io.File(context.applicationInfo.dataDir, "shared_prefs")
+            if (sharedPrefsDir.exists() && sharedPrefsDir.isDirectory) {
+                val xmlFiles = sharedPrefsDir.listFiles { _, name -> name.endsWith(".xml") }
+                if (xmlFiles != null) {
+                    for (file in xmlFiles) {
+                        val prefName = file.name.removeSuffix(".xml")
+                        if (shouldIncludePrefFile(prefName)) {
+                            discovered.add(prefName)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error discovering shared_prefs files", e)
+        }
+        return discovered.filter { shouldIncludePrefFile(it) }.toSet()
     }
 
     private fun registerPreferenceChangeListeners() {
-        for (prefName in ALL_PREF_FILES) {
+        val allNames = discoverAllSharedPreferencesNames()
+        for (prefName in allNames) {
             val prefs = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
             val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
                 if (key == "onboarding_complete" || key == "is_onboarding_completed" || key == "last_cloud_backup_time") {
                     return@OnSharedPreferenceChangeListener
                 }
-                if (isInitialCloudSyncResolved.get() && !isRestoringFromCloud.get()) {
-                    scheduleDebouncedAutoBackup(1500L)
+                if (isCloudSessionReady.get() && !isApplyingCloudRestore.get()) {
+                    scheduleDebouncedAutoBackup(300L)
                 }
             }
             prefListeners.add(listener)
@@ -153,9 +197,31 @@ class BackupManager(
     }
 
     /**
+     * Periodic 60s background sync while active to guarantee eventual consistency.
+     */
+    private fun startPeriodicBackgroundSync() {
+        backupScope.launch {
+            while (true) {
+                delay(60_000L)
+                if (isCloudSessionReady.get() && !isApplyingCloudRestore.get()) {
+                    val email = preferencesRepository.getConnectedGmailAccountSync()
+                        ?: try { preferencesRepository.connectedGmailAccount.first() } catch (_: Exception) { null }
+                    if (!email.isNullOrEmpty()) {
+                        try {
+                            syncToCloudDirect(email, isManual = false)
+                        } catch (e: Exception) {
+                            Log.d(TAG, "Periodic 60s background sync notice: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Resolves initial cloud sync on startup:
      * If an account was previously connected, checks server first and restores to local SharedPreferences,
-     * then sets isInitialCloudSyncResolved = true.
+     * then sets isCloudSessionReady = true.
      */
     fun resolveInitialCloudSyncOnStartup() {
         backupScope.launch(Dispatchers.IO) {
@@ -166,32 +232,32 @@ class BackupManager(
                 Log.d(TAG, "Resolving initial cloud sync on startup for $email...")
                 restoreFromCloud(email, isInitialStartup = true)
             } else {
-                isInitialCloudSyncResolved.set(true)
+                isCloudSessionReady.set(true)
             }
         }
     }
 
     /**
-     * Schedules an auto-backup to Firestore with a 1500ms debounce on Dispatchers.IO.
+     * Schedules an auto-backup to Firestore with a 300ms debounce on Dispatchers.IO.
      * Blocks if initial sync has not resolved or if restore is in progress.
      */
     fun backupToCloudAsync(context: Context? = null) {
-        scheduleDebouncedAutoBackup(1500L)
+        scheduleDebouncedAutoBackup(300L)
     }
 
     fun scheduleAutoBackup(context: Context? = null) {
-        scheduleDebouncedAutoBackup(1500L)
+        scheduleDebouncedAutoBackup(300L)
     }
 
-    fun scheduleDebouncedAutoBackup(delayMs: Long = 1500L) {
-        if (!isInitialCloudSyncResolved.get() || isRestoringFromCloud.get()) {
+    fun scheduleDebouncedAutoBackup(delayMs: Long = 300L) {
+        if (!isCloudSessionReady.get() || isApplyingCloudRestore.get()) {
             return
         }
 
         autoBackupJob?.cancel()
         autoBackupJob = backupScope.launch(Dispatchers.IO) {
             delay(delayMs)
-            if (!isInitialCloudSyncResolved.get() || isRestoringFromCloud.get()) return@launch
+            if (!isCloudSessionReady.get() || isApplyingCloudRestore.get()) return@launch
 
             val targetContext = this@BackupManager.context
             FirebaseInitializer.ensureInitialized(targetContext)
@@ -209,12 +275,12 @@ class BackupManager(
     }
 
     /**
-     * Collects every single entry (prefs.all) from ALL SharedPreferences files used by the app,
+     * Collects every single entry (prefs.all) from ALL dynamically discovered SharedPreferences files,
      * serializing each value alongside its exact type ("BOOLEAN", "INT", "LONG", "FLOAT", "STRING", "STRING_SET").
      */
     fun collectAllSharedPreferencesMap(): Map<String, Map<String, Any>> {
         val rootMap = mutableMapOf<String, Map<String, Any>>()
-        for (fileName in ALL_PREF_FILES) {
+        for (fileName in discoverAllSharedPreferencesNames()) {
             val prefs = context.getSharedPreferences(fileName, Context.MODE_PRIVATE)
             val allEntries = prefs.all
             val fileMap = mutableMapOf<String, Any>()
@@ -243,48 +309,75 @@ class BackupManager(
     /**
      * Writes 100% of all typed SharedPreferences entries back into their respective SharedPreferences files
      * using .commit() so writes are immediately synchronous and on disk before in-memory reload.
+     * Uses runCatching on each field for maximum cross-version forward/backward tolerance.
      */
     fun restoreFromSharedPreferencesMap(map: Map<String, Any?>) {
         for ((fileName, fileData) in map) {
-            val entries = fileData as? Map<*, *> ?: continue
-            val prefs = context.getSharedPreferences(fileName, Context.MODE_PRIVATE)
-            val editor = prefs.edit()
-            for ((kObj, vObj) in entries) {
-                val key = kObj?.toString() ?: continue
-                if (key == "onboarding_complete" || key == "is_onboarding_completed" || key == "last_cloud_backup_time") continue
-                val entry = vObj as? Map<*, *> ?: continue
-                val type = entry["type"]?.toString() ?: continue
-                val value = entry["value"]
-                when (type) {
-                    "BOOLEAN" -> (value as? Boolean)?.let { editor.putBoolean(key, it) }
-                    "INT" -> {
-                        val cloudInt = (value as? Number)?.toInt() ?: 0
-                        if (key.startsWith("daily_dwell_") || key.startsWith("dwell_day_")) {
-                            val localInt = prefs.getInt(key, 0)
-                            editor.putInt(key, maxOf(localInt, cloudInt))
-                        } else {
-                            editor.putInt(key, cloudInt)
+            runCatching {
+                val entries = fileData as? Map<*, *> ?: return@runCatching
+                val prefs = context.getSharedPreferences(fileName, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                for ((kObj, vObj) in entries) {
+                    runCatching {
+                        val key = kObj?.toString() ?: return@runCatching
+                        if (key == "onboarding_complete" || key == "is_onboarding_completed" || key == "last_cloud_backup_time") return@runCatching
+                        val entry = vObj as? Map<*, *> ?: return@runCatching
+                        val type = entry["type"]?.toString() ?: return@runCatching
+                        val value = entry["value"]
+                        when (type) {
+                            "BOOLEAN" -> (value as? Boolean)?.let { editor.putBoolean(key, it) }
+                            "INT" -> {
+                                val cloudInt = (value as? Number)?.toInt() ?: 0
+                                if (key.startsWith("daily_dwell_") || key.startsWith("dwell_day_")) {
+                                    val localInt = prefs.getInt(key, 0)
+                                    editor.putInt(key, maxOf(localInt, cloudInt))
+                                } else {
+                                    editor.putInt(key, cloudInt)
+                                }
+                            }
+                            "LONG" -> {
+                                val cloudLong = (value as? Number)?.toLong() ?: 0L
+                                if (key.startsWith("daily_dwell_") || key.startsWith("dwell_day_")) {
+                                    val localLong = prefs.getLong(key, 0L)
+                                    editor.putLong(key, maxOf(localLong, cloudLong))
+                                } else {
+                                    editor.putLong(key, cloudLong)
+                                }
+                            }
+                            "FLOAT" -> (value as? Number)?.let { editor.putFloat(key, it.toFloat()) }
+                            "STRING" -> editor.putString(key, value?.toString())
+                            "STRING_SET" -> {
+                                val list = (value as? List<*>)?.mapNotNull { it?.toString() }?.toSet()
+                                if (list != null) editor.putStringSet(key, list)
+                            }
                         }
-                    }
-                    "LONG" -> {
-                        val cloudLong = (value as? Number)?.toLong() ?: 0L
-                        if (key.startsWith("daily_dwell_") || key.startsWith("dwell_day_")) {
-                            val localLong = prefs.getLong(key, 0L)
-                            editor.putLong(key, maxOf(localLong, cloudLong))
-                        } else {
-                            editor.putLong(key, cloudLong)
-                        }
-                    }
-                    "FLOAT" -> (value as? Number)?.let { editor.putFloat(key, it.toFloat()) }
-                    "STRING" -> editor.putString(key, value?.toString())
-                    "STRING_SET" -> {
-                        val list = (value as? List<*>)?.mapNotNull { it?.toString() }?.toSet()
-                        if (list != null) editor.putStringSet(key, list)
                     }
                 }
+                editor.commit()
             }
-            editor.commit()
         }
+    }
+
+    /**
+     * Wipes 100% of all local SharedPreferences and Room database entities,
+     * resetting all in-memory managers. Used during account sign-out or account switch.
+     */
+    suspend fun clearAllLocalData() = withContext(Dispatchers.IO) {
+        val names = discoverAllSharedPreferencesNames()
+        for (name in names) {
+            try {
+                context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error clearing shared pref $name", e)
+            }
+        }
+        preferencesRepository.clearAllLocalPreferences()
+        try {
+            database.clearAllTables()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error clearing database tables", e)
+        }
+        reloadAllInMemoryManagers()
     }
 
     /**
@@ -916,10 +1009,10 @@ class BackupManager(
      * unless explicitly triggered manually (isManual = true).
      */
     suspend fun syncToCloudDirect(email: String, isManual: Boolean = false): Result<Long> = withContext(Dispatchers.IO) {
-        if (isRestoringFromCloud.get()) {
+        if (isApplyingCloudRestore.get()) {
             return@withContext Result.failure(Exception("Cannot upload while restore is in progress"))
         }
-        if (!isInitialCloudSyncResolved.get() && !isManual) {
+        if (!isCloudSessionReady.get() && !isManual) {
             Log.d(TAG, "syncToCloudDirect skipped: initial cloud sync not resolved yet")
             return@withContext Result.failure(Exception("Initial sync not resolved yet"))
         }
@@ -938,12 +1031,18 @@ class BackupManager(
                     dao.getAllBlockedWebsitesSync().size +
                     dao.getAllBlockedKeywordsSync().size
 
+            val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+            val uid = auth.currentUser?.uid ?: normalizedEmail
+
             // Anti-Wipe Safety Guard:
             // If local state is empty (0 rules) and this is an automatic background upload,
             // check whether cloud already has existing rules to protect against wiping user data on reinstall.
             if (localRuleCount == 0 && !isManual) {
                 val cloudSnapshot = try {
-                    firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail)
+                    firestore.collection(FIRESTORE_USERS_COLLECTION)
+                        .document(uid)
+                        .collection(FIRESTORE_BACKUP_COLLECTION)
+                        .document(FIRESTORE_MASTER_VAULT_DOC)
                         .get(Source.SERVER).await()
                 } catch (_: Exception) {
                     try {
@@ -965,13 +1064,17 @@ class BackupManager(
             val prefsJson = collectAllPrefsJson()
             val backupJson = createBackupJson()
             val now = System.currentTimeMillis()
-
-            val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-            val uid = auth.currentUser?.uid ?: normalizedEmail
+            val appVersion = try {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0"
+            } catch (_: Exception) { "1.0" }
 
             val docData = hashMapOf(
+                "schemaVersion" to 1,
+                "appVersionName" to appVersion,
+                "updatedAtMillis" to now,
                 "email" to normalizedEmail,
                 "uid" to uid,
+                "preferencesVault" to allPrefsMap,
                 "signed_in_google_email" to normalizedEmail,
                 "focus_lock_data" to fullStateMap,
                 "shared_preferences" to allPrefsMap,
@@ -983,13 +1086,29 @@ class BackupManager(
                 "version" to BACKUP_VERSION
             )
 
-            // Primary location: users/{normalizedEmail}
-            firestore.collection(FIRESTORE_USERS_COLLECTION)
-                .document(normalizedEmail)
-                .set(docData)
-                .await()
+            // 1. Immutable Master Vault: users/{uid}/focus_lock_backup/master_vault
+            try {
+                firestore.collection(FIRESTORE_USERS_COLLECTION)
+                    .document(uid)
+                    .collection(FIRESTORE_BACKUP_COLLECTION)
+                    .document(FIRESTORE_MASTER_VAULT_DOC)
+                    .set(docData)
+                    .await()
+            } catch (e: Exception) {
+                Log.w(TAG, "Master vault backup write notice: ${e.message}")
+            }
 
-            // Subcollection location: users/{uid}/backups/focus_lock_full_state
+            // 2. Dual-write backwards compatibility: users/{normalizedEmail}
+            try {
+                firestore.collection(FIRESTORE_USERS_COLLECTION)
+                    .document(normalizedEmail)
+                    .set(docData)
+                    .await()
+            } catch (e: Exception) {
+                Log.w(TAG, "Root document backup write notice: ${e.message}")
+            }
+
+            // 3. Subcollection legacy: users/{uid}/backups/focus_lock_full_state
             try {
                 firestore.collection(FIRESTORE_USERS_COLLECTION)
                     .document(uid)
@@ -1020,13 +1139,13 @@ class BackupManager(
 
     /**
      * Restores backup from Cloud Firestore.
-     * Uses Source.SERVER first, checks both users/{normalizedEmail} and users/{uid}/backups/focus_lock_full_state,
+     * Uses Source.SERVER first, checks master_vault, subcollection, and legacy documents,
      * restores all typed SharedPreferences via .commit(), restores Room entities, and reloads in-memory managers.
      */
     suspend fun restoreFromCloud(email: String, isInitialStartup: Boolean = false): Result<Boolean> = withContext(Dispatchers.IO) {
         FirebaseInitializer.ensureInitialized(context)
 
-        isRestoringFromCloud.set(true)
+        isApplyingCloudRestore.set(true)
         try {
             val normalizedEmail = email.trim().lowercase()
             preferencesRepository.setConnectedGmailAccount(normalizedEmail)
@@ -1034,16 +1153,24 @@ class BackupManager(
             val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
             val uid = auth.currentUser?.uid ?: normalizedEmail
 
-            // 1. Fetch from Server first, fallback to default cache
+            // 1. Fetch from Master Vault first (users/{uid}/focus_lock_backup/master_vault) using Source.SERVER
             var snapshot: com.google.firebase.firestore.DocumentSnapshot? = try {
-                firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail)
+                firestore.collection(FIRESTORE_USERS_COLLECTION)
+                    .document(uid)
+                    .collection(FIRESTORE_BACKUP_COLLECTION)
+                    .document(FIRESTORE_MASTER_VAULT_DOC)
                     .get(Source.SERVER).await()
             } catch (_: Exception) {
                 try {
-                    firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail).get().await()
+                    firestore.collection(FIRESTORE_USERS_COLLECTION)
+                        .document(uid)
+                        .collection(FIRESTORE_BACKUP_COLLECTION)
+                        .document(FIRESTORE_MASTER_VAULT_DOC)
+                        .get().await()
                 } catch (_: Exception) { null }
             }
 
+            // 2. Fallback to subcollection legacy (users/{uid}/backups/focus_lock_full_state)
             if (snapshot == null || !snapshot.exists()) {
                 snapshot = try {
                     firestore.collection(FIRESTORE_USERS_COLLECTION)
@@ -1062,11 +1189,34 @@ class BackupManager(
                 }
             }
 
+            // 3. Fallback to legacy root document (users/{normalizedEmail})
+            if (snapshot == null || !snapshot.exists()) {
+                snapshot = try {
+                    firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail)
+                        .get(Source.SERVER).await()
+                } catch (_: Exception) {
+                    try {
+                        firestore.collection(FIRESTORE_USERS_COLLECTION).document(normalizedEmail).get().await()
+                    } catch (_: Exception) { null }
+                }
+            }
+
             if (snapshot != null && snapshot.exists()) {
-                val timestamp = snapshot.getLong("updatedAt") ?: snapshot.getLong("timestamp") ?: System.currentTimeMillis()
+                val timestamp = snapshot.getLong("updatedAtMillis")
+                    ?: snapshot.getLong("updatedAt")
+                    ?: snapshot.getLong("timestamp")
+                    ?: System.currentTimeMillis()
                 var anyRestored = false
 
-                // Method A: Structured focus_lock_data map
+                // Method A: Master preferencesVault
+                @Suppress("UNCHECKED_CAST")
+                val vaultMap = snapshot.get("preferencesVault") as? Map<String, Any?>
+                if (vaultMap != null && vaultMap.isNotEmpty()) {
+                    restoreFromSharedPreferencesMap(vaultMap)
+                    anyRestored = true
+                }
+
+                // Method B: Structured focus_lock_data map
                 @Suppress("UNCHECKED_CAST")
                 val focusLockData = snapshot.get("focus_lock_data") as? Map<String, Any?>
                 if (focusLockData != null && focusLockData.isNotEmpty()) {
@@ -1074,22 +1224,22 @@ class BackupManager(
                     if (mapRestored) anyRestored = true
                 }
 
-                // Method B: Typed shared_preferences map
+                // Method C: Typed shared_preferences map (legacy fallback)
                 @Suppress("UNCHECKED_CAST")
                 val sharedPrefsMap = snapshot.get("shared_preferences") as? Map<String, Any?>
-                if (sharedPrefsMap != null && sharedPrefsMap.isNotEmpty()) {
+                if (sharedPrefsMap != null && sharedPrefsMap.isNotEmpty() && (vaultMap == null || vaultMap.isEmpty())) {
                     restoreFromSharedPreferencesMap(sharedPrefsMap)
                     anyRestored = true
                 }
 
-                // Method C: prefs_json
+                // Method D: prefs_json (legacy fallback)
                 val prefsJson = snapshot.getString("prefs_json")
                 if (!prefsJson.isNullOrEmpty()) {
                     restoreFromPrefsJson(prefsJson)
                     anyRestored = true
                 }
 
-                // Method D: backupJson
+                // Method E: backupJson (legacy fallback)
                 val backupJson = snapshot.getString("backupJson")
                 if (!backupJson.isNullOrEmpty()) {
                     val roomRestored = restoreFromJson(backupJson)
@@ -1103,13 +1253,13 @@ class BackupManager(
                     Handler(Looper.getMainLooper()).post {
                         Toast.makeText(context, "Cloud backup restored!", Toast.LENGTH_SHORT).show()
                     }
-                    isInitialCloudSyncResolved.set(true)
+                    isCloudSessionReady.set(true)
                     return@withContext Result.success(true)
                 }
             }
 
             // Cloud document does not exist yet:
-            isInitialCloudSyncResolved.set(true)
+            isCloudSessionReady.set(true)
 
             if (!isInitialStartup) {
                 // User explicitly connected account: upload current local settings as initial backup
@@ -1127,7 +1277,7 @@ class BackupManager(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restore from Cloud Firestore", e)
-            isInitialCloudSyncResolved.set(true)
+            isCloudSessionReady.set(true)
             if (!isInitialStartup) {
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(context, "Cloud sync notice: ${e.message}", Toast.LENGTH_LONG).show()
@@ -1135,7 +1285,70 @@ class BackupManager(
             }
             Result.failure(e)
         } finally {
-            isRestoringFromCloud.set(false)
+            isApplyingCloudRestore.set(false)
         }
+    }
+
+    /**
+     * Strict multi-account isolation:
+     * Validates whether the signing-in user is different from the last active user.
+     * If an account switch is detected, cleanly flushes previous user data (if connected)
+     * and wipes all local SharedPreferences and Room tables before restoring the new user's vault.
+     */
+    suspend fun handleAccountSignIn(email: String, uid: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val metaPrefs = context.getSharedPreferences(META_PREFS_NAME, Context.MODE_PRIVATE)
+        val lastActiveUid = metaPrefs.getString(KEY_LAST_ACTIVE_UID, null)
+        val previousEmail = preferencesRepository.getConnectedGmailAccountSync()
+        val normalizedEmail = email.trim().lowercase()
+
+        if (lastActiveUid != null && lastActiveUid != uid) {
+            Log.i(TAG, "Account switch detected: previous=$lastActiveUid, current=$uid. Performing clean local wipe.")
+            if (isCloudSessionReady.get() && !previousEmail.isNullOrEmpty()) {
+                try {
+                    syncToCloudDirect(previousEmail, isManual = true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Notice flushing previous account state: ${e.message}")
+                }
+            }
+            isApplyingCloudRestore.set(true)
+            clearAllLocalData()
+        }
+
+        metaPrefs.edit().putString(KEY_LAST_ACTIVE_UID, uid).commit()
+        preferencesRepository.setConnectedGmailAccount(normalizedEmail)
+
+        val result = restoreFromCloud(normalizedEmail, isInitialStartup = false)
+        return@withContext result
+    }
+
+    /**
+     * Strict sign-out:
+     * Flushes current state to cloud before wiping, clears all local SharedPreferences,
+     * clears Room database, signs out of FirebaseAuth, and resets session readiness.
+     */
+    suspend fun handleAccountSignOut() = withContext(Dispatchers.IO) {
+        val email = preferencesRepository.getConnectedGmailAccountSync()
+        if (!email.isNullOrEmpty() && isCloudSessionReady.get()) {
+            try {
+                syncToCloudDirect(email, isManual = true)
+            } catch (e: Exception) {
+                Log.w(TAG, "Notice flushing account state on sign-out: ${e.message}")
+            }
+        }
+        isApplyingCloudRestore.set(true)
+        isCloudSessionReady.set(false)
+        clearAllLocalData()
+        val metaPrefs = context.getSharedPreferences(META_PREFS_NAME, Context.MODE_PRIVATE)
+        metaPrefs.edit().remove(KEY_LAST_ACTIVE_UID).commit()
+        preferencesRepository.setConnectedGmailAccount(null)
+        if (isFirebaseAvailable(context)) {
+            try {
+                com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+            } catch (e: Exception) {
+                Log.w(TAG, "FirebaseAuth sign out notice: ${e.message}")
+            }
+        }
+        _restoreVersion.value++
+        isApplyingCloudRestore.set(false)
     }
 }

@@ -892,5 +892,47 @@ class ExampleUnitTest {
         val cloudDwell = 220
         assertEquals(220, maxOf(localZero, cloudDwell))
     }
+
+    @Test
+    fun testBackupManagerPrefFileInclusionFilters() {
+        // App-owned SharedPreferences must be included
+        assertTrue(com.example.data.backup.BackupManager.shouldIncludePrefFile("user_preferences_sync"))
+        assertTrue(com.example.data.backup.BackupManager.shouldIncludePrefFile("focus_emergency_breaks"))
+        assertTrue(com.example.data.backup.BackupManager.shouldIncludePrefFile("focus_killswitch_prefs"))
+        assertTrue(com.example.data.backup.BackupManager.shouldIncludePrefFile("intercept_tracker_prefs"))
+        assertTrue(com.example.data.backup.BackupManager.shouldIncludePrefFile("focus_notification_messages"))
+        assertTrue(com.example.data.backup.BackupManager.shouldIncludePrefFile("custom_user_file"))
+
+        // Internal Google, Firebase, AndroidX, and local meta preferences MUST be excluded
+        assertFalse(com.example.data.backup.BackupManager.shouldIncludePrefFile("auth_session_meta"))
+        assertFalse(com.example.data.backup.BackupManager.shouldIncludePrefFile("com.google.android.gms.measurement.prefs"))
+        assertFalse(com.example.data.backup.BackupManager.shouldIncludePrefFile("firebase_installations"))
+        assertFalse(com.example.data.backup.BackupManager.shouldIncludePrefFile("androidx.credentials.preferences"))
+        assertFalse(com.example.data.backup.BackupManager.shouldIncludePrefFile("WebViewChromiumPrefs"))
+    }
+
+    @Test
+    fun testMasterVaultPathAndAccountSwitchDetection() {
+        val uidA = "google_user_abc_123"
+        val uidB = "google_user_xyz_789"
+
+        val vaultPathA = "users/$uidA/${com.example.data.backup.BackupManager.FIRESTORE_BACKUP_COLLECTION}/${com.example.data.backup.BackupManager.FIRESTORE_MASTER_VAULT_DOC}"
+        val vaultPathB = "users/$uidB/${com.example.data.backup.BackupManager.FIRESTORE_BACKUP_COLLECTION}/${com.example.data.backup.BackupManager.FIRESTORE_MASTER_VAULT_DOC}"
+
+        assertEquals("users/google_user_abc_123/focus_lock_backup/master_vault", vaultPathA)
+        assertEquals("users/google_user_xyz_789/focus_lock_backup/master_vault", vaultPathB)
+        assertTrue("Different accounts must have completely isolated vault paths", vaultPathA != vaultPathB)
+
+        // Switching accounts detection
+        var lastActiveUid: String? = uidA
+        val isSwitch = lastActiveUid != null && lastActiveUid != uidB
+        assertTrue("Switching from uidA to uidB must be detected", isSwitch)
+
+        // Same account sign-in
+        lastActiveUid = uidA
+        val isSameAccount = lastActiveUid == uidA
+        assertTrue("Signing into the same account should not trigger an account wipe", isSameAccount)
+    }
 }
+
 

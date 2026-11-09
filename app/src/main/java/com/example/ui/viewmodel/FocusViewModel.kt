@@ -664,20 +664,23 @@ class FocusViewModel(
         viewModelScope.launch {
             _isSyncing.value = true
             val normalizedEmail = email.trim().lowercase()
-            preferencesRepository.setConnectedGmailAccount(normalizedEmail)
 
             if (com.example.util.FirebaseInitializer.ensureInitialized(getApplication())) {
+                var uid = normalizedEmail
                 try {
                     val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
                     if (!idToken.isNullOrEmpty() && auth.currentUser == null) {
                         val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
-                        auth.signInWithCredential(credential).await()
+                        val authResult = auth.signInWithCredential(credential).await()
+                        uid = authResult.user?.uid ?: auth.currentUser?.uid ?: normalizedEmail
+                    } else if (auth.currentUser != null) {
+                        uid = auth.currentUser!!.uid
                     }
                 } catch (e: Exception) {
                     android.util.Log.w("FocusViewModel", "FirebaseAuth credential notice: ${e.message}")
                 }
 
-                val restoreResult = backupManager.restoreFromCloud(normalizedEmail)
+                val restoreResult = backupManager.handleAccountSignIn(normalizedEmail, uid)
                 if (restoreResult.isSuccess) {
                     if (restoreResult.getOrNull() == true) {
                         _syncStatusMessage.value = "Settings restored from Google Cloud"
@@ -688,6 +691,7 @@ class FocusViewModel(
                     _syncStatusMessage.value = "Cloud sync notice: ${restoreResult.exceptionOrNull()?.message}"
                 }
             } else {
+                preferencesRepository.setConnectedGmailAccount(normalizedEmail)
                 _syncStatusMessage.value = "Connected to $normalizedEmail"
             }
             _isSyncing.value = false
@@ -739,14 +743,10 @@ class FocusViewModel(
 
     fun signOutGmail() {
         viewModelScope.launch {
-            if (com.example.data.backup.BackupManager.isFirebaseAvailable(getApplication())) {
-                try {
-                    com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
-                } catch (e: Exception) {
-                    // Suppress
-                }
-            }
-            preferencesRepository.setConnectedGmailAccount(null)
+            _isSyncing.value = true
+            backupManager.handleAccountSignOut()
+            _syncStatusMessage.value = "Disconnected from Google Cloud"
+            _isSyncing.value = false
         }
     }
 

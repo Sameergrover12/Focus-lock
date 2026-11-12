@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Log
+import android.widget.Toast
 import androidx.room.withTransaction
 import com.example.data.local.FocusDatabase
 import com.example.data.local.entity.AppGroup
@@ -17,6 +18,8 @@ import com.example.data.local.entity.ScreenTimeLimit
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.util.FirebaseInitializer
 import com.example.util.TimeIntegrityManager
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
@@ -91,16 +94,29 @@ class BackupManager(
     private val _isSyncingFlow = MutableStateFlow(false)
     val isSyncingFlow: StateFlow<Boolean> = _isSyncingFlow.asStateFlow()
 
+    private val _lastSyncErrorFlow = MutableStateFlow<String?>(null)
+    val lastSyncErrorFlow: StateFlow<String?> = _lastSyncErrorFlow.asStateFlow()
+
     companion object {
         private const val TAG = "BackupManager"
-        private const val BACKUP_VERSION = 6
+        private const val BACKUP_VERSION = 7
+        const val FIRESTORE_USER_BACKUPS_COLLECTION = "user_backups"
+        const val FIRESTORE_MODULES_SUBCOLLECTION = "backup_modules"
+        const val DOC_METADATA = "metadata"
+        const val DOC_BLOCKED_APPS = "blocked_apps"
+        const val DOC_BLOCKED_SITES = "blocked_sites"
+        const val DOC_APP_GROUPS = "app_groups"
+        const val DOC_SCREEN_TIME_LIMITS = "screen_time_limits"
+        const val DOC_PREFERENCES = "preferences"
+        const val DOC_USAGE_HISTORY = "usage_history"
+
         const val FIRESTORE_CLOUD_BACKUPS_COLLECTION = "focus_lock_cloud_backups"
         const val FIRESTORE_USERS_COLLECTION = "users"
         const val FIRESTORE_BACKUP_COLLECTION = "focus_lock_backup"
         const val FIRESTORE_MASTER_VAULT_DOC = "master_vault"
         private const val FIRESTORE_LEGACY_SUBCOLLECTION = "backups"
         private const val FIRESTORE_LEGACY_DOC_ID = "focus_lock_full_state"
-        private const val CLOUD_TIMEOUT_MS = 5_000L
+        private const val CLOUD_TIMEOUT_MS = 15_000L
 
         const val AUTH_SESSION_META_PREFS = "auth_session_meta"
         const val KEY_LAST_UID = "last_uid"
@@ -108,6 +124,7 @@ class BackupManager(
         const val KEY_ACTIVE_GMAIL_EMAIL = "active_gmail_email"
         const val KEY_ACTIVE_DISPLAY_NAME = "active_display_name"
         const val KEY_IS_CLOUD_RESTORED_FOR_SESSION = "is_cloud_restored_for_session"
+        const val KEY_MODULAR_SCHEMA_SYNCED = "modular_user_backups_v7_synced"
 
         private val TYPED_BOOL_PREFIX = "__type_bool__:"
         private val TYPED_INT_PREFIX = "__type_int__:"
@@ -148,12 +165,9 @@ class BackupManager(
         }
 
         fun getDefaultWebClientId(context: Context): String {
-            val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-            if (resId != 0) {
-                val value = context.getString(resId)
-                if (value.isNotBlank()) return value
-            }
-            return "582909401822-va6q6bhbubp23arcivuu7d2o2dt0ctoo.apps.googleusercontent.com"
+            return runCatching {
+                context.getString(com.example.R.string.default_web_client_id)
+            }.getOrDefault("")
         }
 
         fun parseScheduleHourMinute(timeStr: String, defaultHour: Int, defaultMinute: Int): Pair<Int, Int> {
@@ -173,6 +187,26 @@ class BackupManager(
 
         fun formatHourMinute(hour: Int, minute: Int): String {
             return "%02d:%02d".format(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
+        }
+
+        /**
+         * Reconstructs a unified state map from modular subcollection documents under
+         * `/user_backups/{userId}/backup_modules/` (`blocked_apps`, `blocked_sites`,
+         * `app_groups`, `screen_time_limits`, `preferences`, `usage_history`, `metadata`).
+         */
+        fun reconstructStateMapFromModularDocs(modularDocs: Map<String, Map<String, Any?>>): Map<String, Any?> {
+            val reconstructed = mutableMapOf<String, Any?>()
+            val focusLockData = mutableMapOf<String, Any?>()
+            for ((_, docData) in modularDocs) {
+                for ((key, value) in docData) {
+                    if (value != null) {
+                        reconstructed[key] = value
+                        focusLockData[key] = value
+                    }
+                }
+            }
+            reconstructed["focus_lock_data"] = focusLockData
+            return reconstructed
         }
 
         /**
@@ -406,9 +440,19 @@ class BackupManager(
             // Instant 0ms startup recognition: already restored for this session!
             isRestoreCompletedForCurrentSession = true
             isCloudSessionReady = true
-            if (!savedEmail.equals(knownEmail, ignoreCase = true)) {
+            val isModularSynced = metaPrefs.getBoolean(KEY_MODULAR_SCHEMA_SYNCED, false)
+            if (!savedEmail.equals(knownEmail, ignoreCase = true) || !isModularSynced) {
                 backupScope.launch {
-                    preferencesRepository.setConnectedGmailAccount(knownEmail)
+                    if (!savedEmail.equals(knownEmail, ignoreCase = true)) {
+                        preferencesRepository.setConnectedGmailAccount(knownEmail)
+                    }
+                    if (!isModularSynced) {
+                        if (hasAnyLocalUserData()) {
+                            syncToCloudDirect(knownEmail, isManual = true)
+                        } else {
+                            restoreFromCloud(knownEmail, isInitialStartup = true)
+                        }
+                    }
                 }
             }
             return
@@ -1013,8 +1057,7 @@ class BackupManager(
                 "packageName" to log.packageName,
                 "date" to log.date,
                 "minutesUsed" to log.minutesUsed,
-                "appName" to log.appName,
-                "iconBase64" to log.iconBase64
+                "appName" to log.appName
             )
         }
 
@@ -1467,7 +1510,7 @@ class BackupManager(
      * Prefers the lossless `vaultJson` string if present, and also applies `preferencesVault`
      * and `focus_lock_data` maps for complete forward/backward compatibility.
      */
-    private suspend fun restoreFromStateMap(
+    internal suspend fun restoreFromStateMap(
         data: Map<String, Any?>,
         clearExisting: Boolean = false
     ): Boolean = withContext(Dispatchers.IO) {
@@ -1634,47 +1677,109 @@ class BackupManager(
         return usageCount > 0 || screenTimeCount > 0 || hasPrefs
     }
 
-    private fun getNonAnonymousFirebaseUid(): String? {
-        return try {
-            val user = FirebaseAuth.getInstance().currentUser
-            if (user != null && !user.isAnonymous && !user.uid.isNullOrBlank()) {
-                user.uid
-            } else {
-                null
+    private fun reportFirestoreFailure(operation: String, path: String, e: Throwable) {
+        val details = "${e.javaClass.simpleName}: ${e.localizedMessage ?: e.message ?: "Unknown Firestore error"}"
+        Log.e(TAG, "Firestore $operation failed at [$path] -> $details", e)
+        val userMessage = "$operation failed: ${e.localizedMessage ?: e.message ?: e.javaClass.simpleName}"
+        _lastSyncErrorFlow.value = userMessage
+        CoroutineScope(Dispatchers.Main).launch {
+            runCatching {
+                Toast.makeText(context.applicationContext, userMessage, Toast.LENGTH_LONG).show()
             }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private suspend fun ensureFirebaseAuthSessionIfPossible(idToken: String? = null) {
-        if (!idToken.isNullOrBlank()) {
-            try {
-                withTimeoutOrNull(4_000L) {
-                    val credential = GoogleAuthProvider.getCredential(idToken, null)
-                    FirebaseAuth.getInstance().signInWithCredential(credential).await()
-                }
-                if (FirebaseAuth.getInstance().currentUser != null) return
-            } catch (e: Exception) {
-                Log.w(TAG, "FirebaseAuth signInWithCredential fallback: ${e.message}")
-            }
-        }
-        try {
-            if (FirebaseAuth.getInstance().currentUser == null) {
-                withTimeoutOrNull(3_000L) {
-                    FirebaseAuth.getInstance().signInAnonymously().await()
-                }
-            }
-        } catch (_: Exception) {
-            // Anonymous auth is optional; Firestore paths use deterministic email/non-anonymous UID
         }
     }
 
     /**
-     * Uploads 100% of user data to Firestore silently in the background.
-     * Strictly ONE-WAY (`Local Phone -> Cloud Firestore`).
-     * Deduplicated by deterministic payload hash (`lastUploadedJsonHash`) so identical states
-     * never re-upload or trigger an infinite sync loop.
+     * Strictly verifies and returns `FirebaseAuth.getInstance().currentUser?.uid`.
+     * Returns null if unauthenticated or blank.
+     */
+    private fun getVerifiedFirebaseUid(): String? {
+        return try {
+            val uid = FirebaseAuth.getInstance().currentUser?.uid
+            if (!uid.isNullOrBlank()) uid else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read FirebaseAuth.getInstance().currentUser?.uid", e)
+            null
+        }
+    }
+
+    /**
+     * Ensures that `FirebaseAuth.getInstance().currentUser` is authenticated using a Google ID Token
+     * before any Firestore read or write operation is attempted.
+     */
+    private suspend fun ensureFirebaseAuthSessionIfPossible(idToken: String? = null) {
+        // 1. If a fresh Google ID Token was explicitly provided, authenticate with FirebaseAuth
+        if (!idToken.isNullOrBlank()) {
+            try {
+                withTimeoutOrNull(6_000L) {
+                    val credential = GoogleAuthProvider.getCredential(idToken, null)
+                    FirebaseAuth.getInstance()
+                        .signInWithCredential(credential)
+                        .addOnFailureListener { e ->
+                            reportFirestoreFailure("Firebase Auth Sign-In", "GoogleAuthProvider.signInWithCredential", e)
+                        }
+                        .await()
+                }
+                if (getVerifiedFirebaseUid() != null) return
+            } catch (e: Exception) {
+                Log.e(TAG, "FirebaseAuth signInWithCredential failed for provided idToken: ${e.message}", e)
+            }
+        }
+
+        // 2. If already authenticated with a non-null UID, return immediately
+        if (getVerifiedFirebaseUid() != null) return
+
+        // 3. Otherwise, attempt to retrieve idToken from GoogleSignIn last account or silentSignIn
+        try {
+            val lastAcctToken = runCatching { GoogleSignIn.getLastSignedInAccount(context)?.idToken }.getOrNull()
+            val tokenToUse = if (!lastAcctToken.isNullOrBlank()) {
+                lastAcctToken
+            } else {
+                val webClientId = getDefaultWebClientId(context)
+                val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                    .requestEmail()
+                    .requestProfile()
+                    .requestIdToken(webClientId)
+                    .build()
+                val silentAccount = withTimeoutOrNull(5_000L) {
+                    GoogleSignIn.getClient(context, gso)
+                        .silentSignIn()
+                        .addOnFailureListener { e ->
+                            Log.w(TAG, "GoogleSignIn silentSignIn failed: ${e.message}", e)
+                        }
+                        .await()
+                }
+                silentAccount?.idToken
+            }
+
+            if (!tokenToUse.isNullOrBlank()) {
+                withTimeoutOrNull(6_000L) {
+                    val credential = GoogleAuthProvider.getCredential(tokenToUse, null)
+                    FirebaseAuth.getInstance()
+                        .signInWithCredential(credential)
+                        .addOnFailureListener { e ->
+                            reportFirestoreFailure("Firebase Auth Sign-In", "GoogleAuthProvider.silentSignIn", e)
+                        }
+                        .await()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not auto-refresh FirebaseAuth session: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Uploads 100% of user data to `/user_backups/{userId}/backup_modules/{moduleId}` using a
+     * Firestore `WriteBatch` so no single document ever approaches the 1MB Firestore limit.
+     *
+     * Modular documents written inside `/user_backups/{userId}/backup_modules/`:
+     * - `metadata`
+     * - `blocked_apps`
+     * - `blocked_sites`
+     * - `app_groups`
+     * - `screen_time_limits`
+     * - `preferences`
+     * - `usage_history`
      */
     suspend fun syncToCloudDirect(email: String, isManual: Boolean = false): Result<Long> = withContext(Dispatchers.IO) {
         if (!isRestoreCompletedForCurrentSession) {
@@ -1708,73 +1813,119 @@ class BackupManager(
                 return@withContext Result.success(now)
             }
 
-            lastUploadedJsonHash = currentHash
+            FirebaseInitializer.ensureInitialized(context)
+            ensureFirebaseAuthSessionIfPossible(null)
+
+            // Requirement 2: Strictly verify FirebaseAuth.getInstance().currentUser?.uid is non-null before writing
+            val uid = FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
+            if (uid == null) {
+                val authEx = IllegalStateException("FirebaseAuth.getInstance().currentUser?.uid is null. Please sign in with Google again.")
+                reportFirestoreFailure("Cloud Backup", "/$FIRESTORE_USER_BACKUPS_COLLECTION/{null}", authEx)
+                return@withContext Result.failure(authEx)
+            }
 
             val stateMap = collectFullStateMap()
             val allSharedPrefsVault = collectAllSharedPreferencesMap(context)
 
-            withTimeoutOrNull(CLOUD_TIMEOUT_MS) {
-                FirebaseInitializer.ensureInitialized(context)
-                ensureFirebaseAuthSessionIfPossible(null)
-
+            withTimeout(CLOUD_TIMEOUT_MS) {
                 val firestore = FirebaseFirestore.getInstance()
-                val uid = getNonAnonymousFirebaseUid()
-                val primaryAccountKey = if (!uid.isNullOrBlank()) uid else normalizedEmail
+                val userBackupDocRef = firestore.collection(FIRESTORE_USER_BACKUPS_COLLECTION).document(uid)
+                val modulesColRef = userBackupDocRef.collection(FIRESTORE_MODULES_SUBCOLLECTION)
+                val batchPath = "$FIRESTORE_USER_BACKUPS_COLLECTION/$uid/$FIRESTORE_MODULES_SUBCOLLECTION"
 
-                val backupDataMap = hashMapOf<String, Any?>(
+                val metadataDoc = mapOf(
+                    "userId" to uid,
+                    "uid" to uid,
                     "email" to normalizedEmail,
-                    "uid" to (uid ?: normalizedEmail),
                     "version" to BACKUP_VERSION,
                     "backupSchemaVersion" to BACKUP_VERSION,
                     "timestamp" to now,
                     "lastUpdated" to now,
                     "updatedAt" to now,
-                    "vaultJson" to vaultJson,
-                    "preferencesVault" to allSharedPrefsVault,
-                    "focus_lock_data" to stateMap
+                    "modules" to listOf(
+                        DOC_BLOCKED_APPS,
+                        DOC_BLOCKED_SITES,
+                        DOC_APP_GROUPS,
+                        DOC_SCREEN_TIME_LIMITS,
+                        DOC_PREFERENCES,
+                        DOC_USAGE_HISTORY
+                    )
                 )
 
-                // 1. Primary per-Gmail backup document: focus_lock_cloud_backups/{normalizedEmail}
-                runCatching {
-                    firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
-                        .document(normalizedEmail)
-                        .set(backupDataMap, SetOptions.merge())
-                        .await()
-                }
+                val blockedAppsDoc = mapOf(
+                    "userId" to uid,
+                    "updatedAt" to now,
+                    "blockedApps" to (stateMap["blockedApps"] ?: emptyList<Any>()),
+                    "blockedPackageNames" to (stateMap["blockedPackageNames"] ?: emptyList<String>())
+                )
 
-                // 2. Write to users/{primaryAccountKey} & users/{primaryAccountKey}/focus_lock_backup/master_vault
-                runCatching {
-                    firestore.collection(FIRESTORE_USERS_COLLECTION)
-                        .document(primaryAccountKey)
-                        .set(backupDataMap, SetOptions.merge())
-                        .await()
-                }
+                val blockedSitesDoc = mapOf(
+                    "userId" to uid,
+                    "updatedAt" to now,
+                    "blockedWebsites" to (stateMap["blockedWebsites"] ?: emptyList<Any>()),
+                    "websites" to (stateMap["websites"] ?: emptyList<Any>()),
+                    "blockedKeywords" to (stateMap["blockedKeywords"] ?: emptyList<Any>()),
+                    "keywords" to (stateMap["keywords"] ?: emptyList<Any>())
+                )
 
-                runCatching {
-                    firestore.collection(FIRESTORE_USERS_COLLECTION)
-                        .document(primaryAccountKey)
-                        .collection(FIRESTORE_BACKUP_COLLECTION)
-                        .document(FIRESTORE_MASTER_VAULT_DOC)
-                        .set(backupDataMap)
-                        .await()
-                }
+                val appGroupsDoc = mapOf(
+                    "userId" to uid,
+                    "updatedAt" to now,
+                    "appGroups" to (stateMap["appGroups"] ?: emptyList<Any>()),
+                    "groups" to (stateMap["groups"] ?: emptyList<Any>()),
+                    "groupApps" to (stateMap["groupApps"] ?: emptyList<Any>())
+                )
 
-                if (primaryAccountKey != normalizedEmail) {
-                    runCatching {
-                        firestore.collection(FIRESTORE_USERS_COLLECTION)
-                            .document(normalizedEmail)
-                            .collection(FIRESTORE_BACKUP_COLLECTION)
-                            .document(FIRESTORE_MASTER_VAULT_DOC)
-                            .set(backupDataMap)
-                            .await()
+                val screenTimeLimitsDoc = mapOf(
+                    "userId" to uid,
+                    "updatedAt" to now,
+                    "screenTimeLimits" to (stateMap["screenTimeLimits"] ?: emptyList<Any>()),
+                    "appLimits" to (stateMap["appLimits"] ?: emptyList<Any>())
+                )
+
+                val preferencesDoc = mapOf(
+                    "userId" to uid,
+                    "updatedAt" to now,
+                    "preferences" to (stateMap["preferences"] ?: emptyMap<String, Any?>()),
+                    "theme" to (stateMap["theme"] ?: emptyMap<String, Any?>()),
+                    "preferencesVault" to allSharedPrefsVault,
+                    "sharedPreferencesVault" to allSharedPrefsVault
+                )
+
+                val usageHistoryDoc = mapOf(
+                    "userId" to uid,
+                    "updatedAt" to now,
+                    "dailyScreenTimes" to (stateMap["dailyScreenTimes"] ?: emptyList<Any>()),
+                    "dailyUsageLogs" to (stateMap["dailyUsageLogs"] ?: emptyList<Any>())
+                )
+
+                val batch = firestore.batch()
+                batch.set(modulesColRef.document(DOC_METADATA), metadataDoc, SetOptions.merge())
+                batch.set(modulesColRef.document(DOC_BLOCKED_APPS), blockedAppsDoc)
+                batch.set(modulesColRef.document(DOC_BLOCKED_SITES), blockedSitesDoc)
+                batch.set(modulesColRef.document(DOC_APP_GROUPS), appGroupsDoc)
+                batch.set(modulesColRef.document(DOC_SCREEN_TIME_LIMITS), screenTimeLimitsDoc)
+                batch.set(modulesColRef.document(DOC_PREFERENCES), preferencesDoc)
+                batch.set(modulesColRef.document(DOC_USAGE_HISTORY), usageHistoryDoc)
+
+                batch.commit()
+                    .addOnFailureListener { e ->
+                        reportFirestoreFailure("Cloud Backup WriteBatch", batchPath, e)
                     }
-                }
+                    .await()
             }
 
-            Log.d(TAG, "Silent cloud backup completed for $normalizedEmail at $now")
+            lastUploadedJsonHash = currentHash
+            _lastSyncErrorFlow.value = null
+            context.getSharedPreferences(AUTH_SESSION_META_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_MODULAR_SCHEMA_SYNCED, true)
+                .commit()
+            Log.d(TAG, "Modular WriteBatch cloud backup completed for $normalizedEmail (uid=$uid) at $now")
             Result.success(now)
         } catch (e: Exception) {
-            Log.e(TAG, "Cloud backup failed for $email", e)
+            lastUploadedJsonHash = 0
+            Log.e(TAG, "Cloud backup failed for $email: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -1784,80 +1935,94 @@ class BackupManager(
         return syncToCloudDirect(targetEmail, isManual = true)
     }
 
-    private suspend fun fetchCloudDocumentWithFallback(
+    /**
+     * Reads all modular backup documents from `/user_backups/{uid}/backup_modules/`
+     * (`blocked_apps`, `blocked_sites`, `app_groups`, `screen_time_limits`, `preferences`, `usage_history`)
+     * and reconstructs the unified state map for local restoration.
+     * Falls back to reading flat `/user_backups/{uid}` if no subcollection documents exist yet.
+     */
+    private suspend fun fetchModularUserBackup(
         firestore: FirebaseFirestore,
-        uid: String?,
-        normalizedEmail: String
+        uid: String
     ): Map<String, Any?>? {
-        suspend fun getDocData(docRef: com.google.firebase.firestore.DocumentReference): Map<String, Any?>? {
-            val snap = try {
-                withTimeoutOrNull(2_500L) {
-                    docRef.get(Source.SERVER).await()
-                } ?: withTimeoutOrNull(1_500L) {
-                    docRef.get(Source.DEFAULT).await()
-                }
-            } catch (_: Exception) {
-                try {
-                    withTimeoutOrNull(1_500L) {
-                        docRef.get(Source.DEFAULT).await()
+        val userDocRef = firestore.collection(FIRESTORE_USER_BACKUPS_COLLECTION).document(uid)
+        val modulesColRef = userDocRef.collection(FIRESTORE_MODULES_SUBCOLLECTION)
+        val modulesPath = "$FIRESTORE_USER_BACKUPS_COLLECTION/$uid/$FIRESTORE_MODULES_SUBCOLLECTION"
+
+        val modulesSnapshot = try {
+            withTimeoutOrNull(6_000L) {
+                modulesColRef.get(Source.SERVER)
+                    .addOnFailureListener { e ->
+                        Log.w(TAG, "Server read failed for [$modulesPath], trying cache/default: ${e.message}", e)
                     }
-                } catch (_: Exception) {
-                    null
+                    .await()
+            } ?: withTimeoutOrNull(4_000L) {
+                modulesColRef.get(Source.DEFAULT)
+                    .addOnFailureListener { e ->
+                        reportFirestoreFailure("Cloud Restore Read", modulesPath, e)
+                    }
+                    .await()
+            }
+        } catch (e: Exception) {
+            try {
+                withTimeoutOrNull(4_000L) {
+                    modulesColRef.get(Source.DEFAULT)
+                        .addOnFailureListener { err ->
+                            reportFirestoreFailure("Cloud Restore Read", modulesPath, err)
+                        }
+                        .await()
                 }
-            }
-            return if (snap != null && snap.exists()) snap.data else null
-        }
-
-        val candidateRefs = mutableListOf<com.google.firebase.firestore.DocumentReference>()
-        if (normalizedEmail.isNotBlank()) {
-            // Primary universal per-Gmail collection: focus_lock_cloud_backups/{normalizedEmail}
-            candidateRefs.add(
-                firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
-                    .document(normalizedEmail)
-            )
-            // master_vault under email
-            candidateRefs.add(
-                firestore.collection(FIRESTORE_USERS_COLLECTION)
-                    .document(normalizedEmail)
-                    .collection(FIRESTORE_BACKUP_COLLECTION)
-                    .document(FIRESTORE_MASTER_VAULT_DOC)
-            )
-            // Direct users/{email} document
-            candidateRefs.add(
-                firestore.collection(FIRESTORE_USERS_COLLECTION)
-                    .document(normalizedEmail)
-            )
-        }
-
-        if (!uid.isNullOrBlank()) {
-            candidateRefs.add(
-                firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
-                    .document(uid)
-            )
-            candidateRefs.add(
-                firestore.collection(FIRESTORE_USERS_COLLECTION)
-                    .document(uid)
-                    .collection(FIRESTORE_BACKUP_COLLECTION)
-                    .document(FIRESTORE_MASTER_VAULT_DOC)
-            )
-            candidateRefs.add(
-                firestore.collection(FIRESTORE_USERS_COLLECTION)
-                    .document(uid)
-            )
-        }
-
-        for (ref in candidateRefs) {
-            val data = getDocData(ref) ?: continue
-            if (hasCloudUserData(data)) {
-                return data
+            } catch (inner: Exception) {
+                reportFirestoreFailure("Cloud Restore Read", modulesPath, inner)
+                null
             }
         }
+
+        if (modulesSnapshot != null && !modulesSnapshot.isEmpty) {
+            val docsMap = mutableMapOf<String, Map<String, Any?>>()
+            for (doc in modulesSnapshot.documents) {
+                val docData = doc.data ?: continue
+                docsMap[doc.id] = docData
+            }
+            val reconstructed = reconstructStateMapFromModularDocs(docsMap)
+            if (hasCloudUserData(reconstructed)) {
+                return reconstructed
+            }
+        }
+
+        // Fallback: Check if a flat document exists directly at /user_backups/{uid}
+        val flatPath = "$FIRESTORE_USER_BACKUPS_COLLECTION/$uid"
+        val flatSnap = try {
+            withTimeoutOrNull(3_000L) {
+                userDocRef.get(Source.SERVER)
+                    .addOnFailureListener { e ->
+                        Log.w(TAG, "Fallback flat read failed at [$flatPath]: ${e.message}")
+                    }
+                    .await()
+            } ?: withTimeoutOrNull(2_000L) {
+                userDocRef.get(Source.DEFAULT)
+                    .addOnFailureListener { e ->
+                        Log.w(TAG, "Fallback default read failed at [$flatPath]: ${e.message}")
+                    }
+                    .await()
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        if (flatSnap != null && flatSnap.exists()) {
+            val flatData = flatSnap.data
+            if (flatData != null && hasCloudUserData(flatData)) {
+                return flatData
+            }
+        }
+
         return null
     }
 
     /**
-     * Pulls the authoritative backup from Firestore ONCE per sign-in session, writes all
-     * `SharedPreferences` via `.commit()`, inserts all Room entities, calls
+     * Pulls the authoritative modular backup from `/user_backups/{uid}/backup_modules` ONCE per sign-in session,
+     * writes all `SharedPreferences` via `.commit()`, inserts all Room entities, calls
      * `reloadAllAppStateFromDisk(context)` once, and marks `is_cloud_restored_for_session = true`.
      */
     suspend fun restoreFromCloud(
@@ -1875,12 +2040,16 @@ class BackupManager(
             FirebaseInitializer.ensureInitialized(context)
             ensureFirebaseAuthSessionIfPossible(null)
 
-            val firestore = FirebaseFirestore.getInstance()
-            val uid = getNonAnonymousFirebaseUid()
-
-            val cloudData = withTimeoutOrNull(CLOUD_TIMEOUT_MS) {
-                fetchCloudDocumentWithFallback(firestore, uid, normalizedEmail)
+            // Requirement 2: Strictly verify FirebaseAuth.getInstance().currentUser?.uid is non-null before reading
+            val uid = FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
+            if (uid == null) {
+                val authEx = IllegalStateException("FirebaseAuth.getInstance().currentUser?.uid is null. Please sign in with Google again.")
+                reportFirestoreFailure("Cloud Restore", "/$FIRESTORE_USER_BACKUPS_COLLECTION/{null}", authEx)
+                return@withContext Result.failure(authEx)
             }
+
+            val firestore = FirebaseFirestore.getInstance()
+            val cloudData = fetchModularUserBackup(firestore, uid)
 
             val metaPrefs = context.getSharedPreferences(AUTH_SESSION_META_PREFS, Context.MODE_PRIVATE)
 
@@ -1891,10 +2060,12 @@ class BackupManager(
                 metaPrefs.edit()
                     .putString(KEY_ACTIVE_GMAIL_EMAIL, normalizedEmail)
                     .putBoolean(KEY_IS_CLOUD_RESTORED_FOR_SESSION, true)
+                    .putBoolean(KEY_MODULAR_SCHEMA_SYNCED, true)
                     .commit()
                 lastUploadedJsonHash = computeDeterministicPayloadHash(createBackupJson())
                 isRestoreCompletedForCurrentSession = true
                 isCloudSessionReady = true
+                _lastSyncErrorFlow.value = null
                 reloadAllAppStateFromDisk(context)
                 Result.success(restored)
             } else {
@@ -1912,7 +2083,7 @@ class BackupManager(
                 Result.success(false)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Cloud restore failed for $email", e)
+            reportFirestoreFailure("Cloud Restore", "/$FIRESTORE_USER_BACKUPS_COLLECTION", e)
             hasUserExplicitlyDeletedLastRuleAfterRestore = false
             context.getSharedPreferences(AUTH_SESSION_META_PREFS, Context.MODE_PRIVATE)
                 .edit()
@@ -2028,6 +2199,7 @@ class BackupManager(
             .remove(KEY_ACTIVE_GMAIL_EMAIL)
             .remove(KEY_ACTIVE_DISPLAY_NAME)
             .remove(KEY_IS_CLOUD_RESTORED_FOR_SESSION)
+            .remove(KEY_MODULAR_SCHEMA_SYNCED)
             .commit()
 
         // Wipe all local SharedPreferences, DataStore, and Room tables to factory defaults

@@ -78,4 +78,61 @@ class ExampleRobolectricTest {
     assertEquals("AMOLED", summary.baseThemeMode)
     assertEquals("CYBER_VIOLET", summary.secondaryPalette)
   }
+
+  @Test
+  fun `verify modular user_backups subcollection reconstruction`() {
+    val uid = "test_firebase_uid_123"
+    val modularDocs = mapOf(
+        com.example.data.backup.BackupManager.DOC_BLOCKED_APPS to mapOf(
+            "userId" to uid,
+            "blockedApps" to listOf(
+                mapOf("packageName" to "com.instagram.android", "appName" to "Instagram", "dateAdded" to 1000L)
+            ),
+            "blockedPackageNames" to listOf("com.instagram.android")
+        ),
+        com.example.data.backup.BackupManager.DOC_BLOCKED_SITES to mapOf(
+            "userId" to uid,
+            "blockedWebsites" to listOf(
+                mapOf("id" to 1L, "domainOrUrl" to "reddit.com", "dateAdded" to 1000L)
+            ),
+            "blockedKeywords" to listOf(
+                mapOf("id" to 1L, "keyword" to "shorts", "caseSensitive" to false, "dateAdded" to 1000L)
+            )
+        ),
+        com.example.data.backup.BackupManager.DOC_APP_GROUPS to mapOf(
+            "userId" to uid,
+            "appGroups" to listOf(
+                mapOf(
+                    "id" to 1L,
+                    "name" to "Focus Work",
+                    "scheduleEnabled" to true,
+                    "scheduleStart" to "09:00",
+                    "scheduleEnd" to "17:00",
+                    "daysOfWeek" to listOf(1, 2, 3, 4, 5),
+                    "memberPackages" to listOf("com.instagram.android")
+                )
+            )
+        ),
+        com.example.data.backup.BackupManager.DOC_SCREEN_TIME_LIMITS to mapOf(
+            "userId" to uid,
+            "screenTimeLimits" to listOf(
+                mapOf(
+                    "packageName" to "com.instagram.android",
+                    "dailyLimitMinutes" to 45,
+                    "sessionLimitSeconds" to 600,
+                    "cooldownSeconds" to 900
+                )
+            )
+        )
+    )
+
+    val reconstructed = com.example.data.backup.BackupManager.reconstructStateMapFromModularDocs(modularDocs)
+    @Suppress("UNCHECKED_CAST")
+    val focusData = reconstructed["focus_lock_data"] as Map<String, Any?>
+    assertEquals(1, (focusData["blockedApps"] as List<*>).size)
+    assertEquals(1, (focusData["blockedWebsites"] as List<*>).size)
+    assertEquals(1, (focusData["blockedKeywords"] as List<*>).size)
+    assertEquals(1, (focusData["appGroups"] as List<*>).size)
+    assertEquals(1, (focusData["screenTimeLimits"] as List<*>).size)
+  }
 }

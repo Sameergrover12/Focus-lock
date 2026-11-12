@@ -70,6 +70,9 @@ import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.example.receiver.FocusNotificationScheduler
+import com.example.ui.splash.FocusLockStartupSplashOverlay
+
+private var hasPlayedColdStartAnimation = false
 
 class MainActivity : ComponentActivity() {
 
@@ -113,20 +116,33 @@ class MainActivity : ComponentActivity() {
             val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
             val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
             val isOnboardingComplete by viewModel.isOnboardingComplete.collectAsStateWithLifecycle()
+            var showSplashOverlay by remember { mutableStateOf(!hasPlayedColdStartAnimation) }
 
             FocusLockTheme(
                 baseThemeMode = baseThemeMode,
                 secondaryPalette = secondaryPalette
             ) {
-                if (!isOnboardingComplete) {
-                    OnboardingScreen(
-                        viewModel = viewModel,
-                        onComplete = {
-                            viewModel.setOnboardingComplete(true)
-                        }
-                    )
-                } else {
-                    MainFocusApp(viewModel = viewModel)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (!isOnboardingComplete) {
+                        OnboardingScreen(
+                            viewModel = viewModel,
+                            onComplete = {
+                                viewModel.setOnboardingComplete(true)
+                            }
+                        )
+                    } else {
+                        MainFocusApp(viewModel = viewModel)
+                    }
+
+                    if (showSplashOverlay) {
+                        FocusLockStartupSplashOverlay(
+                            baseThemeMode = baseThemeMode,
+                            onAnimationComplete = {
+                                hasPlayedColdStartAnimation = true
+                                showSplashOverlay = false
+                            }
+                        )
+                    }
                 }
             }
         }

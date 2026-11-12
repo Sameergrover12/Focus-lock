@@ -69,10 +69,12 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.isSystemInDarkTheme
 import com.example.receiver.FocusNotificationScheduler
 import com.example.ui.splash.FocusLockStartupSplashOverlay
+import com.example.ui.theme.BaseThemeMode
 
-private var hasPlayedColdStartAnimation = false
+private var hasPlayedColdStartAnimation by mutableStateOf(false)
 
 class MainActivity : ComponentActivity() {
 
@@ -116,13 +118,16 @@ class MainActivity : ComponentActivity() {
             val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
             val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
             val isOnboardingComplete by viewModel.isOnboardingComplete.collectAsStateWithLifecycle()
-            var showSplashOverlay by remember { mutableStateOf(!hasPlayedColdStartAnimation) }
+
+            val isSystemInDark = isSystemInDarkTheme()
+            val isEffectiveDarkTheme = baseThemeMode.resolve(isSystemInDark) != BaseThemeMode.LIGHT
 
             FocusLockTheme(
                 baseThemeMode = baseThemeMode,
                 secondaryPalette = secondaryPalette
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
+                    // 1. Existing Onboarding or Main App Navigation Content
                     if (!isOnboardingComplete) {
                         OnboardingScreen(
                             viewModel = viewModel,
@@ -134,12 +139,12 @@ class MainActivity : ComponentActivity() {
                         MainFocusApp(viewModel = viewModel)
                     }
 
-                    if (showSplashOverlay) {
+                    // 2. Startup Animation Overlay ALWAYS on top at cold start
+                    if (!hasPlayedColdStartAnimation) {
                         FocusLockStartupSplashOverlay(
-                            baseThemeMode = baseThemeMode,
-                            onAnimationComplete = {
+                            isDarkTheme = isEffectiveDarkTheme,
+                            onAnimationFinished = {
                                 hasPlayedColdStartAnimation = true
-                                showSplashOverlay = false
                             }
                         )
                     }

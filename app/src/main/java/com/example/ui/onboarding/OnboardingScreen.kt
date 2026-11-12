@@ -669,8 +669,9 @@ private fun CloudBackupScreen(
             isSigningIn = false
             val email = account?.email ?: "User"
             val idToken = account?.idToken
+            val displayName = account?.displayName
             Toast.makeText(context, "Connected as $email", Toast.LENGTH_SHORT).show()
-            viewModel?.onGoogleSignInSuccess(email, idToken) {
+            viewModel?.onGoogleSignInSuccess(email, idToken, displayName) {
                 onComplete()
             } ?: onComplete()
         } catch (e: ApiException) {
@@ -683,7 +684,7 @@ private fun CloudBackupScreen(
             val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
             if (lastAccount?.email != null) {
                 Toast.makeText(context, "Connected as ${lastAccount.email}", Toast.LENGTH_SHORT).show()
-                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken) {
+                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken, lastAccount.displayName) {
                     onComplete()
                 } ?: onComplete()
             } else {
@@ -694,7 +695,7 @@ private fun CloudBackupScreen(
             val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
             if (lastAccount?.email != null) {
                 Toast.makeText(context, "Connected as ${lastAccount.email}", Toast.LENGTH_SHORT).show()
-                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken) {
+                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken, lastAccount.displayName) {
                     onComplete()
                 } ?: onComplete()
             } else {

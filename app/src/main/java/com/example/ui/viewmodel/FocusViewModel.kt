@@ -667,13 +667,39 @@ class FocusViewModel(
 
     // --- Gmail Cloud Backup & Offline Backup Actions ---
 
-    fun onGoogleSignInSuccess(email: String, idToken: String?, onComplete: () -> Unit = {}) {
-        viewModelScope.launch {
-            _isSyncing.value = true
-            val normalizedEmail = email.trim().lowercase()
+    fun onGoogleSignInSuccess(
+        email: String,
+        idToken: String?,
+        displayName: String? = null,
+        onComplete: () -> Unit = {}
+    ) {
+        val normalizedEmail = email.trim().lowercase()
+        val appContext = getApplication<Application>()
+        runCatching {
+            val metaPrefs = appContext.getSharedPreferences(
+                com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS,
+                android.content.Context.MODE_PRIVATE
+            )
+            metaPrefs.edit()
+                .putString(com.example.data.backup.BackupManager.KEY_ACTIVE_GMAIL_EMAIL, normalizedEmail)
+                .apply {
+                    if (!displayName.isNullOrBlank()) {
+                        putString(com.example.data.backup.BackupManager.KEY_ACTIVE_DISPLAY_NAME, displayName)
+                    }
+                }
+                .commit()
+        }
 
-            if (com.example.util.FirebaseInitializer.ensureInitialized(getApplication())) {
-                val restoreResult = backupManager.connectGmailAccount(normalizedEmail, idToken)
+        // Update UI state immediately (0ms) so Sign-In finishes instantaneously without waiting on network
+        viewModelScope.launch {
+            preferencesRepository.setConnectedGmailAccount(normalizedEmail)
+        }
+        onComplete()
+
+        // Run cloud restore / initial backup silently in the background
+        viewModelScope.launch(Dispatchers.IO) {
+            if (com.example.util.FirebaseInitializer.ensureInitialized(appContext)) {
+                val restoreResult = backupManager.connectGmailAccount(normalizedEmail, idToken, displayName)
                 if (restoreResult.isSuccess) {
                     if (restoreResult.getOrNull() == true) {
                         _syncStatusMessage.value = "Settings restored from Google Cloud"
@@ -684,11 +710,8 @@ class FocusViewModel(
                     _syncStatusMessage.value = "Cloud sync notice: ${restoreResult.exceptionOrNull()?.message}"
                 }
             } else {
-                preferencesRepository.setConnectedGmailAccount(normalizedEmail)
                 _syncStatusMessage.value = "Connected to $normalizedEmail"
             }
-            _isSyncing.value = false
-            onComplete()
         }
     }
 

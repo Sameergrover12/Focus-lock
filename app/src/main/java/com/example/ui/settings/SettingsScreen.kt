@@ -182,7 +182,8 @@ fun SettingsScreen(
             val account = task.getResult(ApiException::class.java)
             val email = account?.email ?: "User"
             val idToken = account?.idToken
-            viewModel.onGoogleSignInSuccess(email, idToken) {
+            val displayName = account?.displayName
+            viewModel.onGoogleSignInSuccess(email, idToken, displayName) {
                 Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
             }
         } catch (e: ApiException) {
@@ -193,7 +194,7 @@ fun SettingsScreen(
             }
             val last = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
             if (last?.email != null) {
-                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken) {
+                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken, last.displayName) {
                     Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
                 }
             } else {
@@ -202,7 +203,7 @@ fun SettingsScreen(
         } catch (e: Exception) {
             val last = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
             if (last?.email != null) {
-                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken) {
+                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken, last.displayName) {
                     Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
                 }
             } else {
@@ -1179,32 +1180,21 @@ private fun BackupRestoreDialog(
     val displayName = remember(connectedGmail) {
         if (connectedGmail != null) {
             runCatching {
-                val acct = GoogleSignIn.getLastSignedInAccount(context)
-                if (acct?.email.equals(connectedGmail, ignoreCase = true)) {
-                    acct?.displayName?.takeIf { it.isNotBlank() }
-                } else null
+                val metaName = context.getSharedPreferences(
+                    com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS,
+                    Context.MODE_PRIVATE
+                ).getString(com.example.data.backup.BackupManager.KEY_ACTIVE_DISPLAY_NAME, null)
+                    ?.takeIf { it.isNotBlank() }
+                if (metaName != null) {
+                    metaName
+                } else {
+                    val acct = GoogleSignIn.getLastSignedInAccount(context)
+                    if (acct?.email.equals(connectedGmail, ignoreCase = true)) {
+                        acct?.displayName?.takeIf { it.isNotBlank() }
+                    } else null
+                }
             }.getOrNull()
         } else null
-    }
-
-    val formattedLastBackup = remember(lastCloudBackupTime) {
-        if (lastCloudBackupTime > 0) {
-            val diffMs = System.currentTimeMillis() - lastCloudBackupTime
-            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(lastCloudBackupTime))
-            if (diffMs in 0..60_000L) {
-                "Just now ($timeStr)"
-            } else {
-                SimpleDateFormat("HH:mm (MMM d)", Locale.getDefault()).format(Date(lastCloudBackupTime))
-            }
-        } else {
-            "Just now"
-        }
-    }
-
-    LaunchedEffect(connectedGmail, lastCloudBackupTime) {
-        if (connectedGmail != null && lastCloudBackupTime == 0L && !isSyncing) {
-            onSyncNow()
-        }
     }
 
     Dialog(
@@ -1308,28 +1298,6 @@ private fun BackupRestoreDialog(
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    if (isSyncing) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(12.dp),
-                                                color = MaterialTheme.colorScheme.primary,
-                                                strokeWidth = 1.8.dp
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "Syncing...",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                    } else {
-                                        Text(
-                                            text = "Auto-sync active • Last cloud sync: $formattedLastBackup",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }

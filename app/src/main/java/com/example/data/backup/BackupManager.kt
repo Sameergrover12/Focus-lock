@@ -84,9 +84,13 @@ class BackupManager(
     private val _restoreVersion = MutableStateFlow(0L)
     val restoreVersion: StateFlow<Long> = _restoreVersion.asStateFlow()
 
+    private val _isSyncingFlow = MutableStateFlow(false)
+    val isSyncingFlow: StateFlow<Boolean> = _isSyncingFlow.asStateFlow()
+
     companion object {
         private const val TAG = "BackupManager"
         private const val BACKUP_VERSION = 6
+        const val FIRESTORE_CLOUD_BACKUPS_COLLECTION = "focus_lock_cloud_backups"
         const val FIRESTORE_USERS_COLLECTION = "users"
         const val FIRESTORE_BACKUP_COLLECTION = "focus_lock_backup"
         const val FIRESTORE_MASTER_VAULT_DOC = "master_vault"
@@ -524,15 +528,15 @@ class BackupManager(
                 }
 
                 val isDwellCacheFile = prefName == "historical_dwell_cache"
+                val maxValidDwellMinutes = 18 * 60
 
                 for ((rawKey, rawVal) in entriesMap) {
                     val key = rawKey as? String ?: continue
                     if (rawVal == null) continue
-                    val shouldMaxMergeNumeric = !wipeExistingBeforeRestore && (
-                        isDwellCacheFile ||
-                            key.startsWith("daily_dwell_") ||
-                            key.startsWith("dwell_day_")
-                        )
+                    val isDwellKey = isDwellCacheFile ||
+                        key.startsWith("daily_dwell_") ||
+                        key.startsWith("dwell_day_")
+                    val shouldMaxMergeNumeric = !wipeExistingBeforeRestore && isDwellKey
 
                     when (rawVal) {
                         is String -> {
@@ -542,9 +546,11 @@ class BackupManager(
                                     editor.putBoolean(key, v)
                                 }
                                 rawVal.startsWith(TYPED_INT_PREFIX) -> {
-                                    val v = rawVal.removePrefix(TYPED_INT_PREFIX).toIntOrNull() ?: 0
+                                    val rawInt = rawVal.removePrefix(TYPED_INT_PREFIX).toIntOrNull() ?: 0
+                                    val v = if (isDwellKey && rawInt >= maxValidDwellMinutes) 0 else rawInt
+                                    val localInt = sp.getInt(key, 0).let { if (isDwellKey && it >= maxValidDwellMinutes) 0 else it }
                                     val finalInt = if (shouldMaxMergeNumeric) {
-                                        maxOf(sp.getInt(key, 0), v)
+                                        maxOf(localInt, v)
                                     } else {
                                         v
                                     }
@@ -583,7 +589,9 @@ class BackupManager(
                         }
                         is Boolean -> editor.putBoolean(key, rawVal)
                         is Int -> {
-                            val finalInt = if (shouldMaxMergeNumeric) maxOf(sp.getInt(key, 0), rawVal) else rawVal
+                            val sanitizedVal = if (isDwellKey && rawVal >= maxValidDwellMinutes) 0 else rawVal
+                            val localInt = sp.getInt(key, 0).let { if (isDwellKey && it >= maxValidDwellMinutes) 0 else it }
+                            val finalInt = if (shouldMaxMergeNumeric) maxOf(localInt, sanitizedVal) else sanitizedVal
                             editor.putInt(key, finalInt)
                         }
                         is Long -> {
@@ -1350,16 +1358,19 @@ class BackupManager(
                     }
                 }.onFailure { e -> Log.w(TAG, "Non-fatal error restoring dailyUsageLogs section", e) }
 
-                // 3g. Daily Screen-On Time (merge with maxOf(local, cloud))
+                // 3g. Daily Screen-On Time (merge with maxOf(local, cloud), rejecting >= 18h spikes)
                 runCatching {
                     val screenTimesArray = payload.optJSONArray("dailyScreenTimes")
+                    val maxValidDailyMins = 18 * 60
                     if (screenTimesArray != null) {
                         for (i in 0 until screenTimesArray.length()) {
                             val obj = screenTimesArray.optJSONObject(i) ?: continue
                             val date = obj.optString("date", "").trim()
-                            val cloudScreenOn = obj.optInt("screenOnMinutes", 0)
+                            val rawCloudScreenOn = obj.optInt("screenOnMinutes", 0)
+                            val cloudScreenOn = if (rawCloudScreenOn >= maxValidDailyMins) 0 else rawCloudScreenOn
                             if (date.isNotEmpty() && cloudScreenOn >= 0) {
-                                val localScreenOn = dao.getScreenOnMinutesForDateSync(date) ?: 0
+                                val rawLocalScreenOn = dao.getScreenOnMinutesForDateSync(date) ?: 0
+                                val localScreenOn = if (rawLocalScreenOn >= maxValidDailyMins) 0 else rawLocalScreenOn
                                 val merged = maxOf(localScreenOn, cloudScreenOn)
                                 dao.insertOrUpdateScreenOnTime(
                                     DailyScreenTime(date = date, screenOnMinutes = merged)
@@ -1599,10 +1610,10 @@ class BackupManager(
      * 1. `isRestoreCompletedForCurrentSession` gate (blocks any upload before initial restore finishes)
      * 2. Empty-state wipe guard (blocks overwriting a non-empty cloud backup when local rule count is 0
      *    unless the user explicitly deleted their last rule after restore).
-     * Writes to BOTH:
-     * - `users/{uid}` (with `SetOptions.merge()`)
-     * - `users/{uid}/focus_lock_backup/master_vault`
-     * Plus legacy fallback paths for cross-version resilience.
+     * Writes to:
+     * - `focus_lock_cloud_backups/{normalizedEmail}` (and `{uid}`)
+     * - `users/{uid}` (and `users/{normalizedEmail}`)
+     * - `users/{uid}/focus_lock_backup/master_vault` (and `users/{normalizedEmail}/focus_lock_backup/master_vault`)
      */
     suspend fun syncToCloudDirect(email: String, isManual: Boolean = false): Result<Long> = withContext(Dispatchers.IO) {
         if (!isRestoreCompletedForCurrentSession) {
@@ -1614,6 +1625,7 @@ class BackupManager(
             return@withContext Result.failure(IllegalStateException("Restore in progress"))
         }
 
+        _isSyncingFlow.value = true
         try {
             withTimeout(CLOUD_TIMEOUT_MS) {
                 FirebaseInitializer.ensureInitialized(context)
@@ -1641,18 +1653,21 @@ class BackupManager(
                         } finally {
                             isRestoringFromCloud.set(false)
                         }
-                        val cloudTime = (existingDoc["lastUpdated"] as? Number)?.toLong()
-                            ?: (existingDoc["timestamp"] as? Number)?.toLong()
-                            ?: TimeIntegrityManager.getTrueTimeMillis()
+                        val cloudTime = TimeIntegrityManager.getTrueTimeMillis()
+                        preferencesRepository.setConnectedGmailAccount(normalizedEmail)
                         preferencesRepository.setLastCloudBackupTime(cloudTime)
                         return@withTimeout Result.success(cloudTime)
                     }
                 }
 
+                val now = TimeIntegrityManager.getTrueTimeMillis()
+                // Update lastCloudBackupTime and connected email BEFORE serializing so both UI and vaultJson have the latest timestamp
+                preferencesRepository.setConnectedGmailAccount(normalizedEmail)
+                preferencesRepository.setLastCloudBackupTime(now)
+
                 val stateMap = collectFullStateMap()
                 val vaultJson = createBackupJson()
                 val allSharedPrefsVault = collectAllSharedPreferencesMap(context)
-                val now = TimeIntegrityManager.getTrueTimeMillis()
 
                 val backupDataMap = hashMapOf<String, Any?>(
                     "email" to normalizedEmail,
@@ -1667,35 +1682,66 @@ class BackupManager(
                     "focus_lock_data" to stateMap
                 )
 
-                // 1. Write to users/{primaryAccountKey} with SetOptions.merge()
-                firestore.collection(FIRESTORE_USERS_COLLECTION)
-                    .document(primaryAccountKey)
-                    .set(backupDataMap, SetOptions.merge())
-                    .await()
+                var anyWriteSucceeded = false
+                var lastError: Throwable? = null
 
-                // 2. Write to users/{primaryAccountKey}/focus_lock_backup/master_vault
-                firestore.collection(FIRESTORE_USERS_COLLECTION)
-                    .document(primaryAccountKey)
-                    .collection(FIRESTORE_BACKUP_COLLECTION)
-                    .document(FIRESTORE_MASTER_VAULT_DOC)
-                    .set(backupDataMap)
-                    .await()
+                // 1. Write to focus_lock_cloud_backups/{normalizedEmail}
+                runCatching {
+                    firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
+                        .document(normalizedEmail)
+                        .set(backupDataMap, SetOptions.merge())
+                        .await()
+                    anyWriteSucceeded = true
+                }.onFailure { lastError = it }
 
-                // 3. Always also write to users/{normalizedEmail} if primaryAccountKey is a Firebase UID,
-                // so cross-keystore APKs (e.g. GitHub Actions vs local debug) always find the exact same vault!
+                // 2. Write to users/{primaryAccountKey} & users/{primaryAccountKey}/focus_lock_backup/master_vault
+                runCatching {
+                    firestore.collection(FIRESTORE_USERS_COLLECTION)
+                        .document(primaryAccountKey)
+                        .set(backupDataMap, SetOptions.merge())
+                        .await()
+                    anyWriteSucceeded = true
+                }.onFailure { lastError = it }
+
+                runCatching {
+                    firestore.collection(FIRESTORE_USERS_COLLECTION)
+                        .document(primaryAccountKey)
+                        .collection(FIRESTORE_BACKUP_COLLECTION)
+                        .document(FIRESTORE_MASTER_VAULT_DOC)
+                        .set(backupDataMap)
+                        .await()
+                    anyWriteSucceeded = true
+                }.onFailure { lastError = it }
+
+                // 3. Mirror to UID/email cross-paths so any APK signature finds the exact same backup
                 if (primaryAccountKey != normalizedEmail) {
+                    runCatching {
+                        firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
+                            .document(primaryAccountKey)
+                            .set(backupDataMap, SetOptions.merge())
+                            .await()
+                        anyWriteSucceeded = true
+                    }
                     runCatching {
                         firestore.collection(FIRESTORE_USERS_COLLECTION)
                             .document(normalizedEmail)
                             .set(backupDataMap, SetOptions.merge())
                             .await()
+                        anyWriteSucceeded = true
+                    }
+                    runCatching {
                         firestore.collection(FIRESTORE_USERS_COLLECTION)
                             .document(normalizedEmail)
                             .collection(FIRESTORE_BACKUP_COLLECTION)
                             .document(FIRESTORE_MASTER_VAULT_DOC)
                             .set(backupDataMap)
                             .await()
+                        anyWriteSucceeded = true
                     }
+                }
+
+                if (!anyWriteSucceeded && lastError != null) {
+                    throw lastError!!
                 }
 
                 preferencesRepository.setLastCloudBackupTime(now)
@@ -1705,6 +1751,8 @@ class BackupManager(
         } catch (e: Exception) {
             Log.e(TAG, "Cloud backup failed for $email", e)
             Result.failure(e)
+        } finally {
+            _isSyncingFlow.value = false
         }
     }
 
@@ -1732,7 +1780,19 @@ class BackupManager(
         }
 
         val candidateRefs = mutableListOf<com.google.firebase.firestore.DocumentReference>()
+        if (normalizedEmail.isNotBlank()) {
+            // Primary universal per-Gmail collection: focus_lock_cloud_backups/{normalizedEmail}
+            candidateRefs.add(
+                firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
+                    .document(normalizedEmail)
+            )
+        }
+
         if (!uid.isNullOrBlank()) {
+            candidateRefs.add(
+                firestore.collection(FIRESTORE_CLOUD_BACKUPS_COLLECTION)
+                    .document(uid)
+            )
             // Primary master_vault under UID
             candidateRefs.add(
                 firestore.collection(FIRESTORE_USERS_COLLECTION)
@@ -1808,6 +1868,7 @@ class BackupManager(
         wipeBeforeRestore: Boolean = false
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         isRestoringFromCloud.set(true)
+        _isSyncingFlow.value = true
         try {
             withTimeout(CLOUD_TIMEOUT_MS) {
                 FirebaseInitializer.ensureInitialized(context)
@@ -1821,27 +1882,24 @@ class BackupManager(
                 val uid = getNonAnonymousFirebaseUid()
 
                 val cloudData = fetchCloudDocumentWithFallback(firestore, uid, normalizedEmail)
+                val now = TimeIntegrityManager.getTrueTimeMillis()
 
                 if (cloudData != null && hasCloudUserData(cloudData)) {
                     val restored = restoreFromStateMap(cloudData, clearExisting = wipeBeforeRestore)
-                    val backupTime = (cloudData["lastUpdated"] as? Number)?.toLong()
-                        ?: (cloudData["timestamp"] as? Number)?.toLong()
-                        ?: TimeIntegrityManager.getTrueTimeMillis()
                     preferencesRepository.setConnectedGmailAccount(normalizedEmail)
-                    preferencesRepository.setLastCloudBackupTime(backupTime)
+                    preferencesRepository.setLastCloudBackupTime(now)
                     hasUserExplicitlyDeletedLastRuleAfterRestore = false
                     isRestoreCompletedForCurrentSession = true
                     reloadAllAppStateFromDisk(context)
                     return@withTimeout Result.success(restored)
                 } else {
-                    // Cloud has no user data yet for this account
+                    // Cloud has no user data yet for this account: mark session ready and immediately upload current state
+                    preferencesRepository.setConnectedGmailAccount(normalizedEmail)
+                    preferencesRepository.setLastCloudBackupTime(now)
                     isRestoreCompletedForCurrentSession = true
                     hasUserExplicitlyDeletedLastRuleAfterRestore = false
-                    if (hasAnyLocalUserData() && !wipeBeforeRestore) {
-                        isRestoringFromCloud.set(false)
-                        syncToCloudDirect(normalizedEmail, isManual = true)
-                        return@withTimeout Result.success(true)
-                    }
+                    isRestoringFromCloud.set(false)
+                    syncToCloudDirect(normalizedEmail, isManual = true)
                     reloadAllAppStateFromDisk(context)
                     return@withTimeout Result.success(false)
                 }
@@ -1853,6 +1911,7 @@ class BackupManager(
             Result.failure(e)
         } finally {
             isRestoringFromCloud.set(false)
+            _isSyncingFlow.value = false
         }
     }
 
@@ -1863,6 +1922,7 @@ class BackupManager(
      * Firestore `Source.SERVER`, and reloads all live in-memory state at 0ms.
      */
     suspend fun connectGmailAccount(email: String, idToken: String? = null): Result<Boolean> = withContext(Dispatchers.IO) {
+        _isSyncingFlow.value = true
         // Step 1: Lock the upload gate immediately so no stale data can leak during sign-in / switch
         isRestoreCompletedForCurrentSession = false
         hasUserExplicitlyDeletedLastRuleAfterRestore = false

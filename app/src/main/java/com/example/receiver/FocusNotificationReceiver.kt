@@ -52,9 +52,10 @@ class FocusNotificationReceiver : BroadcastReceiver() {
                 val calendar = Calendar.getInstance()
                 val isSunday = calendar.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY
 
-                // Fetch 30-day history to get real 30-day average and past 7 days dwell
+                // Fetch 30-day history and compute accurate 10-day average and past 7 days dwell
                 val history = repository?.get30DayHistory(context) ?: emptyList()
-                val activeDays = history.filter { it.minutes > 0 }
+                val last10Days = if (history.size >= 10) history.takeLast(10) else history
+                val activeDays = last10Days.filter { it.minutes in 1 until (18 * 60) }
                 val realAvgMinutes = if (activeDays.isNotEmpty()) {
                     activeDays.map { it.minutes }.average().toInt()
                 } else {

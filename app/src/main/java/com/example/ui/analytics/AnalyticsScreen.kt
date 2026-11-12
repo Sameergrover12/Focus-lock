@@ -356,7 +356,7 @@ private fun AnalyticsHeroCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Actionable Insight: Today vs 30-Day Monthly Average
+            // Actionable Insight: Today vs 10-Day Average
             Row(
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -370,7 +370,7 @@ private fun AnalyticsHeroCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "↓ ${kotlin.math.abs(diffPercent)}% vs Monthly Average",
+                            text = "↓ ${kotlin.math.abs(diffPercent)}% vs 10-Day Average",
                             color = MaterialTheme.colorScheme.primary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -384,7 +384,7 @@ private fun AnalyticsHeroCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "↑ ${diffPercent}% vs Monthly Average",
+                            text = "↑ ${diffPercent}% vs 10-Day Average",
                             color = MaterialTheme.colorScheme.error,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -399,7 +399,7 @@ private fun AnalyticsHeroCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "• 30-Day baseline tracking active",
+                        text = "• 10-Day baseline tracking active",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
@@ -439,7 +439,11 @@ private fun MonthlyUsageTrendCard(
 
     val past30Days = remember(thirtyDayHistory, recentScreenTimes, todayMinutes) {
         if (thirtyDayHistory.isNotEmpty()) {
-            thirtyDayHistory
+            thirtyDayHistory.mapIndexed { idx, day ->
+                val daysAgo = thirtyDayHistory.lastIndex - idx
+                val cleanMins = if (daysAgo >= 10 || day.minutes >= 18 * 60) 0 else day.minutes
+                day.copy(minutes = cleanMins)
+            }
         } else {
             val list = mutableListOf<DayBarData>()
             val screenTimeMap = recentScreenTimes.associate { it.date to it.screenOnMinutes }
@@ -451,7 +455,8 @@ private fun MonthlyUsageTrendCard(
                 val dayNum = dayNumFormat.format(cal.time)
                 val weekday = weekdayFormat.format(cal.time).uppercase()
                 val fullLabel = dayMonthFormat.format(cal.time)
-                val mins = if (i == 0) todayMinutes else (screenTimeMap[dateStr] ?: 0)
+                val rawMins = if (i == 0) todayMinutes else if (i >= 10) 0 else (screenTimeMap[dateStr] ?: 0)
+                val mins = if (rawMins >= 18 * 60) 0 else rawMins
                 list.add(
                     DayBarData(
                         label = weekday,
@@ -475,11 +480,12 @@ private fun MonthlyUsageTrendCard(
         if (realAvgMinutes > 0) {
             realAvgMinutes
         } else {
-            val daysWithUsage = past30Days.filter { it.minutes > 0 }
+            val last10Days = past30Days.takeLast(10)
+            val daysWithUsage = last10Days.filter { it.minutes in 1 until (18 * 60) }
             if (daysWithUsage.isNotEmpty()) {
                 daysWithUsage.map { it.minutes }.average().toInt()
             } else {
-                past30Days.map { it.minutes }.average().toInt()
+                0
             }
         }
     }
@@ -531,7 +537,7 @@ private fun MonthlyUsageTrendCard(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
                 ) {
                     Text(
-                        text = "30D Avg: ${if (avgHours > 0) "${avgHours}h " else ""}${avgM}m/day",
+                        text = "10D Avg: ${if (avgHours > 0) "${avgHours}h " else ""}${avgM}m/day",
                         color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,

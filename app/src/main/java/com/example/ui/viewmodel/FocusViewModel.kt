@@ -66,7 +66,13 @@ class FocusViewModel(
     )
 
     private val _isSyncing = MutableStateFlow(false)
-    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+    val isSyncing: StateFlow<Boolean> = combine(_isSyncing, backupManager.isSyncingFlow) { local, remote ->
+        local || remote
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
 
     private val _syncStatusMessage = MutableStateFlow<String?>(null)
     val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
@@ -316,12 +322,13 @@ class FocusViewModel(
     val thirtyDayHistory: StateFlow<List<DayBarData>> = _thirtyDayHistory.asStateFlow()
 
     val real30DayAverageMinutes: StateFlow<Int> = _thirtyDayHistory.map { list ->
-        val activeDays = list.filter { it.minutes > 0 }
+        val last10Days = if (list.size >= 10) list.takeLast(10) else list
+        val activeDays = last10Days.filter { it.minutes in 1 until (18 * 60) }
         if (activeDays.isNotEmpty()) {
             activeDays.map { it.minutes }.average().toInt()
         } else {
-            val todayMins = list.lastOrNull()?.minutes ?: (totalMinutesUsedToday.value ?: 0)
-            todayMins
+            val todayMins = last10Days.lastOrNull()?.minutes ?: (totalMinutesUsedToday.value ?: 0)
+            if (todayMins in 1 until (18 * 60)) todayMins else 0
         }
     }.stateIn(
         scope = viewModelScope,

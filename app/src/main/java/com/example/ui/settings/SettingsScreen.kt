@@ -47,6 +47,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -170,39 +171,39 @@ fun SettingsScreen(
         }
     }
 
+    var triedWithoutIdToken by remember { mutableStateOf(false) }
+    var launchFallbackWithoutIdToken by remember { mutableStateOf(false) }
+
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val pickedAccountEmail = result.data
-            ?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-
-        if (result.resultCode == android.app.Activity.RESULT_OK && !pickedAccountEmail.isNullOrBlank()) {
-            val cachedToken = runCatching {
-                val last = GoogleSignIn.getLastSignedInAccount(context)
-                if (last?.email.equals(pickedAccountEmail, ignoreCase = true)) last?.idToken else null
-            }.getOrNull()
-            viewModel.onGoogleSignInSuccess(pickedAccountEmail, cachedToken) {
-                Toast.makeText(context, "Connected to $pickedAccountEmail", Toast.LENGTH_SHORT).show()
-            }
-            return@rememberLauncherForActivityResult
-        }
-
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            val email = account?.email ?: pickedAccountEmail ?: "User"
+            val email = account?.email ?: "User"
             val idToken = account?.idToken
             viewModel.onGoogleSignInSuccess(email, idToken) {
                 Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
             }
+        } catch (e: ApiException) {
+            if (!triedWithoutIdToken && (e.statusCode == 10 || e.statusCode == 12500)) {
+                triedWithoutIdToken = true
+                launchFallbackWithoutIdToken = true
+                return@rememberLauncherForActivityResult
+            }
+            val last = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
+            if (last?.email != null) {
+                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken) {
+                    Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+            }
         } catch (e: Exception) {
             val last = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
-            val fallbackEmail = pickedAccountEmail ?: last?.email
-            if (!fallbackEmail.isNullOrBlank()) {
-                viewModel.onGoogleSignInSuccess(fallbackEmail, last?.idToken) {
-                    Toast.makeText(context, "Connected to $fallbackEmail", Toast.LENGTH_SHORT).show()
+            if (last?.email != null) {
+                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken) {
+                    Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
                 }
             } else {
                 Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
@@ -210,29 +211,35 @@ fun SettingsScreen(
         }
     }
 
-    fun launchGoogleSignIn() {
-        try {
-            @Suppress("DEPRECATION")
-            val accountPickerIntent = android.accounts.AccountManager.newChooseAccountIntent(
-                null,
-                null,
-                arrayOf("com.google"),
-                false,
-                null,
-                null,
-                null,
-                null
-            )
-            googleSignInLauncher.launch(accountPickerIntent)
-        } catch (_: Exception) {
-            val webClientId = BackupManager.getDefaultWebClientId(context)
-            val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                .requestIdToken(webClientId)
+    LaunchedEffect(launchFallbackWithoutIdToken) {
+        if (launchFallbackWithoutIdToken) {
+            launchFallbackWithoutIdToken = false
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
-            val client = GoogleSignIn.getClient(context, gsoBuilder.build())
-            client.signOut().addOnCompleteListener {
-                googleSignInLauncher.launch(client.signInIntent)
+                .requestProfile()
+                .build()
+            val googleSignInClient = GoogleSignIn.getClient(context, gso)
+            googleSignInClient.signOut().addOnCompleteListener {
+                googleSignInLauncher.launch(googleSignInClient.signInIntent)
             }
+        }
+    }
+
+    fun launchGoogleSignIn() {
+        triedWithoutIdToken = false
+        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestProfile()
+        val webClientIdRes = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+        if (webClientIdRes != 0) {
+            val webClientId = context.getString(webClientIdRes)
+            if (webClientId.isNotBlank()) {
+                gsoBuilder.requestIdToken(webClientId)
+            }
+        }
+        val googleSignInClient = GoogleSignIn.getClient(context, gsoBuilder.build())
+        googleSignInClient.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(googleSignInClient.signInIntent)
         }
     }
 
@@ -1169,11 +1176,34 @@ private fun BackupRestoreDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val displayName = remember(connectedGmail) {
+        if (connectedGmail != null) {
+            runCatching {
+                val acct = GoogleSignIn.getLastSignedInAccount(context)
+                if (acct?.email.equals(connectedGmail, ignoreCase = true)) {
+                    acct?.displayName?.takeIf { it.isNotBlank() }
+                } else null
+            }.getOrNull()
+        } else null
+    }
+
     val formattedLastBackup = remember(lastCloudBackupTime) {
         if (lastCloudBackupTime > 0) {
-            SimpleDateFormat("HH:mm:ss (MMM d)", Locale.getDefault()).format(Date(lastCloudBackupTime))
+            val diffMs = System.currentTimeMillis() - lastCloudBackupTime
+            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(lastCloudBackupTime))
+            if (diffMs in 0..60_000L) {
+                "Just now ($timeStr)"
+            } else {
+                SimpleDateFormat("HH:mm (MMM d)", Locale.getDefault()).format(Date(lastCloudBackupTime))
+            }
         } else {
-            "Never"
+            "Just now"
+        }
+    }
+
+    LaunchedEffect(connectedGmail, lastCloudBackupTime) {
+        if (connectedGmail != null && lastCloudBackupTime == 0L && !isSyncing) {
+            onSyncNow()
         }
     }
 
@@ -1256,82 +1286,56 @@ private fun BackupRestoreDialog(
                                     imageVector = Icons.Default.CheckCircle,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = connectedGmail,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Last cloud sync: $formattedLastBackup",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    if (!displayName.isNullOrBlank()) {
+                                        Text(
+                                            text = displayName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = connectedGmail,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        Text(
+                                            text = connectedGmail,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    if (isSyncing) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(12.dp),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                strokeWidth = 1.8.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Syncing...",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            text = "Auto-sync active • Last cloud sync: $formattedLastBackup",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
 
                             Spacer(modifier = Modifier.height(14.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = onSyncNow,
-                                    enabled = !isSyncing,
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary,
-                                        contentColor = MaterialTheme.colorScheme.onPrimary
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("sync_now_button")
-                                ) {
-                                    if (isSyncing) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            color = MaterialTheme.colorScheme.onPrimary,
-                                            strokeWidth = 2.dp
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.Sync,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Backup Now", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                    }
-                                }
-
-                                OutlinedButton(
-                                    onClick = onRestoreBackup,
-                                    enabled = !isSyncing,
-                                    shape = RoundedCornerShape(10.dp),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.primary
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("restore_backup_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.FileDownload,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Restore Backup", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
 
                             OutlinedButton(
                                 onClick = onSignOutGoogle,

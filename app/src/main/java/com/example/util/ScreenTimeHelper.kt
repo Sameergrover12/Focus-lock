@@ -131,14 +131,24 @@ object ScreenTimeHelper {
         }
     }
 
+    private const val MAX_VALID_DAILY_DWELL_MILLIS = 18 * 60 * 60 * 1000L // 18 hours max sanity bound
+    private const val MAX_ORPHAN_HISTORICAL_SESSION_MILLIS = 30 * 60 * 1000L // 30 minutes cap for unclosed past event
+    private const val MAX_SINGLE_CONTINUOUS_EVENT_MILLIS = 6 * 60 * 60 * 1000L // 6 hours max single continuous interval
+
     /**
      * Calculates the daily screen dwell in milliseconds for a specific historical day interval.
-     * 1. Primary: Uses raw UsageEvents between startOfDay and endOfDay.
-     * 2. Fallback: If events are pruned and return 0, queries UsageStatsManager.queryUsageStats(INTERVAL_DAILY)
-     *    and sums foreground screen time of interactive apps.
+     * Android only provides accurate daily foreground data for the last 10 calendar days (i = 0..9).
+     * Any date older than 10 days returns 0L immediately so multi-week aggregated buckets never
+     * produce fake 24h 0m (86,400,000 ms) towers.
      */
     fun queryHistoricalDayDwell(context: Context, startOfDay: Long, endOfDay: Long): Long {
         if (!PermissionHelper.isUsageStatsPermissionGranted(context)) {
+            return 0L
+        }
+
+        // Strict 10-day window check: days older than 10 calendar days (i >= 10) must return 0L
+        val oldestAllowedStartOfDay = getStartOfDayMillis() - 9L * 24L * 60L * 60L * 1000L
+        if (startOfDay < oldestAllowedStartOfDay) {
             return 0L
         }
 
@@ -150,7 +160,7 @@ object ScreenTimeHelper {
             val events = usageStatsManager.queryEvents(startOfDay, endOfDay)
             if (events != null) {
                 val parsed = parseUsageEvents(events, startOfDay, endOfDay)
-                if (parsed.totalScreenOnMillis > 0L) {
+                if (parsed.totalScreenOnMillis in 1L until MAX_VALID_DAILY_DWELL_MILLIS) {
                     return parsed.totalScreenOnMillis
                 }
                 // If device OEM does not log SCREEN_INTERACTIVE/SCREEN_NON_INTERACTIVE in events,
@@ -162,8 +172,8 @@ object ScreenTimeHelper {
                             appForegroundSum += duration
                         }
                     }
-                    if (appForegroundSum > 0L) {
-                        return minOf(appForegroundSum, 24 * 60 * 60 * 1000L)
+                    if (appForegroundSum in 1L until MAX_VALID_DAILY_DWELL_MILLIS) {
+                        return appForegroundSum
                     }
                 }
             }
@@ -171,45 +181,28 @@ object ScreenTimeHelper {
             Log.w(TAG, "Failed to query UsageEvents for day range [$startOfDay, $endOfDay]", e)
         }
 
-        // 2. Fallback for Days Older Than 7 Days (Crucial on Android):
-        // Android purges raw events after ~7 days but retains aggregated daily buckets for days 8–30.
-        // Try queryUsageStats(INTERVAL_DAILY, startOfDay, endOfDay)
+        // 2. Fallback for days within the 10-day window (e.g. days 7–9 when raw events are pruned):
+        // Only accept true daily buckets (bucket span <= 36 hours) and reject any spike >= 18h.
         try {
             val statsList = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startOfDay, endOfDay)
             if (!statsList.isNullOrEmpty()) {
                 var totalForeground = 0L
+                val maxDailyBucketSpan = 36L * 60L * 60L * 1000L
                 for (stat in statsList) {
-                    // Filter to stats whose timestamps intersect with this day's window
-                    val intersects = (stat.lastTimeStamp >= startOfDay && stat.firstTimeStamp <= endOfDay) ||
-                            (stat.firstTimeStamp in startOfDay..endOfDay)
-                    if (intersects && !isIgnoredSystemPackage(stat.packageName, context)) {
+                    val bucketSpan = stat.lastTimeStamp - stat.firstTimeStamp
+                    val isTrueDailyBucket = bucketSpan in 1L..maxDailyBucketSpan &&
+                        stat.firstTimeStamp >= (startOfDay - 6L * 60L * 60L * 1000L) &&
+                        stat.firstTimeStamp <= endOfDay
+                    if (isTrueDailyBucket && !isIgnoredSystemPackage(stat.packageName, context)) {
                         totalForeground += stat.totalTimeInForeground
                     }
                 }
-                if (totalForeground > 0L) {
-                    return minOf(totalForeground, 24 * 60 * 60 * 1000L)
+                if (totalForeground in 1L until MAX_VALID_DAILY_DWELL_MILLIS) {
+                    return totalForeground
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to query UsageStats for day range [$startOfDay, $endOfDay]", e)
-        }
-
-        // 3. Additional Fallback: queryAndAggregateUsageStats
-        try {
-            val aggMap = usageStatsManager.queryAndAggregateUsageStats(startOfDay, endOfDay)
-            if (!aggMap.isNullOrEmpty()) {
-                var totalForeground = 0L
-                for ((pkg, stat) in aggMap) {
-                    if (!isIgnoredSystemPackage(pkg, context)) {
-                        totalForeground += stat.totalTimeInForeground
-                    }
-                }
-                if (totalForeground > 0L) {
-                    return minOf(totalForeground, 24 * 60 * 60 * 1000L)
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to queryAndAggregateUsageStats for day range [$startOfDay, $endOfDay]", e)
         }
 
         return 0L
@@ -219,7 +212,8 @@ object ScreenTimeHelper {
      * Pure parser for UsageEvents respecting exact architectural rules:
      * 1. Total Screen Time: ONLY durations between Event.SCREEN_INTERACTIVE (15) and Event.SCREEN_NON_INTERACTIVE (16).
      * 2. Individual App Time: exact durations between Event.ACTIVITY_RESUMED (1) and Event.ACTIVITY_PAUSED (2).
-     * 3. Dangling Sessions: if loop finishes with an open RESUMED/INTERACTIVE event, add time to System.currentTimeMillis().
+     * 3. Dangling Sessions: for today's live window, adds time up to [now] (capped safely); for historical closed days,
+     *    caps any orphaned unclosed session so it never spans the entire 24-hour window.
      */
     fun parseUsageEvents(
         events: UsageEvents,
@@ -233,6 +227,7 @@ object ScreenTimeHelper {
         val appUsageMillis = mutableMapOf<String, Long>()
 
         val event = UsageEvents.Event()
+        val isHistoricalClosedDay = now < (System.currentTimeMillis() - 60_000L)
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
@@ -250,8 +245,13 @@ object ScreenTimeHelper {
                 UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
                     val start = lastScreenInteractiveTime
                     if (start != null) {
-                        val duration = time - start
-                        if (duration > 0) {
+                        val rawDuration = time - start
+                        if (rawDuration > 0) {
+                            val duration = if (isHistoricalClosedDay) {
+                                minOf(rawDuration, MAX_SINGLE_CONTINUOUS_EVENT_MILLIS)
+                            } else {
+                                rawDuration
+                            }
                             totalScreenOnMillis += duration
                         }
                         lastScreenInteractiveTime = null
@@ -264,8 +264,9 @@ object ScreenTimeHelper {
                     if (!pkg.isNullOrEmpty()) {
                         val prevStart = appResumedMap[pkg]
                         if (prevStart != null) {
-                            val duration = time - prevStart
-                            if (duration > 0) {
+                            val rawDuration = time - prevStart
+                            if (rawDuration > 0) {
+                                val duration = minOf(rawDuration, MAX_SINGLE_CONTINUOUS_EVENT_MILLIS)
                                 appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + duration
                             }
                         }
@@ -278,8 +279,9 @@ object ScreenTimeHelper {
                     if (!pkg.isNullOrEmpty()) {
                         val startTime = appResumedMap.remove(pkg)
                         if (startTime != null) {
-                            val duration = time - startTime
-                            if (duration > 0) {
+                            val rawDuration = time - startTime
+                            if (rawDuration > 0) {
+                                val duration = minOf(rawDuration, MAX_SINGLE_CONTINUOUS_EVENT_MILLIS)
                                 appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + duration
                             }
                         }
@@ -289,22 +291,35 @@ object ScreenTimeHelper {
         }
 
         // Dangling Sessions:
-        // If the loop finishes and an app (or the screen) had a RESUMED/INTERACTIVE event but no closing event,
-        // add the time from that start event to System.currentTimeMillis().
+        // Never allow an unclosed event on a historical day to span across the entire 24-hour window.
         if (lastScreenInteractiveTime != null && now > lastScreenInteractiveTime) {
-            val duration = now - lastScreenInteractiveTime
-            if (duration > 0) {
-                totalScreenOnMillis += duration
+            val rawDuration = now - lastScreenInteractiveTime
+            if (rawDuration > 0) {
+                val cappedDuration = if (isHistoricalClosedDay) {
+                    minOf(rawDuration, MAX_ORPHAN_HISTORICAL_SESSION_MILLIS)
+                } else {
+                    minOf(rawDuration, MAX_SINGLE_CONTINUOUS_EVENT_MILLIS)
+                }
+                totalScreenOnMillis += cappedDuration
             }
         }
 
         for ((pkg, startTime) in appResumedMap) {
             if (now > startTime) {
-                val duration = now - startTime
-                if (duration > 0) {
-                    appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + duration
+                val rawDuration = now - startTime
+                if (rawDuration > 0) {
+                    val cappedDuration = if (isHistoricalClosedDay) {
+                        minOf(rawDuration, MAX_ORPHAN_HISTORICAL_SESSION_MILLIS)
+                    } else {
+                        minOf(rawDuration, MAX_SINGLE_CONTINUOUS_EVENT_MILLIS)
+                    }
+                    appUsageMillis[pkg] = (appUsageMillis[pkg] ?: 0L) + cappedDuration
                 }
             }
+        }
+
+        if (totalScreenOnMillis >= MAX_VALID_DAILY_DWELL_MILLIS) {
+            totalScreenOnMillis = 0L
         }
 
         val totalMinutes = (totalScreenOnMillis / 60000L).toInt()

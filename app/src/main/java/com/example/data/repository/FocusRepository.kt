@@ -301,10 +301,12 @@ class FocusRepository(private val focusDao: FocusDao) {
     val allRecentUsageLogs: Flow<List<DailyUsageLog>> = focusDao.getAllRecentUsageLogs()
 
     /**
-     * Backfills 30 days of historical screen time data (Day -29 to Today).
-     * - Past days (Day -29 to Yesterday) are retrieved from SharedPreferences cache ("dwell_day_yyyy-MM-dd")
-     *   or computed on Dispatchers.IO via ScreenTimeHelper.queryHistoricalDayDwell and cached.
-     * - Today is always computed live.
+     * Backfills 30 days of chart items (Day -29 to Today):
+     * - Days older than 10 days (i in 10..29) are strictly set to 0m (0h 0m) because Android only
+     *   retains accurate daily stats for the last 10 days; any cached spikes are purged to 0.
+     * - Days within the last 10 days (i in 1..9) are retrieved from SharedPreferences cache
+     *   or computed via ScreenTimeHelper.queryHistoricalDayDwell (rejecting any >= 18h spike).
+     * - Today (i == 0) is always computed live.
      */
     suspend fun get30DayHistory(context: Context): List<DayBarData> = withContext(Dispatchers.IO) {
         val list = mutableListOf<DayBarData>()
@@ -316,6 +318,7 @@ class FocusRepository(private val focusDao: FocusDao) {
         val weekdayFormat = SimpleDateFormat("EE", Locale.getDefault())
 
         val todayDate = getTodayDateString()
+        val maxValidDailyMinutes = 18 * 60 // 18 hours (1080 mins); anything >= 18h (like 24h 0m = 1440m) is an invalid spike
 
         for (i in 29 downTo 0) {
             val cal = Calendar.getInstance().apply {
@@ -332,45 +335,80 @@ class FocusRepository(private val focusDao: FocusDao) {
             val weekday = weekdayFormat.format(cal.time).uppercase()
             val fullLabel = dayMonthFormat.format(cal.time)
             val isToday = (i == 0 || dateStr == todayDate)
+            val cacheKey = "daily_dwell_$dateStr"
+            val legacyCacheKey = "dwell_day_$dateStr"
 
-            val mins: Int = if (isToday) {
+            val mins: Int = if (i >= 10 && !isToday) {
+                // Days older than 10 days: Android does not provide accurate daily data.
+                // Purge any cached 24h 0m spikes from SharedPreferences and Room, and return 0.
+                if (cachePrefs.getInt(cacheKey, 0) != 0 || cachePrefs.getInt(legacyCacheKey, 0) != 0) {
+                    cachePrefs.edit()
+                        .putInt(cacheKey, 0)
+                        .putInt(legacyCacheKey, 0)
+                        .apply()
+                }
+                val existingRoom = focusDao.getScreenOnMinutesForDateSync(dateStr) ?: 0
+                if (existingRoom != 0) {
+                    focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = dateStr, screenOnMinutes = 0))
+                }
+                0
+            } else if (isToday) {
                 // Today is always computed live
                 val liveToday = if (hasPermission) ScreenTimeHelper.queryDeviceScreenOnMinutes(context) else null
-                val recordedToday = focusDao.getScreenOnMinutesForDateSync(dateStr) ?: 0
-                maxOf(liveToday ?: 0, recordedToday)
+                val rawRecordedToday = focusDao.getScreenOnMinutesForDateSync(dateStr) ?: 0
+                val recordedToday = if (rawRecordedToday >= maxValidDailyMinutes) 0 else rawRecordedToday
+                val validLiveToday = if ((liveToday ?: 0) >= maxValidDailyMinutes) 0 else (liveToday ?: 0)
+                maxOf(validLiveToday, recordedToday)
             } else {
-                val cacheKey = "daily_dwell_$dateStr"
-                val legacyCacheKey = "dwell_day_$dateStr"
-                val cachedVal = when {
+                // Last 10 days (i in 1..9)
+                val rawCachedVal = when {
                     cachePrefs.contains(cacheKey) -> cachePrefs.getInt(cacheKey, 0)
                     cachePrefs.contains(legacyCacheKey) -> cachePrefs.getInt(legacyCacheKey, 0)
                     else -> 0
+                }
+                // Immediately purge any fake >= 18h (or 24h 0m = 1440m) spike
+                val cachedVal = if (rawCachedVal >= maxValidDailyMinutes) {
+                    cachePrefs.edit()
+                        .putInt(cacheKey, 0)
+                        .putInt(legacyCacheKey, 0)
+                        .apply()
+                    0
+                } else {
+                    rawCachedVal
                 }
 
                 if (cachedVal > 0) {
                     cachedVal
                 } else {
-                    val roomVal = focusDao.getScreenOnMinutesForDateSync(dateStr)
-                    if (roomVal != null && roomVal > 0) {
+                    val rawRoomVal = focusDao.getScreenOnMinutesForDateSync(dateStr) ?: 0
+                    val roomVal = if (rawRoomVal >= maxValidDailyMinutes) {
+                        focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = dateStr, screenOnMinutes = 0))
+                        0
+                    } else {
+                        rawRoomVal
+                    }
+
+                    if (roomVal > 0) {
                         cachePrefs.edit()
                             .putInt(cacheKey, roomVal)
                             .putInt(legacyCacheKey, roomVal)
                             .apply()
                         roomVal
                     } else if (hasPermission) {
-                        // Dynamically backfill from UsageStatsManager
+                        // Dynamically backfill from UsageStatsManager for the 10-day window
                         val dwellMillis = ScreenTimeHelper.queryHistoricalDayDwell(context, startOfDay, endOfDay)
                         val computedMins = (dwellMillis / 60000L).toInt()
-                        if (computedMins > 0) {
-                            focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = dateStr, screenOnMinutes = computedMins))
+                        val validMins = if (computedMins in 1 until maxValidDailyMinutes) computedMins else 0
+                        if (validMins > 0) {
+                            focusDao.insertOrUpdateScreenOnTime(DailyScreenTime(date = dateStr, screenOnMinutes = validMins))
                             cachePrefs.edit()
-                                .putInt(cacheKey, computedMins)
-                                .putInt(legacyCacheKey, computedMins)
+                                .putInt(cacheKey, validMins)
+                                .putInt(legacyCacheKey, validMins)
                                 .apply()
                         }
-                        computedMins
+                        validMins
                     } else {
-                        // Permission NOT granted yet: do NOT write 0L to cache so it self-heals when permission is granted
+                        // Permission NOT granted yet: do NOT write 0 to cache so it self-heals when permission is granted
                         0
                     }
                 }

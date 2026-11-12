@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<inset xmlns:android="http://schemas.android.com/apk/res/android"
-    android:drawable="@drawable/focus_lock_original_icon"
-    android:insetLeft="17dp"
-    android:insetTop="17dp"
-    android:insetRight="17dp"
-    android:insetBottom="17dp" />
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="108dp"
+        android:height="108dp"
+        android:drawable="@drawable/ic_launcher_foreground_padded"
+        android:gravity="center" />
+</layer-list>

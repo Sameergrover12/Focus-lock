@@ -19,7 +19,7 @@ class BootReceiver : BroadcastReceiver() {
                 FocusNotificationScheduler.scheduleNext9PmAlarm(context)
             }
             Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED -> {
-                TimeIntegrityManager.onTimeChanged()
+                TimeIntegrityManager.onTimeChanged(context)
                 FocusNotificationScheduler.scheduleNext9PmAlarm(context)
             }
         }

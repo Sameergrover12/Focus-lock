@@ -933,6 +933,65 @@ class ExampleUnitTest {
         val isSameAccount = lastActiveUid == uidA
         assertTrue("Signing into the same account should not trigger an account wipe", isSameAccount)
     }
+
+    @Test
+    fun testOvernightAndSameDayScheduleEvaluation() {
+        assertEquals(180_000L, com.example.util.TimeIntegrityManager.MAX_ALLOWED_DRIFT_MS)
+
+        val overnightGroup = AppGroup(
+            name = "Night Lockdown",
+            scheduleEnabled = true,
+            scheduleStart = "22:00",
+            scheduleEnd = "06:00",
+            daysOfWeek = setOf(1, 2, 3, 4, 5, 6, 7)
+        )
+
+        val afternoonCal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.WEDNESDAY)
+            set(java.util.Calendar.HOUR_OF_DAY, 14)
+            set(java.util.Calendar.MINUTE, 0)
+        }
+        assertFalse(
+            "22:00-06:00 schedule must NEVER activate at 14:00 in the afternoon",
+            GroupRuleEvaluator.isScheduleActive(overnightGroup, afternoonCal)
+        )
+
+        val nightCal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.WEDNESDAY)
+            set(java.util.Calendar.HOUR_OF_DAY, 22)
+            set(java.util.Calendar.MINUTE, 30)
+        }
+        assertTrue(
+            "22:00-06:00 schedule must be active at 22:30",
+            GroupRuleEvaluator.isScheduleActive(overnightGroup, nightCal)
+        )
+
+        val earlyMorningCal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.THURSDAY)
+            set(java.util.Calendar.HOUR_OF_DAY, 2)
+            set(java.util.Calendar.MINUTE, 15)
+        }
+        assertTrue(
+            "22:00-06:00 schedule must remain active at 02:15 after midnight",
+            GroupRuleEvaluator.isScheduleActive(overnightGroup, earlyMorningCal)
+        )
+    }
+
+    @Test
+    fun testCrossVersionScheduleConversionAndAccountIsolationConstants() {
+        val (h, m) = com.example.data.backup.BackupManager.parseScheduleHourMinute("22:30", 9, 0)
+        assertEquals(22, h)
+        assertEquals(30, m)
+        assertEquals("22:30", com.example.data.backup.BackupManager.formatHourMinute(h, m))
+
+        val (fallbackH, fallbackM) = com.example.data.backup.BackupManager.parseScheduleHourMinute("invalid", 9, 15)
+        assertEquals(9, fallbackH)
+        assertEquals(15, fallbackM)
+
+        assertEquals("auth_session_meta", com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS)
+        assertEquals("last_uid", com.example.data.backup.BackupManager.KEY_LAST_UID)
+        assertEquals("last_active_gmail_uid", com.example.data.backup.BackupManager.KEY_LAST_ACTIVE_GMAIL_UID)
+    }
 }
 
 

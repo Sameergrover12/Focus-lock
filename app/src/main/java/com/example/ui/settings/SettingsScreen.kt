@@ -199,7 +199,9 @@ fun SettingsScreen(
             .requestIdToken(webClientId)
             .requestEmail()
         val client = GoogleSignIn.getClient(context, gsoBuilder.build())
-        googleSignInLauncher.launch(client.signInIntent)
+        client.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(client.signInIntent)
+        }
     }
 
     val isBreakActive by viewModel.isEmergencyBreakActive.collectAsStateWithLifecycle()
@@ -319,18 +321,24 @@ fun SettingsScreen(
             isSyncing = isSyncing,
             onSignInGoogle = { launchGoogleSignIn() },
             onSignOutGoogle = {
+                val performSignOut = {
+                    val webClientId = BackupManager.getDefaultWebClientId(context)
+                    val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                        .requestIdToken(webClientId)
+                        .requestEmail()
+                        .build()
+                    GoogleSignIn.getClient(context, gso).signOut()
+                    viewModel.signOutGmail()
+                    Toast.makeText(context, "Signed out of Google account", Toast.LENGTH_SHORT).show()
+                }
                 if (isCheatProtectionEnabled) {
                     pendingCheatAction = PendingLooseningAction(
                         title = "Sign Out Google Account",
                         description = "Disconnecting your cloud backup account during active Strict Mode requires passphrase verification.",
-                        onAuthorized = {
-                            viewModel.signOutGmail()
-                            Toast.makeText(context, "Signed out of Google account", Toast.LENGTH_SHORT).show()
-                        }
+                        onAuthorized = { performSignOut() }
                     )
                 } else {
-                    viewModel.signOutGmail()
-                    Toast.makeText(context, "Signed out of Google account", Toast.LENGTH_SHORT).show()
+                    performSignOut()
                 }
             },
             onSyncNow = {

@@ -71,8 +71,8 @@ class FocusViewModel(
     private val _syncStatusMessage = MutableStateFlow<String?>(null)
     val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
 
-    fun triggerAutoBackup() {
-        backupManager.backupToCloudAsync(getApplication())
+    fun triggerAutoBackup(isExplicitUserRuleChange: Boolean = false) {
+        backupManager.uploadToCloudImmediate(isExplicitUserRuleChange = isExplicitUserRuleChange)
     }
 
     // Theme & Onboarding & Master State
@@ -485,21 +485,21 @@ class FocusViewModel(
             } else {
                 repository.unblockApp(app.packageName)
             }
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun blockApp(packageName: String, appName: String) {
         viewModelScope.launch {
             repository.blockApp(packageName, appName)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun unblockApp(packageName: String) {
         viewModelScope.launch {
             repository.unblockApp(packageName)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
@@ -512,42 +512,42 @@ class FocusViewModel(
     ) {
         viewModelScope.launch {
             repository.setScreenTimeLimit(packageName, limitMinutes, sessionLimitSeconds, cooldownSeconds)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun setDailyLimit(packageName: String, limitMinutes: Int) {
         viewModelScope.launch {
             repository.setDailyLimit(packageName, limitMinutes)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun removeDailyLimit(packageName: String) {
         viewModelScope.launch {
             repository.removeDailyLimit(packageName)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun setSessionLimit(packageName: String, sessionLimitSeconds: Int, cooldownSeconds: Int) {
         viewModelScope.launch {
             repository.setSessionLimit(packageName, sessionLimitSeconds, cooldownSeconds)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun removeSessionLimit(packageName: String) {
         viewModelScope.launch {
             repository.removeSessionLimit(packageName)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun removeAppScreenLimit(packageName: String) {
         viewModelScope.launch {
             repository.removeScreenTimeLimit(packageName)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
@@ -555,14 +555,14 @@ class FocusViewModel(
     fun saveGroup(group: AppGroup, memberPackages: List<String>) {
         viewModelScope.launch {
             repository.saveGroup(group, memberPackages)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
     fun deleteGroup(groupId: Long) {
         viewModelScope.launch {
             repository.deleteGroup(groupId)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
@@ -597,7 +597,7 @@ class FocusViewModel(
             for (domain in toAdd) {
                 repository.addBlockedWebsite(domain)
             }
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
             withContext(Dispatchers.Main) {
                 onResult(AddRuleResult.Added(toAdd.size))
             }
@@ -611,7 +611,7 @@ class FocusViewModel(
     fun removeBlockedWebsite(id: Long) {
         viewModelScope.launch {
             repository.removeBlockedWebsite(id)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
@@ -640,7 +640,7 @@ class FocusViewModel(
             for (kw in toAdd) {
                 repository.addBlockedKeyword(kw, caseSensitive)
             }
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
             withContext(Dispatchers.Main) {
                 onResult(AddRuleResult.Added(toAdd.size))
             }
@@ -654,7 +654,7 @@ class FocusViewModel(
     fun removeBlockedKeyword(id: Long) {
         viewModelScope.launch {
             repository.removeBlockedKeyword(id)
-            triggerAutoBackup()
+            triggerAutoBackup(isExplicitUserRuleChange = true)
         }
     }
 
@@ -666,21 +666,7 @@ class FocusViewModel(
             val normalizedEmail = email.trim().lowercase()
 
             if (com.example.util.FirebaseInitializer.ensureInitialized(getApplication())) {
-                var uid = normalizedEmail
-                try {
-                    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
-                    if (!idToken.isNullOrEmpty() && auth.currentUser == null) {
-                        val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
-                        val authResult = auth.signInWithCredential(credential).await()
-                        uid = authResult.user?.uid ?: auth.currentUser?.uid ?: normalizedEmail
-                    } else if (auth.currentUser != null) {
-                        uid = auth.currentUser!!.uid
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.w("FocusViewModel", "FirebaseAuth credential notice: ${e.message}")
-                }
-
-                val restoreResult = backupManager.handleAccountSignIn(normalizedEmail, uid)
+                val restoreResult = backupManager.connectGmailAccount(normalizedEmail, idToken)
                 if (restoreResult.isSuccess) {
                     if (restoreResult.getOrNull() == true) {
                         _syncStatusMessage.value = "Settings restored from Google Cloud"

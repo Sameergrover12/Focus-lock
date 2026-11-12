@@ -292,6 +292,17 @@ class FocusAccessibilityService : AccessibilityService() {
         observeDatabaseRules()
     }
 
+    fun reloadRulesImmediately() {
+        observeDatabaseRules()
+        val scope = ensureActiveScope()
+        scope.launch(Dispatchers.Main) {
+            val currentPkg = currentForegroundPackage ?: getCurrentlyFocusedPackage()
+            if (!currentPkg.isNullOrEmpty() && currentPkg != packageName && !isSystemOverlay(currentPkg)) {
+                checkForegroundPackage(currentPkg)
+            }
+        }
+    }
+
     private fun observeDatabaseRules() {
         val app = application as? FocusApplication ?: return
         val repo = app.repository
@@ -302,7 +313,7 @@ class FocusAccessibilityService : AccessibilityService() {
             ruleCollectionJobs.forEach { it.cancel() }
             ruleCollectionJobs.clear()
 
-            // Immediate synchronous pre-load on IO to populate cache instantly
+            // Immediate synchronous pre-load on IO to populate all caches instantly
             scope.launch {
                 try {
                     val syncPackages = repo.getAllBlockedPackageNamesSync()
@@ -310,9 +321,58 @@ class FocusAccessibilityService : AccessibilityService() {
                     val syncApps = repo.getAllBlockedAppsSync()
                     blockedAppsCache = syncApps
                     blockedAppsByPackage = syncApps.associateBy { it.packageName }
-                    Log.d(TAG, "Preloaded ${syncPackages.size} blocked packages into memory")
+
+                    val syncLimits = repo.getAllScreenTimeLimitsSync()
+                    screenLimitsCache = syncLimits
+                    screenLimitsByPackage = syncLimits.associateBy { it.packageName }
+
+                    val syncGroups = repo.getAllGroupsSync()
+                    groupsCache = syncGroups
+                    groupsById = syncGroups.associateBy { it.id }
+
+                    val syncGroupApps = repo.getAllGroupAppsSync()
+                    groupAppsCache = syncGroupApps
+                    val gMap = mutableMapOf<String, MutableList<Long>>()
+                    for (item in syncGroupApps) {
+                        gMap.getOrPut(item.packageName) { mutableListOf() }.add(item.groupId)
+                    }
+                    groupIdsByPackage = gMap
+
+                    val syncWebsites = repo.getAllBlockedWebsitesSync()
+                    blockedWebsitesCache = syncWebsites
+                    compiledWebsites = syncWebsites.mapNotNull { rule ->
+                        val norm = ContentScanner.normalizeUrlOrDomain(rule.domainOrUrl)
+                        if (norm.isNotEmpty()) {
+                            rule to ContentScanner.buildWordBoundaryRegex(norm, caseSensitive = false)
+                        } else null
+                    }
+
+                    val syncKeywords = repo.getAllBlockedKeywordsSync()
+                    blockedKeywordsCache = syncKeywords
+                    compiledKeywords = syncKeywords.mapNotNull { rule ->
+                        val pattern = rule.keyword.trim()
+                        if (pattern.isNotEmpty()) {
+                            rule to ContentScanner.buildWordBoundaryRegex(pattern, caseSensitive = rule.caseSensitive)
+                        } else null
+                    }
+
+                    isMasterEnabled = if (prefRepo.syncPrefs.contains("master_enabled")) {
+                        prefRepo.syncPrefs.getBoolean("master_enabled", true)
+                    } else true
+                    isInvincibleModeEnabled = if (prefRepo.syncPrefs.contains("invincible_mode_enabled")) {
+                        prefRepo.syncPrefs.getBoolean("invincible_mode_enabled", false)
+                    } else false
+                    isCheatProtectionEnabled = if (prefRepo.syncPrefs.contains("cheat_protection_enabled")) {
+                        prefRepo.syncPrefs.getBoolean("cheat_protection_enabled", false)
+                    } else false
+                    isClockTamperProtectionEnabled = if (prefRepo.syncPrefs.contains("clock_tamper_protection_enabled")) {
+                        prefRepo.syncPrefs.getBoolean("clock_tamper_protection_enabled", true)
+                    } else true
+                    cachedReclaimedCommitment = prefRepo.syncPrefs.getString("reclaimed_commitment", "My Focus")
+
+                    Log.d(TAG, "Preloaded ${syncPackages.size} blocked packages, ${syncLimits.size} limits, ${syncGroups.size} groups into memory")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error during synchronous pre-load of blocked packages", e)
+                    Log.e(TAG, "Error during synchronous pre-load of rules", e)
                 }
             }
 
@@ -698,7 +758,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
         // d. Throttle Window Content Scans: run at most once every 300ms and avoid recursive scans for unmonitored apps
         if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            val now = SystemClock.uptimeMillis()
+            val now = SystemClock.elapsedRealtime()
             if (now - lastScanTimeMs < 300L) {
                 return
             }
@@ -1135,7 +1195,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // Step 2: Extract text from rootInActiveWindow
-        val now = SystemClock.uptimeMillis()
+        val now = SystemClock.elapsedRealtime()
         // Throttle TYPE_WINDOW_CONTENT_CHANGED window node searches to prevent scrolling lag
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             if (now - lastHideAppScanTime < 250) {
@@ -1228,7 +1288,7 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun triggerHideAppIntercept() {
-        val now = SystemClock.uptimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (now - lastHideAppInterceptTime < 1500) {
             return
         }
@@ -1328,7 +1388,7 @@ class FocusAccessibilityService : AccessibilityService() {
             eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
             eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) {
-            val now = SystemClock.uptimeMillis()
+            val now = SystemClock.elapsedRealtime()
             if (now - lastScanTime > 250) {
                 lastScanTime = now
                 scanVisibleWindowsForContent()
@@ -1380,7 +1440,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // Debounce to prevent multiple triggers in short succession
-        val now = SystemClock.uptimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1500) {
             return
         }
@@ -1616,7 +1676,7 @@ class FocusAccessibilityService : AccessibilityService() {
             "Target App: $pkgName"
         )
 
-        val now = SystemClock.uptimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1500) {
             return
         }
@@ -1664,7 +1724,7 @@ class FocusAccessibilityService : AccessibilityService() {
     private fun triggerBlockScreen(packageName: String) {
         if (packageName == "com.android.settings") return
 
-        val now = SystemClock.uptimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastBlockedPackage == packageName && now - lastBlockedTime < 1000) {
             return
         }
@@ -1715,7 +1775,7 @@ class FocusAccessibilityService : AccessibilityService() {
     ) {
         if (pkgName == packageName || pkgName == "com.android.settings") return
 
-        val now = SystemClock.uptimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastBlockedPackage == pkgName && now - lastBlockedTime < 1000) {
             return
         }

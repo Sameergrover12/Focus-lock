@@ -614,6 +614,17 @@ class FocusRepository(private val focusDao: FocusDao) {
         }
     }
 
+    suspend fun getAllDailyUsageLogsSync(): List<DailyUsageLog> = focusDao.getAllDailyUsageLogsSync()
+
+    suspend fun getAllDailyScreenTimesSync(): List<DailyScreenTime> = focusDao.getAllDailyScreenTimesSync()
+
+    suspend fun reloadAllFromDisk(context: android.content.Context) {
+        updateCurrentDate(getTodayDateString())
+        try {
+            resetDailyLimitsIfNeeded()
+        } catch (_: Exception) {}
+    }
+
     private fun isSystemOverlay(pkg: String, context: android.content.Context? = null): Boolean {
         return if (context != null) {
             ScreenTimeHelper.isIgnoredSystemPackage(pkg, context)

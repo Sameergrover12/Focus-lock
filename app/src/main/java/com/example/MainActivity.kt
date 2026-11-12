@@ -215,6 +215,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         wasStoppedBeforeNextIntent = false
         com.example.util.AppForegroundTracker.isFocusLockInForeground = true
+        com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(this)
         if (com.example.util.PermissionHelper.isUsageStatsPermissionGranted(this)) {
             viewModel.refreshDailyUsageStats()
             viewModel.refresh30DayHistory()

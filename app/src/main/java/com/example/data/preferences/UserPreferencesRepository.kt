@@ -10,6 +10,8 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import com.example.util.TimeIntegrityManager
@@ -39,6 +41,11 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     val syncPrefs = context.getSharedPreferences(SYNC_PREFS_NAME, Context.MODE_PRIVATE)
+    private val refreshTrigger = MutableStateFlow(0)
+
+    fun notifyPreferencesReloaded() {
+        refreshTrigger.value += 1
+    }
 
     private object PreferencesKeys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -88,10 +95,11 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    val baseThemeMode: Flow<BaseThemeMode> = context.dataStore.data.map { preferences ->
-        val saved = preferences[PreferencesKeys.BASE_THEME_MODE]
+    val baseThemeMode: Flow<BaseThemeMode> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        val saved = syncPrefs.getString("base_theme_mode", null)
+            ?: preferences[PreferencesKeys.BASE_THEME_MODE]
+            ?: syncPrefs.getString("theme_mode", null)
             ?: preferences[PreferencesKeys.THEME_MODE]
-            ?: syncPrefs.getString("base_theme_mode", null)
         when (saved) {
             BaseThemeMode.LIGHT.name, "LIGHT" -> BaseThemeMode.LIGHT
             BaseThemeMode.DARK.name, "DARK" -> BaseThemeMode.DARK
@@ -101,56 +109,73 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    val secondaryPalette: Flow<SecondaryThemePalette> = context.dataStore.data.map { preferences ->
-        val saved = preferences[PreferencesKeys.SECONDARY_PALETTE]
-            ?: syncPrefs.getString("secondary_palette", null)
+    val secondaryPalette: Flow<SecondaryThemePalette> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        val saved = syncPrefs.getString("secondary_palette", null)
+            ?: preferences[PreferencesKeys.SECONDARY_PALETTE]
         SecondaryThemePalette.entries.find { it.name == saved } ?: SecondaryThemePalette.FOCUS_EMERALD
     }
 
-    val themeMode: Flow<ThemeMode> = context.dataStore.data.map { preferences ->
-        when (preferences[PreferencesKeys.THEME_MODE] ?: syncPrefs.getString("theme_mode", null)) {
+    val themeMode: Flow<ThemeMode> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        when (syncPrefs.getString("theme_mode", null) ?: preferences[PreferencesKeys.THEME_MODE]) {
             ThemeMode.LIGHT.name -> ThemeMode.LIGHT
             ThemeMode.DARK.name -> ThemeMode.DARK
             else -> ThemeMode.SYSTEM
         }
     }
 
-    val isOnboardingComplete: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.ONBOARDING_COMPLETE]
-            ?: if (syncPrefs.contains("onboarding_complete")) syncPrefs.getBoolean("onboarding_complete", false) else false
+    val isOnboardingComplete: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        if (syncPrefs.contains("onboarding_complete")) {
+            syncPrefs.getBoolean("onboarding_complete", false)
+        } else {
+            preferences[PreferencesKeys.ONBOARDING_COMPLETE] ?: false
+        }
     }
 
-    val isMasterEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.MASTER_ENABLED]
-            ?: if (syncPrefs.contains("master_enabled")) syncPrefs.getBoolean("master_enabled", true) else true
+    val isMasterEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        if (syncPrefs.contains("master_enabled")) {
+            syncPrefs.getBoolean("master_enabled", true)
+        } else {
+            preferences[PreferencesKeys.MASTER_ENABLED] ?: true
+        }
     }
 
-    val isCheatProtectionEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED]
-            ?: if (syncPrefs.contains("cheat_protection_enabled")) syncPrefs.getBoolean("cheat_protection_enabled", false) else false
+    val isCheatProtectionEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        if (syncPrefs.contains("cheat_protection_enabled")) {
+            syncPrefs.getBoolean("cheat_protection_enabled", false)
+        } else {
+            preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] ?: false
+        }
     }
 
-    val isInvincibleModeEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED]
-            ?: if (syncPrefs.contains("invincible_mode_enabled")) syncPrefs.getBoolean("invincible_mode_enabled", false) else false
+    val isInvincibleModeEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        if (syncPrefs.contains("invincible_mode_enabled")) {
+            syncPrefs.getBoolean("invincible_mode_enabled", false)
+        } else {
+            preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: false
+        }
     }
 
-    val isClockTamperProtectionEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED]
-            ?: if (syncPrefs.contains("clock_tamper_protection_enabled")) syncPrefs.getBoolean("clock_tamper_protection_enabled", true) else true
+    val isClockTamperProtectionEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        if (syncPrefs.contains("clock_tamper_protection_enabled")) {
+            syncPrefs.getBoolean("clock_tamper_protection_enabled", true)
+        } else {
+            preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] ?: true
+        }
     }
 
-    val reclaimedCommitment: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.RECLAIMED_COMMITMENT]
-            ?: syncPrefs.getString("reclaimed_commitment", "My Focus") ?: "My Focus"
+    val reclaimedCommitment: Flow<String> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        syncPrefs.getString("reclaimed_commitment", null)
+            ?: preferences[PreferencesKeys.RECLAIMED_COMMITMENT]
+            ?: "My Focus"
     }
 
-    val cognitivePassphrase: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.COGNITIVE_PASSPHRASE]
-            ?: syncPrefs.getString("cognitive_passphrase", DEFAULT_COGNITIVE_PASSPHRASE) ?: DEFAULT_COGNITIVE_PASSPHRASE
+    val cognitivePassphrase: Flow<String> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        syncPrefs.getString("cognitive_passphrase", null)
+            ?: preferences[PreferencesKeys.COGNITIVE_PASSPHRASE]
+            ?: DEFAULT_COGNITIVE_PASSPHRASE
     }
 
-    val emergencyBreaksRemaining: Flow<Int> = context.dataStore.data.map { preferences ->
+    val emergencyBreaksRemaining: Flow<Int> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
         val now = TimeIntegrityManager.getTrueTimeMillis()
         val weekStart = preferences[PreferencesKeys.EMERGENCY_BREAK_WEEK_START] ?: 0L
         if (weekStart == 0L || (now - weekStart) >= WEEK_IN_MILLIS) {
@@ -160,19 +185,19 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    val activeEmergencyBreakUntil: Flow<Long> = context.dataStore.data.map { preferences ->
+    val activeEmergencyBreakUntil: Flow<Long> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
         preferences[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] ?: 0L
     }
 
-    val connectedGmailAccount: Flow<String?> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT]
-            ?: syncPrefs.getString("signed_in_google_email", null)
+    val connectedGmailAccount: Flow<String?> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        syncPrefs.getString("signed_in_google_email", null)
             ?: syncPrefs.getString("connected_gmail_account", null)
+            ?: preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT]
     }
 
-    val lastCloudBackupTime: Flow<Long> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME]
-            ?: syncPrefs.getLong("last_cloud_backup_time", 0L)
+    val lastCloudBackupTime: Flow<Long> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
+        val syncTime = syncPrefs.getLong("last_cloud_backup_time", 0L)
+        if (syncTime > 0L) syncTime else (preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME] ?: 0L)
     }
 
     fun getConnectedGmailAccountSync(): String? {
@@ -189,7 +214,7 @@ class UserPreferencesRepository(private val context: Context) {
                 remove("signed_in_google_email")
                 remove("connected_gmail_account")
             }
-            apply()
+            commit()
         }
         context.dataStore.edit { preferences ->
             if (email != null) {
@@ -198,29 +223,142 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences.remove(PreferencesKeys.CONNECTED_GMAIL_ACCOUNT)
             }
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setLastCloudBackupTime(timestamp: Long) {
-        syncPrefs.edit().putLong("last_cloud_backup_time", timestamp).apply()
+        syncPrefs.edit().putLong("last_cloud_backup_time", timestamp).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME] = timestamp
         }
+        refreshTrigger.value += 1
+    }
+
+    /**
+     * Synchronizes DataStore from the current contents of [syncPrefs] (`user_preferences_sync`)
+     * after a cloud restore or account switch and emits a live refresh event so all UI StateFlows
+     * (including theme mode, palette, strict mode, master switch, and commitment) update at 0ms.
+     */
+    suspend fun syncDataStoreFromSharedPrefs() {
+        context.dataStore.edit { preferences ->
+            val baseMode = syncPrefs.getString("base_theme_mode", null)
+            if (baseMode != null) {
+                preferences[PreferencesKeys.BASE_THEME_MODE] = baseMode
+            } else {
+                preferences.remove(PreferencesKeys.BASE_THEME_MODE)
+            }
+
+            val themeModeVal = syncPrefs.getString("theme_mode", null)
+            if (themeModeVal != null) {
+                preferences[PreferencesKeys.THEME_MODE] = themeModeVal
+            } else if (baseMode != null) {
+                BaseThemeMode.entries.find { it.name == baseMode }?.let {
+                    preferences[PreferencesKeys.THEME_MODE] = when (it) {
+                        BaseThemeMode.LIGHT -> ThemeMode.LIGHT.name
+                        BaseThemeMode.DARK -> ThemeMode.DARK.name
+                        BaseThemeMode.AMOLED -> ThemeMode.DARK.name
+                        BaseThemeMode.SYSTEM_DEFAULT -> ThemeMode.SYSTEM.name
+                    }
+                }
+            } else {
+                preferences.remove(PreferencesKeys.THEME_MODE)
+            }
+
+            val palette = syncPrefs.getString("secondary_palette", null)
+            if (palette != null) {
+                preferences[PreferencesKeys.SECONDARY_PALETTE] = palette
+            } else {
+                preferences.remove(PreferencesKeys.SECONDARY_PALETTE)
+            }
+
+            if (syncPrefs.contains("onboarding_complete")) {
+                preferences[PreferencesKeys.ONBOARDING_COMPLETE] = syncPrefs.getBoolean("onboarding_complete", false)
+            }
+
+            if (syncPrefs.contains("master_enabled")) {
+                preferences[PreferencesKeys.MASTER_ENABLED] = syncPrefs.getBoolean("master_enabled", true)
+            } else {
+                preferences.remove(PreferencesKeys.MASTER_ENABLED)
+            }
+
+            if (syncPrefs.contains("cheat_protection_enabled")) {
+                val enabled = syncPrefs.getBoolean("cheat_protection_enabled", false)
+                preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = enabled
+                val hash = syncPrefs.getString("cheat_protection_hash", null)
+                val salt = syncPrefs.getString("cheat_protection_salt", null)
+                if (hash != null && salt != null) {
+                    preferences[PreferencesKeys.CHEAT_PROTECTION_HASH] = hash
+                    preferences[PreferencesKeys.CHEAT_PROTECTION_SALT] = salt
+                } else {
+                    preferences.remove(PreferencesKeys.CHEAT_PROTECTION_HASH)
+                    preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
+                }
+            } else {
+                preferences.remove(PreferencesKeys.CHEAT_PROTECTION_ENABLED)
+                preferences.remove(PreferencesKeys.CHEAT_PROTECTION_HASH)
+                preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
+            }
+
+            if (syncPrefs.contains("invincible_mode_enabled")) {
+                preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = syncPrefs.getBoolean("invincible_mode_enabled", false)
+            } else {
+                preferences.remove(PreferencesKeys.INVINCIBLE_MODE_ENABLED)
+            }
+
+            if (syncPrefs.contains("clock_tamper_protection_enabled")) {
+                val clockEnabled = syncPrefs.getBoolean("clock_tamper_protection_enabled", true)
+                preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = clockEnabled
+                TimeIntegrityManager.setProtectionEnabled(clockEnabled)
+            } else {
+                preferences.remove(PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED)
+                TimeIntegrityManager.setProtectionEnabled(true)
+            }
+
+            val commitment = syncPrefs.getString("reclaimed_commitment", null)
+            if (commitment != null) {
+                preferences[PreferencesKeys.RECLAIMED_COMMITMENT] = commitment
+            } else {
+                preferences.remove(PreferencesKeys.RECLAIMED_COMMITMENT)
+            }
+
+            val passphrase = syncPrefs.getString("cognitive_passphrase", null)
+            if (passphrase != null) {
+                preferences[PreferencesKeys.COGNITIVE_PASSPHRASE] = passphrase
+            } else {
+                preferences.remove(PreferencesKeys.COGNITIVE_PASSPHRASE)
+            }
+
+            val email = syncPrefs.getString("signed_in_google_email", null)
+                ?: syncPrefs.getString("connected_gmail_account", null)
+            if (email != null) {
+                preferences[PreferencesKeys.CONNECTED_GMAIL_ACCOUNT] = email
+            } else {
+                preferences.remove(PreferencesKeys.CONNECTED_GMAIL_ACCOUNT)
+            }
+
+            if (syncPrefs.contains("last_cloud_backup_time")) {
+                preferences[PreferencesKeys.LAST_CLOUD_BACKUP_TIME] = syncPrefs.getLong("last_cloud_backup_time", 0L)
+            } else {
+                preferences.remove(PreferencesKeys.LAST_CLOUD_BACKUP_TIME)
+            }
+        }
+        refreshTrigger.value += 1
     }
 
     suspend fun getPreferencesSnapshot(): Map<String, Any?> {
         val prefs = context.dataStore.data.first()
         return mapOf(
-            "base_theme_mode" to (prefs[PreferencesKeys.BASE_THEME_MODE] ?: syncPrefs.getString("base_theme_mode", null)),
-            "secondary_palette" to (prefs[PreferencesKeys.SECONDARY_PALETTE] ?: syncPrefs.getString("secondary_palette", null)),
-            "theme_mode" to (prefs[PreferencesKeys.THEME_MODE] ?: syncPrefs.getString("theme_mode", null)),
-            "master_enabled" to (prefs[PreferencesKeys.MASTER_ENABLED] ?: syncPrefs.getBoolean("master_enabled", true)),
-            "cheat_protection_enabled" to (prefs[PreferencesKeys.CHEAT_PROTECTION_ENABLED] ?: syncPrefs.getBoolean("cheat_protection_enabled", false)),
-            "cheat_protection_hash" to (prefs[PreferencesKeys.CHEAT_PROTECTION_HASH] ?: syncPrefs.getString("cheat_protection_hash", null)),
-            "cheat_protection_salt" to (prefs[PreferencesKeys.CHEAT_PROTECTION_SALT] ?: syncPrefs.getString("cheat_protection_salt", null)),
-            "invincible_mode_enabled" to (prefs[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: syncPrefs.getBoolean("invincible_mode_enabled", false)),
-            "clock_tamper_protection_enabled" to (prefs[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] ?: syncPrefs.getBoolean("clock_tamper_protection_enabled", true)),
-            "reclaimed_commitment" to (prefs[PreferencesKeys.RECLAIMED_COMMITMENT] ?: syncPrefs.getString("reclaimed_commitment", "My Focus")),
-            "cognitive_passphrase" to (prefs[PreferencesKeys.COGNITIVE_PASSPHRASE] ?: syncPrefs.getString("cognitive_passphrase", DEFAULT_COGNITIVE_PASSPHRASE))
+            "base_theme_mode" to (syncPrefs.getString("base_theme_mode", null) ?: prefs[PreferencesKeys.BASE_THEME_MODE]),
+            "secondary_palette" to (syncPrefs.getString("secondary_palette", null) ?: prefs[PreferencesKeys.SECONDARY_PALETTE]),
+            "theme_mode" to (syncPrefs.getString("theme_mode", null) ?: prefs[PreferencesKeys.THEME_MODE]),
+            "master_enabled" to (if (syncPrefs.contains("master_enabled")) syncPrefs.getBoolean("master_enabled", true) else (prefs[PreferencesKeys.MASTER_ENABLED] ?: true)),
+            "cheat_protection_enabled" to (if (syncPrefs.contains("cheat_protection_enabled")) syncPrefs.getBoolean("cheat_protection_enabled", false) else (prefs[PreferencesKeys.CHEAT_PROTECTION_ENABLED] ?: false)),
+            "cheat_protection_hash" to (syncPrefs.getString("cheat_protection_hash", null) ?: prefs[PreferencesKeys.CHEAT_PROTECTION_HASH]),
+            "cheat_protection_salt" to (syncPrefs.getString("cheat_protection_salt", null) ?: prefs[PreferencesKeys.CHEAT_PROTECTION_SALT]),
+            "invincible_mode_enabled" to (if (syncPrefs.contains("invincible_mode_enabled")) syncPrefs.getBoolean("invincible_mode_enabled", false) else (prefs[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: false)),
+            "clock_tamper_protection_enabled" to (if (syncPrefs.contains("clock_tamper_protection_enabled")) syncPrefs.getBoolean("clock_tamper_protection_enabled", true) else (prefs[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] ?: true)),
+            "reclaimed_commitment" to (syncPrefs.getString("reclaimed_commitment", null) ?: prefs[PreferencesKeys.RECLAIMED_COMMITMENT] ?: "My Focus"),
+            "cognitive_passphrase" to (syncPrefs.getString("cognitive_passphrase", null) ?: prefs[PreferencesKeys.COGNITIVE_PASSPHRASE] ?: DEFAULT_COGNITIVE_PASSPHRASE)
         )
     }
 
@@ -272,55 +410,11 @@ class UserPreferencesRepository(private val context: Context) {
             editor.putString("cognitive_passphrase", prefs.getString("cognitive_passphrase"))
         }
 
-        // Apply asynchronously without blocking Main thread
-        editor.apply()
+        // Commit synchronously so disk state is immediately consistent
+        editor.commit()
 
-        // Also update DataStore
-        context.dataStore.edit { preferences ->
-            if (prefs.has("base_theme_mode")) {
-                val modeName = prefs.getString("base_theme_mode")
-                preferences[PreferencesKeys.BASE_THEME_MODE] = modeName
-                BaseThemeMode.entries.find { it.name == modeName }?.let {
-                    preferences[PreferencesKeys.THEME_MODE] = when (it) {
-                        BaseThemeMode.LIGHT -> ThemeMode.LIGHT.name
-                        BaseThemeMode.DARK -> ThemeMode.DARK.name
-                        BaseThemeMode.AMOLED -> ThemeMode.DARK.name
-                        BaseThemeMode.SYSTEM_DEFAULT -> ThemeMode.SYSTEM.name
-                    }
-                }
-            }
-            if (prefs.has("secondary_palette")) {
-                preferences[PreferencesKeys.SECONDARY_PALETTE] = prefs.getString("secondary_palette")
-            }
-            if (prefs.has("master_enabled")) {
-                preferences[PreferencesKeys.MASTER_ENABLED] = prefs.getBoolean("master_enabled")
-            }
-            if (prefs.has("cheat_protection_enabled")) {
-                val enabled = prefs.getBoolean("cheat_protection_enabled")
-                preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = enabled
-                val hash = prefs.optString("cheat_protection_hash", null)
-                val salt = prefs.optString("cheat_protection_salt", null)
-                if (hash != null && salt != null) {
-                    preferences[PreferencesKeys.CHEAT_PROTECTION_HASH] = hash
-                    preferences[PreferencesKeys.CHEAT_PROTECTION_SALT] = salt
-                } else {
-                    preferences.remove(PreferencesKeys.CHEAT_PROTECTION_HASH)
-                    preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
-                }
-            }
-            if (prefs.has("invincible_mode_enabled")) {
-                preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = prefs.getBoolean("invincible_mode_enabled")
-            }
-            if (prefs.has("clock_tamper_protection_enabled")) {
-                preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = prefs.getBoolean("clock_tamper_protection_enabled")
-            }
-            if (prefs.has("reclaimed_commitment")) {
-                preferences[PreferencesKeys.RECLAIMED_COMMITMENT] = prefs.getString("reclaimed_commitment")
-            }
-            if (prefs.has("cognitive_passphrase")) {
-                preferences[PreferencesKeys.COGNITIVE_PASSPHRASE] = prefs.getString("cognitive_passphrase")
-            }
-        }
+        // Also update DataStore and notify flows
+        syncDataStoreFromSharedPrefs()
     }
 
     suspend fun restoreCheatProtection(enabled: Boolean, hash: String?, salt: String?) {
@@ -333,7 +427,7 @@ class UserPreferencesRepository(private val context: Context) {
                 remove("cheat_protection_hash")
                 remove("cheat_protection_salt")
             }
-            apply()
+            commit()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = enabled
@@ -345,35 +439,39 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
             }
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setClockTamperProtectionEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("clock_tamper_protection_enabled", enabled).apply()
+        syncPrefs.edit().putBoolean("clock_tamper_protection_enabled", enabled).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = enabled
         }
         TimeIntegrityManager.setProtectionEnabled(enabled)
+        refreshTrigger.value += 1
     }
 
     suspend fun setReclaimedCommitment(commitment: String) {
-        syncPrefs.edit().putString("reclaimed_commitment", commitment).apply()
+        syncPrefs.edit().putString("reclaimed_commitment", commitment).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.RECLAIMED_COMMITMENT] = commitment
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setCognitivePassphrase(phrase: String) {
         val trimmed = phrase.trim()
-        syncPrefs.edit().putString("cognitive_passphrase", trimmed).apply()
+        syncPrefs.edit().putString("cognitive_passphrase", trimmed).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.COGNITIVE_PASSPHRASE] = trimmed
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun getCognitivePassphrase(): String {
         val prefs = context.dataStore.data.first()
-        return prefs[PreferencesKeys.COGNITIVE_PASSPHRASE]
-            ?: syncPrefs.getString("cognitive_passphrase", DEFAULT_COGNITIVE_PASSPHRASE)
+        return syncPrefs.getString("cognitive_passphrase", null)
+            ?: prefs[PreferencesKeys.COGNITIVE_PASSPHRASE]
             ?: DEFAULT_COGNITIVE_PASSPHRASE
     }
 
@@ -397,6 +495,7 @@ class UserPreferencesRepository(private val context: Context) {
                 prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = System.currentTimeMillis() + 10 * 60 * 1000L
                 prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
             }
+            refreshTrigger.value += 1
         }
         return started
     }
@@ -408,6 +507,7 @@ class UserPreferencesRepository(private val context: Context) {
                 prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = System.currentTimeMillis() + 10 * 60 * 1000L
                 prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
             }
+            refreshTrigger.value += 1
         }
         return started
     }
@@ -417,6 +517,7 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = 0L
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setBaseThemeMode(mode: BaseThemeMode) {
@@ -428,7 +529,7 @@ class UserPreferencesRepository(private val context: Context) {
                 BaseThemeMode.AMOLED -> ThemeMode.DARK.name
                 BaseThemeMode.SYSTEM_DEFAULT -> ThemeMode.SYSTEM.name
             })
-            apply()
+            commit()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.BASE_THEME_MODE] = mode.name
@@ -439,13 +540,15 @@ class UserPreferencesRepository(private val context: Context) {
                 BaseThemeMode.SYSTEM_DEFAULT -> ThemeMode.SYSTEM.name
             }
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setSecondaryPalette(palette: SecondaryThemePalette) {
-        syncPrefs.edit().putString("secondary_palette", palette.name).apply()
+        syncPrefs.edit().putString("secondary_palette", palette.name).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.SECONDARY_PALETTE] = palette.name
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
@@ -456,7 +559,7 @@ class UserPreferencesRepository(private val context: Context) {
                 ThemeMode.DARK -> BaseThemeMode.DARK.name
                 ThemeMode.SYSTEM -> BaseThemeMode.SYSTEM_DEFAULT.name
             })
-            apply()
+            commit()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.THEME_MODE] = mode.name
@@ -466,20 +569,23 @@ class UserPreferencesRepository(private val context: Context) {
                 ThemeMode.SYSTEM -> BaseThemeMode.SYSTEM_DEFAULT.name
             }
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setOnboardingComplete(complete: Boolean) {
-        syncPrefs.edit().putBoolean("onboarding_complete", complete).apply()
+        syncPrefs.edit().putBoolean("onboarding_complete", complete).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.ONBOARDING_COMPLETE] = complete
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setMasterEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("master_enabled", enabled).apply()
+        syncPrefs.edit().putBoolean("master_enabled", enabled).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.MASTER_ENABLED] = enabled
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun enableCheatProtection(passphrase: String): Boolean {
@@ -492,13 +598,14 @@ class UserPreferencesRepository(private val context: Context) {
             putBoolean("cheat_protection_enabled", true)
             putString("cheat_protection_hash", hash)
             putString("cheat_protection_salt", salt)
-            apply()
+            commit()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = true
             preferences[PreferencesKeys.CHEAT_PROTECTION_HASH] = hash
             preferences[PreferencesKeys.CHEAT_PROTECTION_SALT] = salt
         }
+        refreshTrigger.value += 1
         return true
     }
 
@@ -507,32 +614,37 @@ class UserPreferencesRepository(private val context: Context) {
             putBoolean("cheat_protection_enabled", false)
             remove("cheat_protection_hash")
             remove("cheat_protection_salt")
-            apply()
+            commit()
         }
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.CHEAT_PROTECTION_ENABLED] = false
             preferences.remove(PreferencesKeys.CHEAT_PROTECTION_HASH)
             preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun setInvincibleModeEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("invincible_mode_enabled", enabled).apply()
+        syncPrefs.edit().putBoolean("invincible_mode_enabled", enabled).commit()
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = enabled
         }
+        refreshTrigger.value += 1
     }
 
     suspend fun verifyCheatPassphrase(input: String): Boolean {
         val prefs = context.dataStore.data.first()
-        val isEnabled = prefs[PreferencesKeys.CHEAT_PROTECTION_ENABLED]
-            ?: syncPrefs.getBoolean("cheat_protection_enabled", false)
+        val isEnabled = if (syncPrefs.contains("cheat_protection_enabled")) {
+            syncPrefs.getBoolean("cheat_protection_enabled", false)
+        } else {
+            prefs[PreferencesKeys.CHEAT_PROTECTION_ENABLED] ?: false
+        }
         if (!isEnabled) return true
 
-        val storedHash = prefs[PreferencesKeys.CHEAT_PROTECTION_HASH]
-            ?: syncPrefs.getString("cheat_protection_hash", null) ?: return false
-        val salt = prefs[PreferencesKeys.CHEAT_PROTECTION_SALT]
-            ?: syncPrefs.getString("cheat_protection_salt", null) ?: return false
+        val storedHash = syncPrefs.getString("cheat_protection_hash", null)
+            ?: prefs[PreferencesKeys.CHEAT_PROTECTION_HASH] ?: return false
+        val salt = syncPrefs.getString("cheat_protection_salt", null)
+            ?: prefs[PreferencesKeys.CHEAT_PROTECTION_SALT] ?: return false
         val computedHash = hashPassphrase(input, salt)
         return computedHash == storedHash
     }
@@ -540,6 +652,7 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun clearAllLocalPreferences() {
         syncPrefs.edit().clear().commit()
         context.dataStore.edit { it.clear() }
+        refreshTrigger.value += 1
     }
 
     private fun hashPassphrase(passphrase: String, salt: String): String {

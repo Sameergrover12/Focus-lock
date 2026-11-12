@@ -1,6 +1,7 @@
 package com.example.ui.splash
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -23,7 +24,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -42,8 +42,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
@@ -53,7 +51,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.R
-import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -61,21 +58,26 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+private val SmoothSignatureEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
 /**
- * Classy, cinematic 0ms–1600ms (0.6x paced) startup animation overlay rendered at the root Box
+ * Artifact-free, single-window 0ms–850ms startup animation overlay rendered at the root Box
  * of MainActivity with zIndex(999f).
  *
- * Showcases the full original Focus Lock logo including its glowing green neon border:
- * - Stage 1 (0ms–650ms): 3D perspective vault awakening (scale 0.86f -> 1.0f, subtle 3D tilt
- *   settling to 0°), rotating precision telemetry dial behind the icon, and a luminous mint
- *   laser scan sweeping the 3D "F" from left to right.
- * - Stage 2 (360ms–1120ms): Bottom-right white padlock drops in with a damped harmonic spring
- *   bounce (-12.dp -> 0.dp). At lock-in (~700ms), an emerald shockwave ripples outward while
- *   twin neon emerald-mint light beams trace the squircle's glowing green neon border and a
- *   diagonal glass reflection sheen glides across the icon.
- * - Stage 3 (220ms–1080ms): Bottom "FOCUS LOCK" title & "ATTENTION SHIELD ENGAGED" subtitle
- *   reveal with smooth letter-spacing condensation and a center-expanding neon laser underline.
- * - Stage 4 (1300ms–1600ms): Smooth 300ms cross-dissolve exit into the underlying screen.
+ * Renders @drawable/focus_lock_original_icon as a single, unified, 100% intact bitmap inside
+ * the centered 112.dp squircle (RoundedCornerShape(26.dp)) without any regional clipRect cuts
+ * or sub-rectangle translationY shifts:
+ *
+ * - Layer 1 (0ms–420ms): Intact emblem spring (0.90f -> 1.0f over 0ms..380ms with
+ *   dampingRatio = 0.72f, stiffness = 380f) & feathered diagonal specular light sheen
+ *   (60ms..450ms) sweeping from top-left across the "F" to the bottom-right padlock.
+ * - Layer 2 (280ms–580ms): Precision padlock lock-in pulse at (cx = width * 0.665f,
+ *   cy = height * 0.64f) with a crisp squircle micro-scale pulse (1.0f -> 1.035f -> 1.0f)
+ *   and a soft radial mint-white glow ring expanding from 12.dp to 34.dp (alpha 0.45f -> 0f).
+ * - Layer 3 (0ms–650ms): Rotating segmented outer HUD dial ticks, squircle border wave &
+ *   shockwave ring, and bottom "FOCUS LOCK" + "ATTENTION SHIELD" typography.
+ * - Layer 4 (630ms–850ms): Buttery cross-dissolve (alpha 1f -> 0f, scale 1.0f -> 1.04f)
+ *   into the already-composed underlying screen.
  */
 @Composable
 fun FocusLockStartupSplashOverlay(
@@ -90,14 +92,10 @@ fun FocusLockStartupSplashOverlay(
     val timeMillis = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
-        // Wait for the window and initial frame to settle past the OS launcher open transition
-        withFrameNanos { }
-        withFrameNanos { }
-        delay(80)
-
+        // Start immediately at 0ms without any blank pause
         timeMillis.animateTo(
-            targetValue = 1600f,
-            animationSpec = tween(durationMillis = 1600, easing = LinearEasing)
+            targetValue = 850f,
+            animationSpec = tween(durationMillis = 850, easing = LinearEasing)
         )
         onAnimationFinished()
     }
@@ -105,62 +103,55 @@ fun FocusLockStartupSplashOverlay(
     val t = timeMillis.value
     val density = LocalDensity.current
 
-    // Stage 1 (0ms to 650ms): 3D Vault Awakening & "F" Laser Sweep (0.18f -> 1.0f)
-    val stage1Progress = calcProgress(t, 0f, 650f, FastOutSlowInEasing)
-    val fClipProgress = 0.18f + 0.82f * stage1Progress
-    val introScale = 0.86f + 0.14f * stage1Progress
-    val tiltX = 12f * (1f - stage1Progress)
-    val tiltY = -10f * (1f - stage1Progress)
-
-    // Stage 2 (360ms to 1120ms): Padlock Spring Drop-In & Lock-Click Pulse
-    val lockAlpha = calcProgress(t, 360f, 560f, FastOutSlowInEasing)
-    val lockFraction = calcProgress(t, 360f, 1020f, LinearEasing)
-    val lockSpring = when {
-        lockFraction <= 0f -> 0f
-        lockFraction >= 1f -> 1f
+    // Layer 1A (0ms to 380ms): Unified 112.dp squircle gentle spring scale (0.90f -> 1.0f)
+    // using dampingRatio = 0.72f, stiffness = 380f
+    val springFraction = calcProgress(t, 0f, 380f, LinearEasing)
+    val springValue = when {
+        springFraction <= 0f -> 0f
+        springFraction >= 1f -> 1f
         else -> {
-            val durationSec = 0.56f
-            val omega0 = sqrt(620f)
-            val zeta = 0.50f
+            val durationSec = 0.38f
+            val omega0 = sqrt(380f) // ~19.49 rad/s
+            val zeta = 0.72f
             val omegaD = omega0 * sqrt(1f - zeta * zeta)
-            val elapsedSec = lockFraction * durationSec
+            val elapsedSec = springFraction * durationSec
             1f - exp(-zeta * omega0 * elapsedSec) * cos(omegaD * elapsedSec)
         }
     }
-    val lockOffsetYPx = with(density) { (-12.dp.toPx()) * (1f - lockSpring) }
+    val baseEmblemScale = 0.90f + 0.10f * springValue
 
-    // Lock-click impact bump around 680ms–920ms when the padlock snaps shut
-    val lockSnapPulse = if (t in 660f..940f) {
-        val p = (t - 660f) / 280f
-        sin(p * PI.toFloat()) * 0.032f
+    // Layer 1B (60ms to 450ms): Feathered diagonal specular light sheen across the intact icon
+    val sheenProgress = calcProgress(t, 60f, 450f, SmoothSignatureEasing)
+
+    // Layer 2 (280ms to 580ms): Precision Padlock Lock-In Pulse (1.0f -> 1.035f -> 1.0f)
+    // and radial mint-white glow ring expanding from 12.dp to 34.dp (alpha 0.45f -> 0f)
+    val lockPulseProgress = calcProgress(t, 280f, 580f, FastOutSlowInEasing)
+    val lockScaleBump = if (t in 280f..580f) {
+        val raw = ((t - 280f) / 300f).coerceIn(0f, 1f)
+        sin(raw * PI.toFloat()) * 0.035f
     } else {
         0f
     }
 
-    // Shockwave ring expanding from the squircle when padlock clicks shut (650ms to 1250ms)
-    val shockwaveProgress = calcProgress(t, 650f, 1250f, FastOutSlowInEasing)
-    val shockwave2Progress = calcProgress(t, 760f, 1340f, FastOutSlowInEasing)
+    // Layer 3 (0ms to 650ms): Outer HUD dial, squircle border wave & shockwave ring, typography
+    val hudAppear = calcProgress(t, 0f, 360f, FastOutSlowInEasing)
+    val hudFade = 1f - calcProgress(t, 600f, 820f, LinearEasing)
+    val hudAlpha = (hudAppear * hudFade).coerceIn(0f, 1f)
+    val hudRotationDeg = SmoothSignatureEasing.transform((t / 850f).coerceIn(0f, 1f)) * 42f
 
-    // Twin neon border charge trace (380ms to 1120ms) & glass reflection sheen (700ms to 1220ms)
-    val borderGlowSweep = calcProgress(t, 380f, 1120f, FastOutSlowInEasing)
-    val sheenProgress = calcProgress(t, 700f, 1220f, FastOutSlowInEasing)
+    val shockwaveProgress = calcProgress(t, 280f, 650f, FastOutSlowInEasing)
+    val borderWaveSweep = calcProgress(t, 80f, 560f, FastOutSlowInEasing)
 
-    // Precision telemetry ring rotation & alpha
-    val dialAppear = calcProgress(t, 0f, 500f, FastOutSlowInEasing)
-    val dialFade = 1f - calcProgress(t, 1220f, 1550f, LinearEasing)
-    val dialAlpha = (dialAppear * dialFade).coerceIn(0f, 1f)
-    val dialRotationDeg = (t / 1600f) * 54f
+    val nameProgress = calcProgress(t, 60f, 480f, FastOutSlowInEasing)
+    val subtitleProgress = calcProgress(t, 160f, 580f, FastOutSlowInEasing)
+    val nameOffsetPx = with(density) { (8.dp * (1f - nameProgress)).toPx() }
+    val dynamicLetterSpacing = (4.4f - 2.0f * nameProgress).sp
 
-    // Stage 3 (220ms to 1080ms): Classy Typography & Neon Underline Reveal
-    val nameProgress = calcProgress(t, 220f, 880f, FastOutSlowInEasing)
-    val subtitleProgress = calcProgress(t, 480f, 1080f, FastOutSlowInEasing)
-    val nameOffsetPx = with(density) { (10.dp * (1f - nameProgress)).toPx() }
-    val dynamicLetterSpacing = (5.2f - 2.8f * nameProgress).sp
-
-    // Stage 4 (1300ms to 1600ms): Smooth 300ms Cross-Dissolve Exit
-    val exitProgress = calcProgress(t, 1300f, 1600f, FastOutLinearInEasing)
+    // Layer 4 (630ms to 850ms): Buttery cross-dissolve into the app
+    // (alpha 1f -> 0f, scale 1.0f -> 1.04f)
+    val exitProgress = calcProgress(t, 630f, 850f, FastOutLinearInEasing)
     val overlayAlpha = (1f - exitProgress).coerceIn(0f, 1f)
-    val totalSquircleScale = introScale + lockSnapPulse + (0.05f * exitProgress)
+    val totalEmblemScale = (baseEmblemScale + lockScaleBump) * (1.0f + 0.04f * exitProgress)
 
     Box(
         modifier = Modifier
@@ -170,43 +161,46 @@ fun FocusLockStartupSplashOverlay(
             .background(screenBgColor),
         contentAlignment = Alignment.Center
     ) {
-        // Outer Ambient Halo + Precision Telemetry Ring + Dual Lock-Click Shockwaves
+        // Layer 3A: Outer Ambient Halo + Rotating Segmented HUD Dial + Squircle Shockwave Ring
         Canvas(
-            modifier = Modifier.size(270.dp)
+            modifier = Modifier.size(256.dp)
         ) {
             val center = Offset(size.width / 2f, size.height / 2f)
             val maxRadius = size.minDimension / 2f
 
-            // 1. Soft breathing radial emerald-mint ambient aura behind the icon
-            val auraAlpha = (0.20f * stage1Progress * (1f - exitProgress * 0.5f)).coerceIn(0f, 0.25f)
+            // Soft radial emerald-mint ambient halo adapted to Dark / Light Mode
+            val haloPeakAlpha = if (isDarkTheme) 0.18f else 0.12f
+            val haloAlpha = (haloPeakAlpha * hudAppear * (1f - exitProgress * 0.5f)).coerceIn(0f, haloPeakAlpha)
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFF10B981).copy(alpha = auraAlpha),
-                        Color(0xFF059669).copy(alpha = auraAlpha * 0.45f),
+                        Color(0xFF10B981).copy(alpha = haloAlpha),
+                        Color(0xFF059669).copy(alpha = haloAlpha * 0.4f),
                         Color.Transparent
                     ),
                     center = center,
-                    radius = maxRadius * (0.85f + 0.12f * sin(t / 350f))
+                    radius = maxRadius * 0.88f
                 ),
                 radius = maxRadius,
                 center = center
             )
 
-            // 2. Rotating Precision Vault Telemetry Dial (architectural degree ticks)
-            if (dialAlpha > 0.01f) {
-                val dialRadius = 86.dp.toPx() * (0.90f + 0.10f * dialAppear)
+            // Rotating segmented outer HUD dial ticks
+            if (hudAlpha > 0.01f) {
+                val dialRadius = 78.dp.toPx() * (0.92f + 0.08f * hudAppear)
                 val tickCount = 36
+                val dialBaseColor = if (isDarkTheme) Color(0xFF34D399) else Color(0xFF059669)
+
                 for (i in 0 until tickCount) {
-                    val angleDeg = i * (360f / tickCount) + dialRotationDeg
+                    val angleDeg = i * (360f / tickCount) + hudRotationDeg
                     val angleRad = (angleDeg * PI / 180.0).toFloat()
                     val isMajor = i % 3 == 0
-                    val innerR = dialRadius - if (isMajor) 6.dp.toPx() else 3.dp.toPx()
+                    val innerR = dialRadius - if (isMajor) 5.5.dp.toPx() else 2.8.dp.toPx()
                     val outerR = dialRadius
-                    val tickAlpha = (if (isMajor) 0.36f else 0.16f) * dialAlpha
+                    val tickAlpha = (if (isMajor) 0.34f else 0.15f) * hudAlpha
 
                     drawLine(
-                        color = Color(0xFF34D399).copy(alpha = tickAlpha),
+                        color = dialBaseColor.copy(alpha = tickAlpha),
                         start = Offset(
                             x = center.x + innerR * cos(angleRad),
                             y = center.y + innerR * sin(angleRad)
@@ -215,100 +209,76 @@ fun FocusLockStartupSplashOverlay(
                             x = center.x + outerR * cos(angleRad),
                             y = center.y + outerR * sin(angleRad)
                         ),
-                        strokeWidth = if (isMajor) 1.6.dp.toPx() else 1.dp.toPx(),
+                        strokeWidth = if (isMajor) 1.5.dp.toPx() else 1.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                 }
 
-                // Subtle segmented orbital arc around the telemetry ring
-                val arcRadius = 94.dp.toPx()
+                // Segmented HUD orbital arcs
+                val arcRadius = 85.dp.toPx()
                 val arcTopLeft = Offset(center.x - arcRadius, center.y - arcRadius)
                 val arcSize = Size(arcRadius * 2f, arcRadius * 2f)
+                val arcColor = if (isDarkTheme) Color(0xFF6EE7B7) else Color(0xFF10B981)
                 drawArc(
-                    color = Color(0xFF6EE7B7).copy(alpha = 0.28f * dialAlpha),
-                    startAngle = -45f - dialRotationDeg * 1.3f,
-                    sweepAngle = 70f * stage1Progress,
+                    color = arcColor.copy(alpha = 0.26f * hudAlpha),
+                    startAngle = -40f - hudRotationDeg * 1.2f,
+                    sweepAngle = 64f * hudAppear,
                     useCenter = false,
                     topLeft = arcTopLeft,
                     size = arcSize,
-                    style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                    style = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round)
                 )
                 drawArc(
-                    color = Color(0xFF6EE7B7).copy(alpha = 0.28f * dialAlpha),
-                    startAngle = 135f - dialRotationDeg * 1.3f,
-                    sweepAngle = 70f * stage1Progress,
+                    color = arcColor.copy(alpha = 0.26f * hudAlpha),
+                    startAngle = 140f - hudRotationDeg * 1.2f,
+                    sweepAngle = 64f * hudAppear,
                     useCenter = false,
                     topLeft = arcTopLeft,
                     size = arcSize,
-                    style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                    style = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round)
                 )
             }
 
-            // 3. Primary & Secondary Emerald Shockwave Ripples when padlock clicks shut
+            // Expanding rounded-squircle perimeter shockwave ring triggered at padlock lock-in (280ms..650ms)
             if (shockwaveProgress in 0.01f..0.99f) {
-                val waveRadius = 64.dp.toPx() + 58.dp.toPx() * shockwaveProgress
-                val waveAlpha = 0.55f * (1f - shockwaveProgress)
-                val cornerR = (28.dp.toPx() + 18.dp.toPx() * shockwaveProgress)
+                val waveHalfSize = 56.dp.toPx() + 42.dp.toPx() * shockwaveProgress
+                val waveAlpha = (if (isDarkTheme) 0.48f else 0.36f) * (1f - shockwaveProgress)
+                val cornerR = 26.dp.toPx() + 14.dp.toPx() * shockwaveProgress
                 drawRoundRect(
                     color = Color(0xFF34D399).copy(alpha = waveAlpha),
-                    topLeft = Offset(center.x - waveRadius, center.y - waveRadius),
-                    size = Size(waveRadius * 2f, waveRadius * 2f),
+                    topLeft = Offset(center.x - waveHalfSize, center.y - waveHalfSize),
+                    size = Size(waveHalfSize * 2f, waveHalfSize * 2f),
                     cornerRadius = CornerRadius(cornerR, cornerR),
-                    style = Stroke(width = (2.2f * (1f - shockwaveProgress * 0.5f)).dp.toPx())
-                )
-            }
-            if (shockwave2Progress in 0.01f..0.99f) {
-                val wave2Radius = 64.dp.toPx() + 44.dp.toPx() * shockwave2Progress
-                val wave2Alpha = 0.35f * (1f - shockwave2Progress)
-                val cornerR2 = (28.dp.toPx() + 14.dp.toPx() * shockwave2Progress)
-                drawRoundRect(
-                    color = Color(0xFF6EE7B7).copy(alpha = wave2Alpha),
-                    topLeft = Offset(center.x - wave2Radius, center.y - wave2Radius),
-                    size = Size(wave2Radius * 2f, wave2Radius * 2f),
-                    cornerRadius = CornerRadius(cornerR2, cornerR2),
-                    style = Stroke(width = 1.2.dp.toPx())
+                    style = Stroke(width = (2.0f * (1f - shockwaveProgress * 0.5f)).dp.toPx())
                 )
             }
         }
 
-        // Centered 124.dp x 124.dp Squircle Icon Container preserving the FULL green neon border
-        val squircleShape = RoundedCornerShape(28.dp)
+        // Centered 112.dp x 112.dp Unified Squircle Emblem (RoundedCornerShape(26.dp))
+        val squircleShape = RoundedCornerShape(26.dp)
         val shadowModifier = if (!isDarkTheme) {
             Modifier.shadow(
-                elevation = 16.dp,
+                elevation = 14.dp,
                 shape = squircleShape,
-                spotColor = Color(0x40000000),
-                ambientColor = Color(0x26000000)
+                spotColor = Color(0x38000000),
+                ambientColor = Color(0x20000000)
             )
         } else {
             Modifier.shadow(
-                elevation = 20.dp,
+                elevation = 18.dp,
                 shape = squircleShape,
-                spotColor = Color(0x6610B981),
-                ambientColor = Color(0x33059669)
+                spotColor = Color(0x5510B981),
+                ambientColor = Color(0x28059669)
             )
         }
 
         Box(
             modifier = Modifier
-                .size(124.dp)
-                .scale(totalSquircleScale)
-                .graphicsLayer {
-                    rotationX = tiltX
-                    rotationY = tiltY
-                    cameraDistance = 14f * density.density
-                }
+                .size(112.dp)
+                .scale(totalEmblemScale)
                 .then(shadowModifier)
                 .clip(squircleShape)
-                .background(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFF0A362E),
-                            Color(0xFF061E1A),
-                            Color(0xFF040F0D)
-                        )
-                    )
-                ),
+                .background(Color(0xFF061614)),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -318,170 +288,89 @@ fun FocusLockStartupSplashOverlay(
                 val bmpW = originalIcon.width
                 val bmpH = originalIcon.height
 
-                // Preserve the full glowing green neon border of focus_lock_original_icon.png
-                // (neon border sits at ~10.2% inset in the 1254x1254 source image; cropping at
-                // 0.088f keeps 100% of the glowing green neon border inside the squircle)
-                val padInsetRatio = 0.088f
+                // Crop outer dark margin so the full neon-bordered squircle fills the 112.dp container cleanly
+                val padInsetRatio = 0.092f
                 val srcCropX = (bmpW * padInsetRatio).roundToInt()
                 val srcCropY = (bmpH * padInsetRatio).roundToInt()
                 val srcCropW = (bmpW * (1f - 2 * padInsetRatio)).roundToInt()
                 val srcCropH = (bmpH * (1f - 2 * padInsetRatio)).roundToInt()
 
-                val padLeftRatio = 0.52f
-                val padTopRatio = 0.46f
-                val padRightRatio = 0.82f
-                val padBottomRatio = 0.82f
+                // 1. Render @drawable/focus_lock_original_icon as a SINGLE, UNIFIED, 100% INTACT image
+                // (No regional clipRect cuts and no sub-rectangle translationY shifts)
+                drawImage(
+                    image = originalIcon,
+                    srcOffset = IntOffset(srcCropX, srcCropY),
+                    srcSize = IntSize(srcCropW, srcCropH),
+                    dstOffset = IntOffset.Zero,
+                    dstSize = IntSize(w.roundToInt(), h.roundToInt())
+                )
 
-                val sweepRightX = w * fClipProgress
-                val padlockLeftX = w * padLeftRatio
-                val padlockTopY = h * padTopRatio
-                val padlockBottomY = h * padBottomRatio
-                val padlockRightX = w * padRightRatio
+                // 2. Layer 1B: Soft, wide diagonal specular light sheen sweeping from top-left (0, 0)
+                // across the "F" down to the bottom-right padlock (width, height) between 60ms and 450ms
+                if (sheenProgress in 0.01f..0.99f) {
+                    val bandHalfSpan = 0.42f
+                    val travel = -bandHalfSpan + (1f + 2f * bandHalfSpan) * sheenProgress
+                    val startFactor = travel - bandHalfSpan
+                    val endFactor = travel + bandHalfSpan
 
-                // Draw subtle base silhouette of the full neon-bordered squircle at 35% alpha
-                // so the green neon border is visible right from 0ms while the laser charges it
-                if (t < 1020f) {
-                    drawImage(
-                        image = originalIcon,
-                        srcOffset = IntOffset(srcCropX, srcCropY),
-                        srcSize = IntSize(srcCropW, srcCropH),
-                        dstOffset = IntOffset.Zero,
-                        dstSize = IntSize(w.roundToInt(), h.roundToInt()),
-                        alpha = 0.28f * stage1Progress
-                    )
-
-                    if (sweepRightX <= padlockLeftX) {
-                        clipRect(left = 0f, top = 0f, right = sweepRightX, bottom = h) {
-                            drawImage(
-                                image = originalIcon,
-                                srcOffset = IntOffset(srcCropX, srcCropY),
-                                srcSize = IntSize(srcCropW, srcCropH),
-                                dstOffset = IntOffset.Zero,
-                                dstSize = IntSize(w.roundToInt(), h.roundToInt())
-                            )
-                        }
-                    } else {
-                        // Left section (full height up to padlockLeftX)
-                        clipRect(left = 0f, top = 0f, right = padlockLeftX, bottom = h) {
-                            drawImage(
-                                image = originalIcon,
-                                srcOffset = IntOffset(srcCropX, srcCropY),
-                                srcSize = IntSize(srcCropW, srcCropH),
-                                dstOffset = IntOffset.Zero,
-                                dstSize = IntSize(w.roundToInt(), h.roundToInt())
-                            )
-                        }
-                        // Top-right section above padlock
-                        clipRect(left = padlockLeftX, top = 0f, right = sweepRightX, bottom = padlockTopY) {
-                            drawImage(
-                                image = originalIcon,
-                                srcOffset = IntOffset(srcCropX, srcCropY),
-                                srcSize = IntSize(srcCropW, srcCropH),
-                                dstOffset = IntOffset.Zero,
-                                dstSize = IntSize(w.roundToInt(), h.roundToInt())
-                            )
-                        }
-                        // Bottom-right section below padlock
-                        clipRect(left = padlockLeftX, top = padlockBottomY, right = sweepRightX, bottom = h) {
-                            drawImage(
-                                image = originalIcon,
-                                srcOffset = IntOffset(srcCropX, srcCropY),
-                                srcSize = IntSize(srcCropW, srcCropH),
-                                dstOffset = IntOffset.Zero,
-                                dstSize = IntSize(w.roundToInt(), h.roundToInt())
-                            )
-                        }
-                        // Right neon border margin beyond padlock
-                        if (sweepRightX > padlockRightX) {
-                            clipRect(left = padlockRightX, top = padlockTopY, right = sweepRightX, bottom = padlockBottomY) {
-                                drawImage(
-                                    image = originalIcon,
-                                    srcOffset = IntOffset(srcCropX, srcCropY),
-                                    srcSize = IntSize(srcCropW, srcCropH),
-                                    dstOffset = IntOffset.Zero,
-                                    dstSize = IntSize(w.roundToInt(), h.roundToInt())
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // After 1020ms, both "F", neon border, and padlock are 100% locked in place
-                    drawImage(
-                        image = originalIcon,
-                        srcOffset = IntOffset(srcCropX, srcCropY),
-                        srcSize = IntSize(srcCropW, srcCropH),
-                        dstOffset = IntOffset.Zero,
-                        dstSize = IntSize(w.roundToInt(), h.roundToInt())
-                    )
-                }
-
-                // Stage 1 Laser Scanner Beam + Spark Nodes along the leading edge (0ms to 650ms)
-                if (stage1Progress < 1f) {
-                    val beamAlpha = (0.78f * (1f - stage1Progress * 0.75f)).coerceIn(0f, 0.85f)
-                    val beamHalfWidth = 10.dp.toPx()
                     drawRect(
-                        brush = Brush.horizontalGradient(
+                        brush = Brush.linearGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                Color(0xFF34D399).copy(alpha = beamAlpha * 0.55f),
-                                Color(0xFFA7F3D0).copy(alpha = beamAlpha),
+                                Color(0xFF6EE7B7).copy(alpha = 0.22f),
+                                Color.White.copy(alpha = 0.28f),
                                 Color.Transparent
                             ),
-                            startX = sweepRightX - beamHalfWidth,
-                            endX = sweepRightX + beamHalfWidth
+                            start = Offset(w * startFactor, h * startFactor),
+                            end = Offset(w * endFactor, h * endFactor)
                         ),
-                        topLeft = Offset(sweepRightX - beamHalfWidth, 0f),
-                        size = Size(beamHalfWidth * 2f, h)
-                    )
-
-                    // Subtle glowing energy nodes riding along the scanner beam
-                    for (nodeIdx in 0..3) {
-                        val yRatio = ((nodeIdx * 0.24f + stage1Progress * 0.6f) % 0.84f) + 0.08f
-                        drawCircle(
-                            color = Color(0xFFD1FAE5).copy(alpha = beamAlpha),
-                            radius = 2.2.dp.toPx(),
-                            center = Offset(sweepRightX, h * yRatio)
-                        )
-                    }
-                }
-
-                // Stage 2: White Padlock Spring Drop-In (360ms to 1020ms)
-                if (t in 360f..1020f) {
-                    val padSrcX = (srcCropX + srcCropW * padLeftRatio).roundToInt()
-                    val padSrcY = (srcCropY + srcCropH * padTopRatio).roundToInt()
-                    val padSrcW = (srcCropW * (padRightRatio - padLeftRatio)).roundToInt()
-                    val padSrcH = (srcCropH * (padBottomRatio - padTopRatio)).roundToInt()
-
-                    val padDstX = (w * padLeftRatio).roundToInt()
-                    val padDstY = (h * padTopRatio + lockOffsetYPx).roundToInt()
-                    val padDstW = (w * (padRightRatio - padLeftRatio)).roundToInt()
-                    val padDstH = (h * (padBottomRatio - padTopRatio)).roundToInt()
-
-                    drawImage(
-                        image = originalIcon,
-                        srcOffset = IntOffset(padSrcX, padSrcY),
-                        srcSize = IntSize(padSrcW, padSrcH),
-                        dstOffset = IntOffset(padDstX, padDstY),
-                        dstSize = IntSize(padDstW, padDstH),
-                        alpha = lockAlpha
+                        topLeft = Offset.Zero,
+                        size = size
                     )
                 }
 
-                // Stage 2B: Twin Neon Emerald-Mint Border Charge around the 28.dp Squircle Perimeter
-                if (borderGlowSweep > 0f) {
-                    val strokeWidthPx = 2.6.dp.toPx()
+                // 3. Layer 2: Precision Padlock Lock-In Radial Glow Ring (280ms to 580ms)
+                // Centered at (cx = size.width * 0.665f, cy = size.height * 0.64f), expanding
+                // subtly from radius = 12.dp to 34.dp while fading out (alpha = 0.45f -> 0f)
+                if (t in 280f..580f) {
+                    val padlockCenter = Offset(w * 0.665f, h * 0.64f)
+                    val minRadiusPx = 12.dp.toPx()
+                    val maxRadiusPx = 34.dp.toPx()
+                    val currentRadiusPx = minRadiusPx + (maxRadiusPx - minRadiusPx) * lockPulseProgress
+                    val ringAlpha = (0.45f * (1f - lockPulseProgress)).coerceIn(0f, 0.45f)
+
+                    // Soft radial mint-white aura + crisp expanding ring around the padlock
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = ringAlpha * 0.55f),
+                                Color(0xFF6EE7B7).copy(alpha = ringAlpha * 0.85f),
+                                Color.Transparent
+                            ),
+                            center = padlockCenter,
+                            radius = currentRadiusPx
+                        ),
+                        radius = currentRadiusPx,
+                        center = padlockCenter
+                    )
+                    drawCircle(
+                        color = Color(0xFFA7F3D0).copy(alpha = ringAlpha),
+                        radius = currentRadiusPx * 0.82f,
+                        center = padlockCenter,
+                        style = Stroke(width = 1.8.dp.toPx())
+                    )
+                }
+
+                // 4. Layer 3B: Subtle Emerald-Mint Squircle Perimeter Border Wave (80ms to 560ms)
+                if (borderWaveSweep > 0f) {
+                    val strokeWidthPx = 2.2.dp.toPx()
                     val cornerRadiusPx = 26.dp.toPx()
-                    val insetPx = 2.5.dp.toPx()
+                    val insetPx = strokeWidthPx / 2f
 
                     val borderPath = Path().apply {
                         addRoundRect(
                             RoundRect(
-                                rect = Rect(
-                                    insetPx,
-                                    insetPx,
-                                    w - insetPx,
-                                    h - insetPx
-                                ),
+                                rect = Rect(insetPx, insetPx, w - insetPx, h - insetPx),
                                 cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
                             )
                         )
@@ -491,47 +380,25 @@ fun FocusLockStartupSplashOverlay(
                     pathMeasure.setPath(borderPath, false)
                     val totalLen = pathMeasure.length
                     val segment = Path()
-                    pathMeasure.getSegment(0f, totalLen * borderGlowSweep, segment, true)
+                    pathMeasure.getSegment(0f, totalLen * borderWaveSweep, segment, true)
 
-                    val glowAlpha = if (t <= 1120f) {
-                        0.92f
+                    val borderAlpha = if (t <= 480f) {
+                        0.85f
                     } else {
-                        (0.92f * (1f - calcProgress(t, 1120f, 1450f, LinearEasing))).coerceIn(0f, 0.92f)
+                        (0.85f * (1f - calcProgress(t, 480f, 680f, LinearEasing))).coerceIn(0f, 0.85f)
                     }
-
-                    if (glowAlpha > 0f) {
+                    if (borderAlpha > 0f) {
                         drawPath(
                             path = segment,
-                            color = Color(0xFF4BF5C2).copy(alpha = glowAlpha),
+                            color = Color(0xFF4BF5C2).copy(alpha = borderAlpha),
                             style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
                         )
                     }
                 }
-
-                // Stage 2C: Diagonal Glass Reflection Shimmer across the 3D "F" and Padlock (700ms to 1220ms)
-                if (sheenProgress in 0.01f..0.99f) {
-                    val diagSpan = w * 2.6f
-                    val sheenCenter = -w * 0.65f + diagSpan * sheenProgress
-                    drawRect(
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color(0x24FFFFFF),
-                                Color(0x3D6EE7B7),
-                                Color(0x24FFFFFF),
-                                Color.Transparent
-                            ),
-                            start = Offset(sheenCenter - w * 0.38f, 0f),
-                            end = Offset(sheenCenter + w * 0.38f, h)
-                        ),
-                        topLeft = Offset.Zero,
-                        size = size
-                    )
-                }
             }
         }
 
-        // Stage 3: Classy Bottom Title, Expanding Neon Laser Underline & Status Subtitle
+        // Layer 3C: Bottom "FOCUS LOCK" + "ATTENTION SHIELD" Typography (0ms to 650ms)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -542,7 +409,7 @@ fun FocusLockStartupSplashOverlay(
         ) {
             Text(
                 text = "FOCUS LOCK",
-                fontSize = 19.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = dynamicLetterSpacing,
                 color = titleTextColor,
@@ -551,12 +418,11 @@ fun FocusLockStartupSplashOverlay(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Center-expanding glowing emerald laser line
-            val lineFraction = calcProgress(t, 380f, 1020f, FastOutSlowInEasing)
+            val lineFraction = calcProgress(t, 120f, 540f, FastOutSlowInEasing)
             Box(
                 modifier = Modifier
-                    .width((110.dp * lineFraction).coerceAtLeast(1.dp))
-                    .height(1.8.dp)
+                    .width((104.dp * lineFraction).coerceAtLeast(1.dp))
+                    .height(1.6.dp)
                     .alpha(nameProgress)
                     .background(
                         brush = Brush.horizontalGradient(
@@ -578,7 +444,7 @@ fun FocusLockStartupSplashOverlay(
                 text = "ATTENTION SHIELD",
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
-                letterSpacing = 2.8.sp,
+                letterSpacing = 2.6.sp,
                 color = subtitleTextColor,
                 modifier = Modifier.alpha(subtitleProgress * 0.85f)
             )
@@ -586,7 +452,12 @@ fun FocusLockStartupSplashOverlay(
     }
 }
 
-private fun calcProgress(t: Float, start: Float, end: Float, easing: Easing = FastOutSlowInEasing): Float {
+private fun calcProgress(
+    t: Float,
+    start: Float,
+    end: Float,
+    easing: Easing = FastOutSlowInEasing
+): Float {
     if (t <= start) return 0f
     if (t >= end) return 1f
     val fraction = ((t - start) / (end - start)).coerceIn(0f, 1f)

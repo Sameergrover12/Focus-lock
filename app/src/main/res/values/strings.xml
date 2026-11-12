@@ -3,4 +3,5 @@
     <string name="accessibility_service_description">Focus Lock uses this service to detect foreground apps, monitor screen time limits, and protect you from configured distractions, blocked websites, and keywords.</string>
     <string name="foreground_service_notification_title">Focus Lock is Active</string>
     <string name="foreground_service_notification_desc">Enforcing focus rules and tracking screen time limits locally on your device.</string>
+    <string name="default_web_client_id" translatable="false">582909401822-va6q6bhbubp23arcivuu7d2o2dt0ctoo.apps.googleusercontent.com</string>
 </resources>

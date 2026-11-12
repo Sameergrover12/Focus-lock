@@ -661,19 +661,38 @@ private fun CloudBackupScreen(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         isSigningIn = false
+        val pickedAccountEmail = result.data
+            ?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        if (result.resultCode == android.app.Activity.RESULT_OK && !pickedAccountEmail.isNullOrBlank()) {
+            val cachedToken = runCatching {
+                val last = GoogleSignIn.getLastSignedInAccount(context)
+                if (last?.email.equals(pickedAccountEmail, ignoreCase = true)) last?.idToken else null
+            }.getOrNull()
+            Toast.makeText(context, "Connected as $pickedAccountEmail", Toast.LENGTH_SHORT).show()
+            viewModel?.onGoogleSignInSuccess(pickedAccountEmail, cachedToken) {
+                onComplete()
+            } ?: onComplete()
+            return@rememberLauncherForActivityResult
+        }
+
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            val email = account?.email ?: "User"
+            val email = account?.email ?: pickedAccountEmail ?: "User"
             val idToken = account?.idToken
             Toast.makeText(context, "Connected as $email", Toast.LENGTH_SHORT).show()
             viewModel?.onGoogleSignInSuccess(email, idToken) {
                 onComplete()
             } ?: onComplete()
         } catch (e: Exception) {
-            val lastAccount = GoogleSignIn.getLastSignedInAccount(context)
-            if (lastAccount?.email != null) {
-                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken) {
+            val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
+            val fallbackEmail = pickedAccountEmail ?: lastAccount?.email
+            if (!fallbackEmail.isNullOrBlank()) {
+                Toast.makeText(context, "Connected as $fallbackEmail", Toast.LENGTH_SHORT).show()
+                viewModel?.onGoogleSignInSuccess(fallbackEmail, lastAccount?.idToken) {
                     onComplete()
                 } ?: onComplete()
             } else {
@@ -684,13 +703,27 @@ private fun CloudBackupScreen(
 
     fun launchGoogleSignIn() {
         isSigningIn = true
-        val webClientId = BackupManager.getDefaultWebClientId(context)
-        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(webClientId)
-            .requestEmail()
-
-        val client = GoogleSignIn.getClient(context, gsoBuilder.build())
-        googleSignInLauncher.launch(client.signInIntent)
+        try {
+            @Suppress("DEPRECATION")
+            val accountPickerIntent = android.accounts.AccountManager.newChooseAccountIntent(
+                null,
+                null,
+                arrayOf("com.google"),
+                false,
+                null,
+                null,
+                null,
+                null
+            )
+            googleSignInLauncher.launch(accountPickerIntent)
+        } catch (_: Exception) {
+            val webClientId = BackupManager.getDefaultWebClientId(context)
+            val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestIdToken(webClientId)
+                .requestEmail()
+            val client = GoogleSignIn.getClient(context, gsoBuilder.build())
+            googleSignInLauncher.launch(client.signInIntent)
+        }
     }
 
     Box(

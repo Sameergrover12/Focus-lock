@@ -112,7 +112,8 @@ class BackupManager(
             "intercept_tracker_prefs",
             "focus_notification_messages",
             "time_integrity_prefs",
-            "focus_lock_prefs"
+            "focus_lock_prefs",
+            "historical_dwell_cache"
         )
 
         private val sharedPrefsListenerHolder = mutableListOf<SharedPreferences.OnSharedPreferenceChangeListener>()
@@ -133,7 +134,7 @@ class BackupManager(
                 val value = context.getString(resId)
                 if (value.isNotBlank()) return value
             }
-            return "254965484003-eb0a710363f212767794a0.apps.googleusercontent.com"
+            return "582909401822-va6q6bhbubp23arcivuu7d2o2dt0ctoo.apps.googleusercontent.com"
         }
 
         fun parseScheduleHourMinute(timeStr: String, defaultHour: Int, defaultMinute: Int): Pair<Int, Int> {
@@ -522,9 +523,16 @@ class BackupManager(
                     editor.clear()
                 }
 
+                val isDwellCacheFile = prefName == "historical_dwell_cache"
+
                 for ((rawKey, rawVal) in entriesMap) {
                     val key = rawKey as? String ?: continue
                     if (rawVal == null) continue
+                    val shouldMaxMergeNumeric = !wipeExistingBeforeRestore && (
+                        isDwellCacheFile ||
+                            key.startsWith("daily_dwell_") ||
+                            key.startsWith("dwell_day_")
+                        )
 
                     when (rawVal) {
                         is String -> {
@@ -535,11 +543,21 @@ class BackupManager(
                                 }
                                 rawVal.startsWith(TYPED_INT_PREFIX) -> {
                                     val v = rawVal.removePrefix(TYPED_INT_PREFIX).toIntOrNull() ?: 0
-                                    editor.putInt(key, v)
+                                    val finalInt = if (shouldMaxMergeNumeric) {
+                                        maxOf(sp.getInt(key, 0), v)
+                                    } else {
+                                        v
+                                    }
+                                    editor.putInt(key, finalInt)
                                 }
                                 rawVal.startsWith(TYPED_LONG_PREFIX) -> {
                                     val v = rawVal.removePrefix(TYPED_LONG_PREFIX).toLongOrNull() ?: 0L
-                                    editor.putLong(key, v)
+                                    val finalLong = if (shouldMaxMergeNumeric) {
+                                        maxOf(sp.getLong(key, 0L), v)
+                                    } else {
+                                        v
+                                    }
+                                    editor.putLong(key, finalLong)
                                 }
                                 rawVal.startsWith(TYPED_FLOAT_PREFIX) -> {
                                     val v = rawVal.removePrefix(TYPED_FLOAT_PREFIX).toFloatOrNull() ?: 0f
@@ -564,8 +582,14 @@ class BackupManager(
                             }
                         }
                         is Boolean -> editor.putBoolean(key, rawVal)
-                        is Int -> editor.putInt(key, rawVal)
-                        is Long -> editor.putLong(key, rawVal)
+                        is Int -> {
+                            val finalInt = if (shouldMaxMergeNumeric) maxOf(sp.getInt(key, 0), rawVal) else rawVal
+                            editor.putInt(key, finalInt)
+                        }
+                        is Long -> {
+                            val finalLong = if (shouldMaxMergeNumeric) maxOf(sp.getLong(key, 0L), rawVal) else rawVal
+                            editor.putLong(key, finalLong)
+                        }
                         is Double -> editor.putFloat(key, rawVal.toFloat())
                         is Float -> editor.putFloat(key, rawVal)
                         is Collection<*> -> {
@@ -1537,6 +1561,38 @@ class BackupManager(
         return usageCount > 0 || screenTimeCount > 0 || hasPrefs
     }
 
+    private fun getNonAnonymousFirebaseUid(): String? {
+        return try {
+            val user = FirebaseAuth.getInstance().currentUser
+            if (user != null && !user.isAnonymous && !user.uid.isNullOrBlank()) {
+                user.uid
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun ensureFirebaseAuthSessionIfPossible(idToken: String? = null) {
+        if (!idToken.isNullOrBlank()) {
+            try {
+                val credential = GoogleAuthProvider.getCredential(idToken, null)
+                FirebaseAuth.getInstance().signInWithCredential(credential).await()
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "FirebaseAuth signInWithCredential fallback: ${e.message}")
+            }
+        }
+        try {
+            if (FirebaseAuth.getInstance().currentUser == null) {
+                FirebaseAuth.getInstance().signInAnonymously().await()
+            }
+        } catch (_: Exception) {
+            // Anonymous auth is optional; Firestore paths use deterministic email/non-anonymous UID
+        }
+    }
+
     /**
      * Uploads 100% of user data to Firestore immediately.
      * Protected by:
@@ -1561,13 +1617,14 @@ class BackupManager(
         try {
             withTimeout(CLOUD_TIMEOUT_MS) {
                 FirebaseInitializer.ensureInitialized(context)
+                ensureFirebaseAuthSessionIfPossible(null)
                 val normalizedEmail = email.trim().lowercase()
                 if (normalizedEmail.isBlank()) {
                     throw IllegalArgumentException("Email cannot be empty")
                 }
 
                 val firestore = FirebaseFirestore.getInstance()
-                val uid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                val uid = getNonAnonymousFirebaseUid()
                 val primaryAccountKey = if (!uid.isNullOrBlank()) uid else normalizedEmail
 
                 val localRuleCount = getLocalUserRuleCountSync()
@@ -1610,13 +1667,13 @@ class BackupManager(
                     "focus_lock_data" to stateMap
                 )
 
-                // 1. Write to users/{uid} (or users/{normalizedEmail}) with SetOptions.merge()
+                // 1. Write to users/{primaryAccountKey} with SetOptions.merge()
                 firestore.collection(FIRESTORE_USERS_COLLECTION)
                     .document(primaryAccountKey)
                     .set(backupDataMap, SetOptions.merge())
                     .await()
 
-                // 2. Write to users/{uid}/focus_lock_backup/master_vault
+                // 2. Write to users/{primaryAccountKey}/focus_lock_backup/master_vault
                 firestore.collection(FIRESTORE_USERS_COLLECTION)
                     .document(primaryAccountKey)
                     .collection(FIRESTORE_BACKUP_COLLECTION)
@@ -1624,8 +1681,9 @@ class BackupManager(
                     .set(backupDataMap)
                     .await()
 
-                // 3. Also write to normalizedEmail document if uid differs, for cross-version compatibility
-                if (!uid.isNullOrBlank() && uid != normalizedEmail) {
+                // 3. Always also write to users/{normalizedEmail} if primaryAccountKey is a Firebase UID,
+                // so cross-keystore APKs (e.g. GitHub Actions vs local debug) always find the exact same vault!
+                if (primaryAccountKey != normalizedEmail) {
                     runCatching {
                         firestore.collection(FIRESTORE_USERS_COLLECTION)
                             .document(normalizedEmail)
@@ -1709,6 +1767,13 @@ class BackupManager(
                 firestore.collection(FIRESTORE_USERS_COLLECTION)
                     .document(normalizedEmail)
             )
+            // Legacy users/{email}/backups/focus_lock_full_state
+            candidateRefs.add(
+                firestore.collection(FIRESTORE_USERS_COLLECTION)
+                    .document(normalizedEmail)
+                    .collection(FIRESTORE_LEGACY_SUBCOLLECTION)
+                    .document(FIRESTORE_LEGACY_DOC_ID)
+            )
         }
 
         var newestDoc: Map<String, Any?>? = null
@@ -1746,13 +1811,14 @@ class BackupManager(
         try {
             withTimeout(CLOUD_TIMEOUT_MS) {
                 FirebaseInitializer.ensureInitialized(context)
+                ensureFirebaseAuthSessionIfPossible(null)
                 val normalizedEmail = email.trim().lowercase()
                 if (normalizedEmail.isBlank()) {
                     throw IllegalArgumentException("Email cannot be empty")
                 }
 
                 val firestore = FirebaseFirestore.getInstance()
-                val uid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                val uid = getNonAnonymousFirebaseUid()
 
                 val cloudData = fetchCloudDocumentWithFallback(firestore, uid, normalizedEmail)
 
@@ -1782,8 +1848,6 @@ class BackupManager(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Cloud restore failed for $email", e)
-            // Even if network is offline on cold start, unlock session only if we didn't wipe local data,
-            // and keep anti-wipe guard active so an empty local state never overwrites cloud later.
             hasUserExplicitlyDeletedLastRuleAfterRestore = false
             isRestoreCompletedForCurrentSession = true
             Result.failure(e)
@@ -1793,7 +1857,7 @@ class BackupManager(
     }
 
     /**
-     * Authenticates with Firebase using Google ID Token, enforces strict per-Gmail account
+     * Authenticates with Firebase using Google ID Token (when available), enforces strict per-Gmail account
      * isolation (`auth_session_meta` -> `last_uid`), wipes previous account's local state
      * if switching accounts (`uid_A -> uid_B`), restores the target account's backup from
      * Firestore `Source.SERVER`, and reloads all live in-memory state at 0ms.
@@ -1809,31 +1873,23 @@ class BackupManager(
         FirebaseInitializer.ensureInitialized(context)
 
         // Step 2: Sign in to FirebaseAuth with the Google credential if idToken is available
-        if (!idToken.isNullOrBlank()) {
-            try {
-                val credential = GoogleAuthProvider.getCredential(idToken, null)
-                FirebaseAuth.getInstance().signInWithCredential(credential).await()
-            } catch (e: Exception) {
-                Log.w(TAG, "FirebaseAuth signInWithCredential fallback to email key: ${e.message}")
-            }
-        }
+        ensureFirebaseAuthSessionIfPossible(idToken)
 
-        val currentUid = try {
-            FirebaseAuth.getInstance().currentUser?.uid
-        } catch (_: Exception) {
-            null
-        } ?: normalizedEmail
+        // Always use deterministic account identifier (normalizedEmail) for session tracking so
+        // switching keystores or missing OAuth idTokens never causes false account-switch wipes.
+        val canonicalAccountUid = normalizedEmail
 
         val metaPrefs = context.getSharedPreferences(AUTH_SESSION_META_PREFS, Context.MODE_PRIVATE)
         val lastUid = metaPrefs.getString(KEY_LAST_UID, null)
             ?: metaPrefs.getString(KEY_LAST_ACTIVE_GMAIL_UID, null)
 
-        val isSwitchingAccounts = (lastUid != null && lastUid != currentUid) ||
-                (!previousEmail.isNullOrBlank() && previousEmail != normalizedEmail)
+        val isSwitchingAccounts = (!lastUid.isNullOrBlank() && !lastUid.equals(canonicalAccountUid, ignoreCase = true) &&
+                !lastUid.equals(getNonAnonymousFirebaseUid(), ignoreCase = true)) ||
+                (!previousEmail.isNullOrBlank() && !previousEmail.equals(normalizedEmail, ignoreCase = true))
 
         // Step 3: If switching from Account A to Account B, completely wipe Account A's local data first
         if (isSwitchingAccounts) {
-            Log.i(TAG, "Account switch detected ($lastUid / $previousEmail -> $currentUid / $normalizedEmail). Wiping local state for isolation.")
+            Log.i(TAG, "Account switch detected ($lastUid / $previousEmail -> $canonicalAccountUid). Wiping local state for isolation.")
             isRestoringFromCloud.set(true)
             try {
                 wipeAllLocalAppSharedPreferences(context)
@@ -1847,8 +1903,8 @@ class BackupManager(
 
         // Step 4: Record the new active UID in auth_session_meta synchronously via .commit()
         metaPrefs.edit()
-            .putString(KEY_LAST_UID, currentUid)
-            .putString(KEY_LAST_ACTIVE_GMAIL_UID, currentUid)
+            .putString(KEY_LAST_UID, canonicalAccountUid)
+            .putString(KEY_LAST_ACTIVE_GMAIL_UID, canonicalAccountUid)
             .commit()
 
         preferencesRepository.setConnectedGmailAccount(normalizedEmail)

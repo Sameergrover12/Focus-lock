@@ -65,18 +65,21 @@ import com.example.ui.viewmodel.FocusViewModelFactory
 import com.example.ui.webwords.WebKeywordsScreen
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
 import com.example.receiver.FocusNotificationScheduler
 import com.example.ui.splash.FocusLockStartupSplashOverlay
 import com.example.ui.theme.BaseThemeMode
 
-private var hasPlayedColdStartAnimation by mutableStateOf(false)
-
 class MainActivity : ComponentActivity() {
+
+    private var launcherTapReplayTrigger by mutableIntStateOf(0)
+    private var wasStoppedBeforeNextIntent = false
 
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -90,6 +93,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            splashScreen.setOnExitAnimationListener { splashScreenView ->
+                splashScreenView.remove()
+            }
+        }
         super.onCreate(savedInstanceState)
         enableHighRefreshRate()
         enableEdgeToEdge()
@@ -122,6 +130,14 @@ class MainActivity : ComponentActivity() {
             val isSystemInDark = isSystemInDarkTheme()
             val isEffectiveDarkTheme = baseThemeMode.resolve(isSystemInDark) != BaseThemeMode.LIGHT
 
+            var hasPlayedLaunchAnimation by rememberSaveable { mutableStateOf(false) }
+
+            LaunchedEffect(launcherTapReplayTrigger) {
+                if (launcherTapReplayTrigger > 0) {
+                    hasPlayedLaunchAnimation = false
+                }
+            }
+
             FocusLockTheme(
                 baseThemeMode = baseThemeMode,
                 secondaryPalette = secondaryPalette
@@ -139,17 +155,29 @@ class MainActivity : ComponentActivity() {
                         MainFocusApp(viewModel = viewModel)
                     }
 
-                    // 2. Startup Animation Overlay ALWAYS on top at cold start
-                    if (!hasPlayedColdStartAnimation) {
+                    // 2. Single-window startup animation overlay tied to Activity instance
+                    if (!hasPlayedLaunchAnimation) {
                         FocusLockStartupSplashOverlay(
                             isDarkTheme = isEffectiveDarkTheme,
                             onAnimationFinished = {
-                                hasPlayedColdStartAnimation = true
+                                hasPlayedLaunchAnimation = true
                             }
                         )
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (wasStoppedBeforeNextIntent &&
+            intent.action == Intent.ACTION_MAIN &&
+            intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+        ) {
+            wasStoppedBeforeNextIntent = false
+            launcherTapReplayTrigger++
         }
     }
 
@@ -185,6 +213,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        wasStoppedBeforeNextIntent = false
         com.example.util.AppForegroundTracker.isFocusLockInForeground = true
         if (com.example.util.PermissionHelper.isUsageStatsPermissionGranted(this)) {
             viewModel.refreshDailyUsageStats()
@@ -194,6 +223,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        wasStoppedBeforeNextIntent = true
         com.example.util.AppForegroundTracker.isFocusLockInForeground = false
     }
 }

@@ -83,6 +83,7 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var todayUsageCache = mapOf<String, Int>()
     @Volatile private var activeEmergencyBreakUntil = 0L
     @Volatile private var cachedReclaimedCommitment: String? = null
+    @Volatile private var isCacheInitialized = false
 
     // Pre-indexed O(1) structures updated on background thread (Dispatchers.Default)
     @Volatile private var blockedAppsByPackage = mapOf<String, BlockedApp>()
@@ -132,30 +133,15 @@ class FocusAccessibilityService : AccessibilityService() {
         lastEvaluatedPackage = null
         Log.d(TAG, "FocusAccessibilityService connected")
 
-        val scope = ensureActiveScope()
         configureServiceInfo()
 
-        // Inside onServiceConnected(), launch a coroutine that collects the Flow<List<String>>
-        // from the Room Database and updates cachedBlockedPackages in local memory
-        val app = application as? FocusApplication
-        if (app != null) {
-            scope.launch {
-                try {
-                    val initial = app.repository.getAllBlockedPackageNamesSync()
-                    cachedBlockedPackages = initial.toSet()
-                    Log.d(TAG, "Initial cachedBlockedPackages size: ${cachedBlockedPackages.size}")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed initial sync read of blocked packages", e)
-                }
-                app.repository.allBlockedPackageNames.collect { list ->
-                    cachedBlockedPackages = list.toSet()
-                    Log.d(TAG, "Updated cachedBlockedPackages: ${cachedBlockedPackages.size} packages")
-                }
-            }
+        // Start listening to database changes if not already started by onCreate()
+        val needsRuleInit = synchronized(ruleCollectionJobs) {
+            ruleCollectionJobs.isEmpty() || ruleCollectionJobs.none { it.isActive }
         }
-
-        // Start listening to database changes to maintain warm memory caches
-        observeDatabaseRules()
+        if (needsRuleInit) {
+            observeDatabaseRules()
+        }
 
         // Start lightweight periodic rescan backstop for feed-style apps and coalesced events
         startPeriodicContentScanner()
@@ -202,8 +188,6 @@ class FocusAccessibilityService : AccessibilityService() {
             info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                     AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_FOCUSED or
-                    AccessibilityEvent.TYPE_VIEW_SCROLLED or
                     AccessibilityEvent.TYPE_VIEW_CLICKED
             info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             info.flags = info.flags or
@@ -335,22 +319,28 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun observeDatabaseRules() {
         val app = application as? FocusApplication ?: return
-        val repo = app.repository
-        val prefRepo = app.preferencesRepository
         val scope = ensureActiveScope()
 
         synchronized(ruleCollectionJobs) {
             ruleCollectionJobs.forEach { it.cancel() }
             ruleCollectionJobs.clear()
 
-            // Immediate synchronous pre-load on IO to populate all caches instantly
-            scope.launch {
+            // Immediate pre-load on IO (never touches Room or SharedPreferences on Main thread)
+            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
                 try {
+                    val repo = app.repository
+                    val prefRepo = app.preferencesRepository
+
                     val syncPackages = repo.getAllBlockedPackageNamesSync()
                     cachedBlockedPackages = syncPackages.toSet()
                     val syncApps = repo.getAllBlockedAppsSync()
                     blockedAppsCache = syncApps
                     blockedAppsByPackage = syncApps.associateBy { it.packageName }
+                    for (blockedApp in syncApps) {
+                        if (blockedApp.appName.isNotBlank()) {
+                            appNameCache[blockedApp.packageName] = blockedApp.appName
+                        }
+                    }
 
                     val syncLimits = repo.getAllScreenTimeLimitsSync()
                     screenLimitsCache = syncLimits
@@ -397,31 +387,40 @@ class FocusAccessibilityService : AccessibilityService() {
                     } else false
                     isClockTamperProtectionEnabled = true
                     cachedReclaimedCommitment = prefRepo.syncPrefs.getString("reclaimed_commitment", "My Focus")
+                    isCacheInitialized = true
 
                     Log.d(TAG, "Preloaded ${syncPackages.size} blocked packages, ${syncLimits.size} limits, ${syncGroups.size} groups into memory")
                 } catch (e: Exception) {
+                    isCacheInitialized = true
                     Log.e(TAG, "Error during synchronous pre-load of rules", e)
                 }
             }
 
             // Stream 1: Dedicated Flow<List<String>> of blocked package names
-            ruleCollectionJobs += scope.launch {
-                repo.allBlockedPackageNames.collect { packageNames ->
+            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
+                app.repository.allBlockedPackageNames.collect { packageNames ->
                     val set = packageNames.toSet()
                     cachedBlockedPackages = set
+                    isCacheInitialized = true
                     Log.d(TAG, "Flow update allBlockedPackageNames: ${set.size} packages")
                 }
             }
 
             // Stream 2: Full BlockedApp entities stream
-            ruleCollectionJobs += scope.launch {
-                repo.allBlockedApps.collect { list ->
+            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
+                app.repository.allBlockedApps.collect { list ->
                     blockedAppsCache = list
                     val map = list.associateBy { it.packageName }
                     val set = list.map { it.packageName }.toSet()
+                    for (blockedApp in list) {
+                        if (blockedApp.appName.isNotBlank()) {
+                            appNameCache[blockedApp.packageName] = blockedApp.appName
+                        }
+                    }
                     withContext(Dispatchers.Default) {
                         blockedAppsByPackage = map
                         cachedBlockedPackages = set
+                        isCacheInitialized = true
                     }
                     Log.d(TAG, "Flow update allBlockedApps: ${list.size} apps")
                 }
@@ -429,7 +428,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Stream 3: Screen time limits
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                repo.allScreenTimeLimits.collect { list ->
+                app.repository.allScreenTimeLimits.collect { list ->
                     screenLimitsCache = list
                     withContext(Dispatchers.Default) {
                         screenLimitsByPackage = list.associateBy { it.packageName }
@@ -439,7 +438,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Stream 4: Groups
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                repo.allGroups.collect { list ->
+                app.repository.allGroups.collect { list ->
                     groupsCache = list
                     withContext(Dispatchers.Default) {
                         groupsById = list.associateBy { it.id }
@@ -449,7 +448,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Stream 5: Group apps
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                repo.allGroupApps.collect { list ->
+                app.repository.allGroupApps.collect { list ->
                     groupAppsCache = list
                     withContext(Dispatchers.Default) {
                         val map = mutableMapOf<String, MutableList<Long>>()
@@ -463,7 +462,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Stream 6: Websites
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                repo.allBlockedWebsites.collect { list ->
+                app.repository.allBlockedWebsites.collect { list ->
                     blockedWebsitesCache = list
                     withContext(Dispatchers.Default) {
                         compiledWebsites = list.mapNotNull { rule ->
@@ -478,7 +477,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Stream 7: Keywords
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                repo.allBlockedKeywords.collect { list ->
+                app.repository.allBlockedKeywords.collect { list ->
                     blockedKeywordsCache = list
                     withContext(Dispatchers.Default) {
                         compiledKeywords = list.mapNotNull { rule ->
@@ -493,17 +492,17 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Master switch
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                prefRepo.isMasterEnabled.collect { isMasterEnabled = it }
+                app.preferencesRepository.isMasterEnabled.collect { isMasterEnabled = it }
             }
 
             // Invincible mode
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                prefRepo.isInvincibleModeEnabled.collect { isInvincibleModeEnabled = it }
+                app.preferencesRepository.isInvincibleModeEnabled.collect { isInvincibleModeEnabled = it }
             }
 
             // Cheat protection / Strict mode
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                prefRepo.isCheatProtectionEnabled.collect { isCheatProtectionEnabled = it }
+                app.preferencesRepository.isCheatProtectionEnabled.collect { isCheatProtectionEnabled = it }
             }
 
             // Clock tamper protection (always active, cannot be disabled)
@@ -511,7 +510,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Emergency break
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                prefRepo.activeEmergencyBreakUntil.collect { until ->
+                app.preferencesRepository.activeEmergencyBreakUntil.collect { until ->
                     activeEmergencyBreakUntil = until
                     scheduleEmergencySnapback(until)
                 }
@@ -519,12 +518,12 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Reclaimed commitment
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                prefRepo.reclaimedCommitment.collect { cachedReclaimedCommitment = it }
+                app.preferencesRepository.reclaimedCommitment.collect { cachedReclaimedCommitment = it }
             }
 
             // Today usage logs
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                repo.getTodayUsageLogs().collect { logs ->
+                app.repository.getTodayUsageLogs().collect { logs ->
                     todayUsageCache = logs.associate { it.packageName to it.minutesUsed }
                 }
             }
@@ -706,13 +705,24 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Guard A: Drop Scroll & Hover Noise at Line 1 of onAccessibilityEvent
+        val type = event?.eventType ?: return
+        if (type == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
+            type == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+            type == AccessibilityEvent.TYPE_VIEW_HOVER_ENTER ||
+            type == AccessibilityEvent.TYPE_VIEW_HOVER_EXIT ||
+            type == AccessibilityEvent.TYPE_ANNOUNCEMENT ||
+            type == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+        ) {
+            return
+        }
+
         // Fix 1: Completely Pause AccessibilityService While Focus Lock Is in the Foreground
         if (AppForegroundTracker.isFocusLockInForeground) {
             return
         }
 
-        // a. Immediately return if event == null or event.packageName == null
-        if (event == null) return
+        // a. Immediately return if event.packageName == null
         val eventPkg = event.packageName?.toString() ?: return
 
         val myPackageName = packageName
@@ -731,7 +741,7 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        val eventType = event.eventType
+        val eventType = type
 
         // -------------------------------------------------------------------------
         // 1. SURGICAL SETTINGS ANTI-TAMPER PROTECTION (24/7 Active, Independent of Breaks):
@@ -791,6 +801,15 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         if (!isMasterEnabled) return
+
+        // Guard B: If cold-start rule caches are still initializing on IO, do not stall the Main thread;
+        // offload evaluation to Dispatchers.Default immediately.
+        if (!isCacheInitialized) {
+            serviceScope.launch(Dispatchers.Default) {
+                handleEventInBackground(eventPkg, eventType)
+            }
+            return
+        }
 
         // d. Throttle Window Content Scans: run at most once every 300ms and avoid recursive scans for unmonitored apps
         if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
@@ -1956,6 +1975,7 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun getAppNameFromPackage(pkgName: String): String {
+        blockedAppsByPackage[pkgName]?.appName?.takeIf { it.isNotBlank() }?.let { return it }
         return appNameCache.getOrPut(pkgName) {
             try {
                 val pm = packageManager

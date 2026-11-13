@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -104,6 +103,15 @@ class BlockedActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
 
         val blockedPkg = intent.getStringExtra("BLOCKED_PACKAGE") ?: intent.getStringExtra(EXTRA_PACKAGE)
         val title = intent.getStringExtra(EXTRA_TITLE) ?: blockedPkg ?: "Restricted"
@@ -289,7 +297,6 @@ fun BlockedScreen(
             .fillMaxSize()
             .graphicsLayer { alpha = entranceAlpha }
             .background(MaterialTheme.colorScheme.background)
-            .systemBarsPadding()
             .padding(horizontal = 28.dp, vertical = 24.dp)
             .testTag("blocked_black_interstitial")
     ) {

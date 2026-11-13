@@ -37,6 +37,57 @@ object SettingsTamperDetector {
         "activate this device admin app"
     )
 
+    private val KNOWN_SETTINGS_PACKAGES = setOf(
+        "com.android.settings",
+        "com.samsung.android.settings",
+        "com.google.android.settings",
+        "com.coloros.settings",
+        "com.oplus.settings",
+        "com.oppo.settings",
+        "com.vivo.settings",
+        "com.oneplus.settings",
+        "com.xiaomi.settings",
+        "com.miui.settings"
+    )
+
+    fun isSettingsAppPackage(pkgName: String?): Boolean {
+        if (pkgName.isNullOrBlank()) return false
+        val lower = pkgName.lowercase().trim()
+        return KNOWN_SETTINGS_PACKAGES.contains(lower) || lower.endsWith(".settings")
+    }
+
+    fun isTamperConfirmationDialog(texts: List<String>, appPackageName: String): Boolean {
+        if (texts.isEmpty()) return false
+        val textsLower = texts.map { it.lowercase().trim() }
+        if (isSafePermissionScreen(textsLower)) return false
+
+        val targetPkgLower = appPackageName.lowercase().trim()
+        val hasFocusLockName = textsLower.any {
+            it.contains("focus lock") || (targetPkgLower.isNotEmpty() && it.contains(targetPkgLower))
+        }
+        if (!hasFocusLockName) return false
+
+        val hasStopOrTurnOff = textsLower.any {
+            it.contains("turn off") ||
+                it.contains("stop focus lock") ||
+                it == "stop" ||
+                it.contains("stop?") ||
+                it.contains("will stop") ||
+                it.contains("deactivate") ||
+                it.contains("force stop")
+        }
+        val hasCancelAction = textsLower.any {
+            it == "cancel" || it.contains("cancel") || it == "deny" || it.contains("keep on")
+        }
+        val hasDirectConfirmationPhrase = textsLower.any {
+            it.contains("turn off focus lock") ||
+                it.contains("stop focus lock") ||
+                it.contains("deactivate this device admin app")
+        }
+
+        return hasDirectConfirmationPhrase || (hasStopOrTurnOff && hasCancelAction)
+    }
+
     fun isSafePermissionScreen(textsLower: List<String>): Boolean {
         // If this screen contains Accessibility toggle markers, it's not a safe permission screen
         val hasAccessibilityMarker = textsLower.any {
@@ -205,7 +256,7 @@ object SettingsTamperDetector {
         val hasSpecificToggleIndicator = textsLower.any { text ->
             specificToggleIndicators.any { ind -> text.contains(ind) }
         }
-        if (hasSpecificToggleIndicator) {
+        if (hasSpecificToggleIndicator || isTamperConfirmationDialog(texts, appPackageName)) {
             return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
         }
 

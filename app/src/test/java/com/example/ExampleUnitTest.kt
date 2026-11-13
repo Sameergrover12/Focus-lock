@@ -879,6 +879,42 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testOemSettingsPackageAndTamperConfirmationDialog() {
+        val appPkg = "com.aistudio.focuslock.fclk"
+
+        // OEM Settings packages supported cleanly without intercepting normal apps
+        assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.android.settings"))
+        assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.samsung.android.settings"))
+        assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.coloros.settings"))
+        assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.oplus.settings"))
+        assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.google.android.settings"))
+        assertFalse(SettingsTamperDetector.isSettingsAppPackage("com.whatsapp"))
+        assertFalse(SettingsTamperDetector.isSettingsAppPackage("com.android.systemui"))
+        assertFalse(SettingsTamperDetector.isSettingsAppPackage(null))
+
+        // Confirmation dialogs for disabling Focus Lock must be caught immediately
+        val turnOffDialog = listOf("Turn off Focus Lock?", "Tapping Turn off will stop Focus Lock from observing your actions.", "Cancel", "Turn off")
+        assertTrue(SettingsTamperDetector.isTamperConfirmationDialog(turnOffDialog, appPkg))
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(turnOffDialog, false, true, appPkg)
+        )
+
+        val stopDialog = listOf("Stop Focus Lock?", "Cancel", "Stop")
+        assertTrue(SettingsTamperDetector.isTamperConfirmationDialog(stopDialog, appPkg))
+
+        // Downloaded apps list, safe permission dialogs, and other apps (e.g. TalkBack) MUST NOT trigger
+        val downloadedList = listOf("Downloaded apps", "Focus Lock", "On", "TalkBack", "Off")
+        assertFalse(SettingsTamperDetector.isTamperConfirmationDialog(downloadedList, appPkg))
+
+        val talkBackDialog = listOf("Turn off TalkBack?", "Cancel", "Turn off")
+        assertFalse(SettingsTamperDetector.isTamperConfirmationDialog(talkBackDialog, appPkg))
+
+        val safeDeviceAdminActivate = listOf("Device admin", "Focus Lock", "Activate this device admin app", "Cancel")
+        assertFalse(SettingsTamperDetector.isTamperConfirmationDialog(safeDeviceAdminActivate, appPkg))
+    }
+
+    @Test
     fun testHistoricalDwellMaxOfCloudMerge() {
         // Verifies that a valid local dwell is never overwritten by a 0 or smaller value during restore
         val localDwell = 145

@@ -42,15 +42,6 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
 
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.util.TypedValue
-import android.view.Gravity
-import android.view.View
-import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
 import java.util.concurrent.atomic.AtomicBoolean
 
 import com.example.ui.overlay.OverlayManager
@@ -246,15 +237,6 @@ class FocusAccessibilityService : AccessibilityService() {
         }
         serviceJob.cancel()
         mainHandler.removeCallbacksAndMessages(null)
-        try {
-            antiTamperOverlayView?.let { overlay ->
-                val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-                wm?.removeViewImmediate(overlay)
-            }
-            antiTamperOverlayView = null
-        } catch (_: Exception) {
-            antiTamperOverlayView = null
-        }
         Log.d(TAG, "FocusAccessibilityService destroyed")
     }
 
@@ -857,102 +839,6 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private val isAntiTamperEjecting = AtomicBoolean(false)
-    @Volatile
-    private var antiTamperOverlayView: View? = null
-
-    private fun buildAntiTamperOverlayView(): View {
-        val density = resources.displayMetrics.density
-        val pad = (24 * density).toInt()
-        return FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor("#FF0B0F14"))
-            isClickable = true
-            isFocusable = false
-            setOnTouchListener { _, _ -> true }
-
-            val content = LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setPadding(pad, pad, pad, pad)
-            }
-
-            val title = TextView(context).apply {
-                text = "Focus Lock Anti-Tamper Active"
-                setTextColor(Color.parseColor("#FFF1F5F9"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                gravity = Gravity.CENTER
-            }
-
-            val subtitle = TextView(context).apply {
-                text = "Returning safely..."
-                setTextColor(Color.parseColor("#FF94A3B8"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                gravity = Gravity.CENTER
-                setPadding(0, (8 * density).toInt(), 0, 0)
-            }
-
-            content.addView(title)
-            content.addView(subtitle)
-            addView(
-                content,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.CENTER
-                )
-            )
-        }
-    }
-
-    private fun showInstantAntiTamperOverlayNow() {
-        if (antiTamperOverlayView != null) return
-        try {
-            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
-            val overlay = buildAntiTamperOverlayView()
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                PixelFormat.OPAQUE
-            ).apply {
-                gravity = Gravity.CENTER
-            }
-            wm.addView(overlay, params)
-            antiTamperOverlayView = overlay
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed adding instant anti-tamper overlay", e)
-        }
-    }
-
-    private fun showInstantAntiTamperOverlay() {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            showInstantAntiTamperOverlayNow()
-        } else {
-            mainHandler.postAtFrontOfQueue { showInstantAntiTamperOverlayNow() }
-        }
-    }
-
-    private fun removeInstantAntiTamperOverlayNow() {
-        val overlay = antiTamperOverlayView ?: return
-        antiTamperOverlayView = null
-        try {
-            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-            wm?.removeViewImmediate(overlay)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed removing instant anti-tamper overlay", e)
-        }
-    }
-
-    private fun removeInstantAntiTamperOverlay() {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            removeInstantAntiTamperOverlayNow()
-        } else {
-            mainHandler.post { removeInstantAntiTamperOverlayNow() }
-        }
-    }
 
     private fun dismissTamperConfirmationDialog(root: AccessibilityNodeInfo?) {
         if (root == null) return
@@ -1092,6 +978,21 @@ class FocusAccessibilityService : AccessibilityService() {
             val s = cs.toString().lowercase()
             return s.contains("focus lock") || s.contains(myPkg)
         }
+        fun matchesDownloadedAppsEntry(cs: CharSequence?): Boolean {
+            if (cs == null) return false
+            val s = cs.toString().lowercase().trim()
+            return s == "downloaded apps" ||
+                    s == "downloaded services" ||
+                    s == "installed services" ||
+                    s.contains("downloaded apps") ||
+                    s.contains("downloaded services") ||
+                    s.contains("installed services")
+        }
+        fun matchesInstalledAppsEntry(cs: CharSequence?): Boolean {
+            if (cs == null) return false
+            val s = cs.toString().lowercase().trim()
+            return s == "installed apps" || s.contains("installed apps")
+        }
         fun isDangerousAction(cs: CharSequence?): Boolean {
             if (cs == null) return false
             val s = cs.toString().lowercase().trim()
@@ -1099,15 +1000,21 @@ class FocusAccessibilityService : AccessibilityService() {
                    s.contains("force stop") || s.contains("turn off focus lock") || s.contains("stop focus lock")
         }
 
-        // 1. Check if the clicked target row/button is Focus Lock or a dangerous action
+        // 1. Check if the clicked target row/button is Downloaded apps entry, Focus Lock, or a dangerous action
         var clickedFocusLock = false
+        var clickedDownloadedAppsEntry = false
+        var clickedInstalledAppsEntry = false
         var clickedDangerousAction = false
 
         for (t in event.text) {
             if (matchesTarget(t)) clickedFocusLock = true
+            if (matchesDownloadedAppsEntry(t)) clickedDownloadedAppsEntry = true
+            if (matchesInstalledAppsEntry(t)) clickedInstalledAppsEntry = true
             if (isDangerousAction(t)) clickedDangerousAction = true
         }
         if (matchesTarget(event.contentDescription)) clickedFocusLock = true
+        if (matchesDownloadedAppsEntry(event.contentDescription)) clickedDownloadedAppsEntry = true
+        if (matchesInstalledAppsEntry(event.contentDescription)) clickedInstalledAppsEntry = true
         if (isDangerousAction(event.contentDescription)) clickedDangerousAction = true
 
         fun inspectSubtreeForClick(node: AccessibilityNodeInfo?, depth: Int, visited: IntArray) {
@@ -1117,10 +1024,16 @@ class FocusAccessibilityService : AccessibilityService() {
             if (matchesTarget(node.text) || matchesTarget(node.contentDescription)) {
                 clickedFocusLock = true
             }
+            if (matchesDownloadedAppsEntry(node.text) || matchesDownloadedAppsEntry(node.contentDescription)) {
+                clickedDownloadedAppsEntry = true
+            }
+            if (matchesInstalledAppsEntry(node.text) || matchesInstalledAppsEntry(node.contentDescription)) {
+                clickedInstalledAppsEntry = true
+            }
             if (isDangerousAction(node.text) || isDangerousAction(node.contentDescription)) {
                 clickedDangerousAction = true
             }
-            if (clickedFocusLock && clickedDangerousAction) return
+            if (clickedDownloadedAppsEntry || (clickedFocusLock && clickedDangerousAction)) return
             val count = try { node.childCount } catch (_: Exception) { 0 }
             for (i in 0 until minOf(count, 10)) {
                 val child = try { node.getChild(i) } catch (_: Exception) { null }
@@ -1141,11 +1054,11 @@ class FocusAccessibilityService : AccessibilityService() {
                 if (!isScrollContainerNode(source)) {
                     inspectSubtreeForClick(source, 0, intArrayOf(0))
 
-                    // If user tapped a leaf label/icon inside the row (e.g. "Off"), inspect up to 2 non-scroll ancestors
-                    if (!clickedFocusLock && !clickedDangerousAction) {
+                    // If user tapped a leaf label/icon inside the row (e.g. "2 services" or "Off"), inspect up to 2 non-scroll ancestors
+                    if (!clickedDownloadedAppsEntry && !clickedInstalledAppsEntry && !clickedFocusLock && !clickedDangerousAction) {
                         var current: AccessibilityNodeInfo? = source
                         var steps = 0
-                        while (steps < 2 && !clickedFocusLock && !clickedDangerousAction) {
+                        while (steps < 2 && !clickedDownloadedAppsEntry && !clickedInstalledAppsEntry && !clickedFocusLock && !clickedDangerousAction) {
                             val parent = try { current?.parent } catch (_: Exception) { null }
                             if (current !== source) {
                                 try { current?.recycle() } catch (_: Exception) {}
@@ -1172,7 +1085,7 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        if (!clickedFocusLock && !clickedDangerousAction) {
+        if (!clickedDownloadedAppsEntry && !clickedInstalledAppsEntry && !clickedFocusLock && !clickedDangerousAction) {
             return false
         }
 
@@ -1188,6 +1101,19 @@ class FocusAccessibilityService : AccessibilityService() {
         if (SettingsTamperDetector.isSafePermissionScreen(screenTexts)) {
             Log.d(TAG, "isSettingsTamperClick: Safe permission grant screen detected, ignoring click.")
             return false
+        }
+
+        // Pre-emptive click trigger: user tapped "Downloaded apps" / "Installed services" / Accessibility "Installed apps"
+        if (clickedDownloadedAppsEntry) {
+            return true
+        }
+        if (clickedInstalledAppsEntry) {
+            val isAccessibilityContext = screenTexts.isEmpty() || screenTexts.any {
+                it.contains("accessibility") || it.contains("talkback") || it.contains("focus lock")
+            }
+            if (isAccessibilityContext) {
+                return true
+            }
         }
 
         // If clicking a direct dangerous destructive action on a tamper screen/dialog, always trigger
@@ -1218,48 +1144,21 @@ class FocusAccessibilityService : AccessibilityService() {
     private fun triggerInstantAntiTamperEjection(root: AccessibilityNodeInfo? = null) {
         if (!isAntiTamperEjecting.compareAndSet(false, true)) return
 
-        Log.w(TAG, "Instant Anti-Tamper Ejection triggered! Auto-clicking Cancel, showing opaque touch shield, and executing 5x BACK (45ms) + HOME (230ms) + cleanup (450ms).")
+        Log.w(TAG, "Instant Anti-Tamper Ejection triggered! Auto-clicking Cancel and firing synchronous 5x BACK burst in 0ms.")
 
-        // 0ms: Immediately auto-click "Cancel" on any open confirmation dialog
+        // 0ms: Auto-click "Cancel" on any open confirmation dialog
         dismissTamperConfirmationAcrossWindows(root)
-
-        // 0ms: Immediately attach opaque full-screen touch-swallowing TYPE_ACCESSIBILITY_OVERLAY
-        showInstantAntiTamperOverlay()
         FocusHaptics.rejectOrDelete(this)
 
-        // 0ms: 1st BACK
-        performGlobalAction(GLOBAL_ACTION_BACK)
-
-        // 45ms: 2nd BACK
-        mainHandler.postDelayed({
+        // 0ms: Fire 5 synchronous GLOBAL_ACTION_BACK calls back-to-back to exit Settings completely
+        repeat(5) {
             performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 45L)
+        }
 
-        // 90ms: 3rd BACK
+        // Brief cooldown reset so rapid closing window events don't double-fire during the unwind
         mainHandler.postDelayed({
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 90L)
-
-        // 135ms: 4th BACK
-        mainHandler.postDelayed({
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 135L)
-
-        // 180ms: 5th BACK
-        mainHandler.postDelayed({
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 180L)
-
-        // 230ms: HOME guarantee so Focus Lock toggle page is never left parked in Recents
-        mainHandler.postDelayed({
-            performGlobalAction(GLOBAL_ACTION_HOME)
-        }, 230L)
-
-        // 450ms: Remove TYPE_ACCESSIBILITY_OVERLAY cleanly and release AtomicBoolean guard
-        mainHandler.postDelayed({
-            removeInstantAntiTamperOverlay()
             isAntiTamperEjecting.set(false)
-        }, 450L)
+        }, 300L)
     }
 
     private fun checkAndInterceptSettingsTamper(eventPkg: String? = null): Boolean {

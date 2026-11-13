@@ -167,7 +167,62 @@ object SettingsTamperDetector {
             it.contains("focus lock") || (targetPkgLower.isNotEmpty() && it.contains(targetPkgLower))
         }
 
-        // Signatures 1, 2, and 3 strictly require "Focus Lock" (or our exact packageName) on the screen
+        // Main Accessibility menu items (keeps Settings -> Accessibility accessible for general settings)
+        val hasMainAccessibilityMenuItem = textsLower.any {
+            it.contains("press power button to end calls") ||
+            it.contains("accessibility menu") ||
+            it.contains("shortcut from lock screen") ||
+            it.contains("display size and text") ||
+            it.contains("color and motion") ||
+            it.contains("visibility enhancements") ||
+            it.contains("hearing enhancements") ||
+            it.contains("interaction controls") ||
+            it.contains("system controls") ||
+            it.contains("caption preferences")
+        }
+
+        val isNormalAppManagerScreen = textsLower.any {
+            it == "all apps" ||
+            it == "app management" ||
+            it == "manage apps" ||
+            it == "see all apps" ||
+            it == "default apps" ||
+            it.contains("apps installed") ||
+            it.contains("apps found") ||
+            it.contains("permission manager")
+        }
+
+        // -------------------------------------------------------------------------
+        // Signature 1 (A) — Early Entry Trigger: "Downloaded apps" / "Installed services" /
+        // Accessibility "Installed apps" section (even if Focus Lock row is scrolled off-screen).
+        // Main Accessibility menu and normal App Manager lists remain unaffected.
+        // -------------------------------------------------------------------------
+        if (!hasMainAccessibilityMenuItem && !isNormalAppManagerScreen) {
+            val hasDownloadedAppsOrServicesScreen = textsLower.any {
+                it == "downloaded apps" ||
+                it == "downloaded services" ||
+                it == "installed services" ||
+                it.contains("downloaded apps") ||
+                it.contains("downloaded services") ||
+                it.contains("installed services") ||
+                it.contains("services downloaded")
+            }
+            val hasInstalledAppsAccessibilityScreen = textsLower.any {
+                it == "installed apps" || it.contains("installed apps")
+            } && textsLower.any {
+                it.contains("accessibility") ||
+                it.contains("focus lock") ||
+                it.contains("talkback") ||
+                it.contains("service") ||
+                it == "on" ||
+                it == "off"
+            }
+            if (hasDownloadedAppsOrServicesScreen || hasInstalledAppsAccessibilityScreen) {
+                return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
+            }
+        }
+
+        // Signatures 1 (Focus Lock detail), 2 (App Info), and 3 (Device Admin) require Focus Lock on screen
         if (!hasFocusLockName) {
             return TamperSignature.NONE
         }
@@ -200,20 +255,8 @@ object SettingsTamperDetector {
 
         // -------------------------------------------------------------------------
         // Signature 1 (A) — Focus Lock Specific Accessibility Toggle Page or Dialog:
-        // hasFocusLock AND none of the main Accessibility menu items
-        // ("press power button to end calls", "accessibility menu", "shortcut from lock screen")
-        // are present, AND ANY of:
-        // 1. "focus lock uses this service" OR "detect foreground apps" OR "monitor screen time limits"
-        // 2. "about this function" OR "auto-launch management" (OneUI, Realme UI, ColorOS)
-        // 3. ("shortcut" AND "app info" on same screen as "focus lock")
-        // 4. "use focus lock" OR "use service" OR "stop focus lock" OR "turn off focus lock" OR "allow focus lock"
-        // 5. (!isGeneralAppList AND has "accessibility" AND ("on" or "off" or clickable Switch/Checkbox))
+        // hasFocusLock AND none of the main Accessibility menu items are present
         // -------------------------------------------------------------------------
-        val hasMainAccessibilityMenuItem = textsLower.any {
-            it.contains("press power button to end calls") ||
-            it.contains("accessibility menu") ||
-            it.contains("shortcut from lock screen")
-        }
         if (hasMainAccessibilityMenuItem) {
             return TamperSignature.NONE
         }
@@ -260,23 +303,8 @@ object SettingsTamperDetector {
             return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
         }
 
-        // 5. Accessibility toggle page when NOT a general app / service list
-        val isGeneralAppList = textsLower.any {
-            it == "all apps" ||
-            it == "app management" ||
-            it == "manage apps" ||
-            it == "installed apps" ||
-            it == "installed services" ||
-            it == "downloaded apps" ||
-            it == "downloaded services" ||
-            it == "see all apps" ||
-            it == "default apps" ||
-            it.contains("apps installed") ||
-            it.contains("apps found") ||
-            it.contains("downloaded apps") ||
-            it.contains("installed apps")
-        }
-        if (!isGeneralAppList) {
+        // 5. Accessibility toggle page when NOT a general app list
+        if (!isNormalAppManagerScreen) {
             val hasAccessibilityWord = textsLower.any { it.contains("accessibility") }
             val hasOnOffWord = textsLower.any {
                 it == "on" || it == "off" || it.contains(" turned on") || it.contains(" turned off")

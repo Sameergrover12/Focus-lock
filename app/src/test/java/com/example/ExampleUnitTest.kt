@@ -742,7 +742,26 @@ class ExampleUnitTest {
             SettingsTamperDetector.matchTamperSignature(mainAccessibility, true, true, appPkg)
         )
 
-        // 8. Downloaded Apps / Installed Apps List (Anti-Tamper Exclusion: user viewing the list before clicking)
+        // 8. Samsung OneUI Main Accessibility Menu (Anti-Tamper Exclusion: general Accessibility settings accessible)
+        val oneUiMainAccessibility = listOf(
+            "Accessibility",
+            "TalkBack",
+            "Visibility enhancements",
+            "Hearing enhancements",
+            "Installed apps",
+            "Focus Lock"
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(oneUiMainAccessibility, true, true, appPkg)
+        )
+    }
+
+    @Test
+    fun testSettingsTamperDetectorCatchesExactFocusLockTamperPages() {
+        val appPkg = "com.example.focuslock"
+
+        // Signature A (Early Entry Trigger): Entering "Downloaded apps" / "Installed services" / "Installed apps"
         val downloadedAppsList = listOf(
             "Downloaded apps",
             "Focus Lock",
@@ -752,14 +771,27 @@ class ExampleUnitTest {
             "2 services downloaded"
         )
         assertEquals(
-            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
             SettingsTamperDetector.matchTamperSignature(downloadedAppsList, true, true, appPkg)
         )
-    }
 
-    @Test
-    fun testSettingsTamperDetectorCatchesExactFocusLockTamperPages() {
-        val appPkg = "com.example.focuslock"
+        val downloadedAppsScrolledNoFocusText = listOf("Downloaded apps", "TalkBack", "On", "Select to Speak", "Off")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(downloadedAppsScrolledNoFocusText, false, true, appPkg)
+        )
+
+        val oneUiInstalledApps = listOf("Installed apps", "Accessibility", "Focus Lock", "On")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(oneUiInstalledApps, true, true, appPkg)
+        )
+
+        val oemInstalledServices = listOf("Installed services", "Focus Lock", "On")
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(oemInstalledServices, false, true, appPkg)
+        )
 
         // Signature A: Focus Lock Accessibility toggle page
         val a1 = listOf("Accessibility", "Focus Lock", "Use Focus Lock", "Shortcut", "Help & feedback")

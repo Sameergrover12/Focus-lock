@@ -770,8 +770,14 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = false,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
+                eventClassName = "com.android.settings.applications.ManageApplications"
+            )
+        )
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = settingsAppsInstalledApps,
                 eventClassName = "com.android.settings.applications.ManageApplications",
-                isRecentlyFromAccessibility = false
+                appPackageName = appPkg
             )
         )
 
@@ -791,8 +797,7 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = false,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
-                eventClassName = "com.android.settings.accessibility.AccessibilitySettings",
-                isRecentlyFromAccessibility = true
+                eventClassName = "com.android.settings.accessibility.AccessibilitySettings"
             )
         )
     }
@@ -801,7 +806,58 @@ class ExampleUnitTest {
     fun testSettingsTamperDetectorCatchesExactFocusLockTamperPages() {
         val appPkg = "com.example.focuslock"
 
-        // Layer 2: Language- & OEM-independent sub-menu trap (within 8s of leaving main Accessibility screen)
+        // Step A: Instant 0.1ms in-memory trigger on event texts & fragments
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Downloaded apps"),
+                eventClassName = "com.oplus.settings.OplusSubSettings",
+                appPackageName = appPkg
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Installed apps"),
+                eventClassName = "com.samsung.android.settings.SubSettings",
+                appPackageName = appPkg
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Installed services"),
+                eventClassName = "com.android.settings.SubSettings",
+                appPackageName = appPkg
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Downloaded services"),
+                eventClassName = "com.android.settings.SubSettings",
+                appPackageName = appPkg
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Focus Lock", "Off"),
+                eventClassName = "android.widget.LinearLayout",
+                appPackageName = appPkg
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = emptyList(),
+                eventClassName = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment",
+                appPackageName = appPkg
+            )
+        )
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Display over other apps", "Focus Lock"),
+                eventClassName = "com.android.settings.SubSettings",
+                appPackageName = appPkg
+            )
+        )
+
+        // Step B: Fast fallback catches Downloaded apps / Installed apps / Installed services & fragments
         val downloadedAppsList = listOf("Downloaded apps", "Focus Lock", "Off", "TalkBack", "On")
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
@@ -810,21 +866,7 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = true,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
-                eventClassName = "com.android.settings.SubSettings",
-                isRecentlyFromAccessibility = true
-            )
-        )
-
-        val hindiSubMenu = listOf("डाउनलोड किए गए ऐप्स", "Focus Lock", "बंद है")
-        assertEquals(
-            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
-            SettingsTamperDetector.matchTamperSignature(
-                texts = hindiSubMenu,
-                hasClickableSwitchOrCheckbox = false,
-                isClockTamperProtectionEnabled = true,
-                appPackageName = appPkg,
-                eventClassName = "com.oplus.settings.OplusSubSettings",
-                isRecentlyFromAccessibility = true
+                eventClassName = "com.android.settings.SubSettings"
             )
         )
 
@@ -836,12 +878,11 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = true,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
-                eventClassName = "com.samsung.android.settings.SubSettings",
-                isRecentlyFromAccessibility = true
+                eventClassName = "com.samsung.android.settings.SubSettings"
             )
         )
 
-        // Layer 3b: Language-independent service detail fragments (even when reopened from Recents without recent root)
+        // Language-independent service detail fragments (even when reopened from Recents)
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
             SettingsTamperDetector.matchTamperSignature(
@@ -849,8 +890,7 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = true,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
-                eventClassName = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment",
-                isRecentlyFromAccessibility = false
+                eventClassName = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment"
             )
         )
         assertEquals(
@@ -860,8 +900,7 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = false,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
-                eventClassName = "com.android.settings.accessibility.InstalledServicesFragment",
-                isRecentlyFromAccessibility = false
+                eventClassName = "com.android.settings.accessibility.InstalledServicesFragment"
             )
         )
         assertEquals(
@@ -871,8 +910,7 @@ class ExampleUnitTest {
                 hasClickableSwitchOrCheckbox = false,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
-                eventClassName = "com.android.settings.accessibility.AccessibilityDetailsSettingsFragment",
-                isRecentlyFromAccessibility = false
+                eventClassName = "com.android.settings.accessibility.AccessibilityDetailsSettingsFragment"
             )
         )
 

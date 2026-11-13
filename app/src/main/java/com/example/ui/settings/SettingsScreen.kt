@@ -89,24 +89,17 @@ import com.example.data.backup.BackupManager
 import com.example.data.preferences.ThemeMode
 import com.example.receiver.FocusDeviceAdminReceiver
 import com.example.ui.common.CheatProtectionAuthDialog
+import com.example.ui.common.CloudSignInDiagnosticCard
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.common.StrictModeActivationDialog
+import com.example.ui.common.restartMainActivityAfterRestore
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.credentials.CredentialManager
-import androidx.credentials.CustomCredential
-import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -117,7 +110,6 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val coroutineScope = rememberCoroutineScope()
 
     val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
     val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
@@ -131,6 +123,8 @@ fun SettingsScreen(
     val activeEmergencyBreakUntil by viewModel.activeEmergencyBreakUntil.collectAsStateWithLifecycle()
 
     val connectedGmailAccount by viewModel.connectedGmailAccount.collectAsStateWithLifecycle()
+    val connectedDisplayName by viewModel.connectedDisplayName.collectAsStateWithLifecycle()
+    val signInDiagnosticStatus by viewModel.signInDiagnosticStatus.collectAsStateWithLifecycle()
     val lastCloudBackupTime by viewModel.lastCloudBackupTime.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
 
@@ -183,109 +177,65 @@ fun SettingsScreen(
         }
     }
 
+    val gso = remember {
+        GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestProfile()
+            .build()
+    }
+
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            val email = account?.email?.takeIf { it.isNotBlank() } ?: "User"
-            val idToken = account?.idToken
-            val displayName = account?.displayName
-            if (idToken.isNullOrBlank()) {
-                Toast.makeText(
-                    context,
-                    "Google Sign-In error: Missing ID token. Check SHA-1 & Web Client ID configuration.",
-                    Toast.LENGTH_LONG
-                ).show()
+            val email = account?.email?.trim().orEmpty()
+            val displayName = account?.displayName?.takeIf { it.isNotBlank() }
+            if (email.isBlank()) {
+                val msg = "Google Sign-In did not return an email address."
+                viewModel.recordSignInDiagnostic(msg, displayName)
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 return@rememberLauncherForActivityResult
             }
-            viewModel.onGoogleSignInSuccess(email, idToken, displayName) {
-                Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
-            }
+            viewModel.recordSignInDiagnostic("Selected ${displayName ?: "No Name"} ($email)", displayName)
+            viewModel.onGoogleSignInSuccess(
+                email = email,
+                idToken = null,
+                displayName = displayName,
+                onComplete = { wasRestored ->
+                    Toast.makeText(
+                        context,
+                        if (wasRestored) "Restored cloud backup for $email" else "Connected to $email",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    if (wasRestored) {
+                        showBackupRestoreModal = false
+                        restartMainActivityAfterRestore(context)
+                    }
+                }
+            )
         } catch (e: ApiException) {
             if (e.statusCode == CommonStatusCodes.CANCELED || e.statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
+                viewModel.recordSignInDiagnostic("Sign-in cancelled (code ${e.statusCode})")
                 Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
             } else {
-                val errMsg = e.localizedMessage ?: e.message ?: "Status ${e.statusCode}"
-                Toast.makeText(
-                    context,
-                    "Google Sign-In error (${e.statusCode}): $errMsg",
-                    Toast.LENGTH_LONG
-                ).show()
+                val errMsg = "Google Sign-In error (${e.statusCode}): ${e.localizedMessage ?: e.message ?: "Unknown"}"
+                viewModel.recordSignInDiagnostic(errMsg)
+                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
-            val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
-            Toast.makeText(context, "Google Sign-In error: $errMsg", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    fun launchLegacyGoogleSignIn(webClientId: String) {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(webClientId)
-            .requestEmail()
-            .requestProfile()
-            .build()
-        val googleSignInClient = GoogleSignIn.getClient(context, gso)
-        googleSignInClient.signOut().addOnCompleteListener {
-            googleSignInLauncher.launch(googleSignInClient.signInIntent)
+            val errMsg = "Google Sign-In error: ${e.localizedMessage ?: e.message ?: e.javaClass.simpleName}"
+            viewModel.recordSignInDiagnostic(errMsg)
+            Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
         }
     }
 
     fun launchGoogleSignIn() {
-        val webClientId = runCatching { context.getString(R.string.default_web_client_id) }
-            .getOrDefault("")
-            .trim()
-        if (webClientId.isBlank()) {
-            Toast.makeText(
-                context,
-                "Firebase configuration error: Missing default_web_client_id.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-        coroutineScope.launch {
-            try {
-                val credentialManager = CredentialManager.create(context)
-                val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
-                val request = GetCredentialRequest.Builder()
-                    .addCredentialOption(signInWithGoogleOption)
-                    .build()
-                val result = credentialManager.getCredential(
-                    context = context,
-                    request = request
-                )
-                val credential = result.credential
-                if (credential is CustomCredential &&
-                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-                ) {
-                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                    val email = googleIdTokenCredential.id
-                    val idToken = googleIdTokenCredential.idToken
-                    val displayName = googleIdTokenCredential.displayName
-                    if (idToken.isBlank()) {
-                        Toast.makeText(
-                            context,
-                            "Google Sign-In error: Returned empty ID token.",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        return@launch
-                    }
-                    viewModel.onGoogleSignInSuccess(email, idToken, displayName) {
-                        Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    launchLegacyGoogleSignIn(webClientId)
-                }
-            } catch (_: GetCredentialCancellationException) {
-                Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
-            } catch (_: GetCredentialException) {
-                // Fallback to GoogleSignInClient (still strictly requesting ID token)
-                launchLegacyGoogleSignIn(webClientId)
-            } catch (e: Exception) {
-                val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
-                Toast.makeText(context, "Google Sign-In error: $errMsg", Toast.LENGTH_LONG).show()
-            }
+        viewModel.recordSignInDiagnostic("Opening Google account picker...")
+        val googleSignInClient = GoogleSignIn.getClient(context, gso)
+        googleSignInClient.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(googleSignInClient.signInIntent)
         }
     }
 
@@ -402,16 +352,13 @@ fun SettingsScreen(
     if (showBackupRestoreModal) {
         BackupRestoreDialog(
             connectedGmail = connectedGmailAccount,
+            connectedDisplayName = connectedDisplayName,
+            diagnosticStatus = signInDiagnosticStatus,
             lastCloudBackupTime = lastCloudBackupTime,
             isSyncing = isSyncing,
             onSignInGoogle = { launchGoogleSignIn() },
             onSignOutGoogle = {
                 val performSignOut = {
-                    val webClientId = BackupManager.getDefaultWebClientId(context)
-                    val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                        .requestIdToken(webClientId)
-                        .requestEmail()
-                        .build()
                     GoogleSignIn.getClient(context, gso).signOut()
                     viewModel.signOutGmail()
                     Toast.makeText(context, "Signed out of Google account", Toast.LENGTH_SHORT).show()
@@ -1211,6 +1158,8 @@ private fun PermissionStatusRow(
 @Composable
 private fun BackupRestoreDialog(
     connectedGmail: String?,
+    connectedDisplayName: String?,
+    diagnosticStatus: String,
     lastCloudBackupTime: Long,
     isSyncing: Boolean,
     onSignInGoogle: () -> Unit,
@@ -1222,8 +1171,8 @@ private fun BackupRestoreDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val displayName = remember(connectedGmail) {
-        if (connectedGmail != null) {
+    val displayName = remember(connectedGmail, connectedDisplayName) {
+        connectedDisplayName?.takeIf { it.isNotBlank() } ?: if (connectedGmail != null) {
             runCatching {
                 val metaName = context.getSharedPreferences(
                     com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS,
@@ -1348,6 +1297,14 @@ private fun BackupRestoreDialog(
                                 }
                             }
 
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            CloudSignInDiagnosticCard(
+                                displayName = displayName,
+                                email = connectedGmail,
+                                statusMessage = diagnosticStatus
+                            )
+
                             Spacer(modifier = Modifier.height(14.dp))
 
                             OutlinedButton(
@@ -1393,6 +1350,14 @@ private fun BackupRestoreDialog(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text("Sign in with Google", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            CloudSignInDiagnosticCard(
+                                displayName = displayName,
+                                email = connectedGmail,
+                                statusMessage = diagnosticStatus
+                            )
                         }
                     }
                 }

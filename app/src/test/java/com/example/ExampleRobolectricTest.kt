@@ -148,4 +148,11 @@ class ExampleRobolectricTest {
     val webClientId = context.getString(R.string.default_web_client_id)
     org.junit.Assert.assertTrue(webClientId.startsWith("582909401822-"))
   }
+
+  @Test
+  fun `verify runtime app signing sha1 helper`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val sha1 = com.example.data.backup.BackupManager.getAppSigningSha1(context)
+    org.junit.Assert.assertTrue(sha1.isNotBlank())
+  }
 }

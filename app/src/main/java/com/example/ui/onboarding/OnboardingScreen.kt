@@ -82,13 +82,22 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
 import com.example.R
 import com.example.data.backup.BackupManager
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.launch
 
 @Composable
@@ -655,10 +664,36 @@ private fun CloudBackupScreen(
     onComplete: () -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var isSigningIn by remember { mutableStateOf(false) }
 
-    var triedWithoutIdToken by remember { mutableStateOf(false) }
-    var launchFallbackWithoutIdToken by remember { mutableStateOf(false) }
+    fun completeFirebaseSignIn(email: String, idToken: String?, displayName: String?) {
+        if (idToken.isNullOrBlank()) {
+            isSigningIn = false
+            Toast.makeText(
+                context,
+                "Google Sign-In error: Missing ID token. Check SHA-1 & Web Client ID configuration.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        if (viewModel == null) {
+            isSigningIn = false
+            onComplete()
+            return
+        }
+        viewModel.onGoogleSignInSuccess(
+            email = email,
+            idToken = idToken,
+            displayName = displayName,
+            onError = { isSigningIn = false },
+            onComplete = {
+                isSigningIn = false
+                Toast.makeText(context, "Connected as $email", Toast.LENGTH_SHORT).show()
+                onComplete()
+            }
+        )
+    }
 
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -666,74 +701,88 @@ private fun CloudBackupScreen(
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            isSigningIn = false
-            val email = account?.email ?: "User"
+            val email = account?.email?.takeIf { it.isNotBlank() } ?: "User"
             val idToken = account?.idToken
             val displayName = account?.displayName
-            Toast.makeText(context, "Connected as $email", Toast.LENGTH_SHORT).show()
-            viewModel?.onGoogleSignInSuccess(email, idToken, displayName) {
-                onComplete()
-            } ?: onComplete()
+            completeFirebaseSignIn(email, idToken, displayName)
         } catch (e: ApiException) {
-            if (!triedWithoutIdToken && (e.statusCode == 10 || e.statusCode == 12500)) {
-                triedWithoutIdToken = true
-                launchFallbackWithoutIdToken = true
-                return@rememberLauncherForActivityResult
-            }
             isSigningIn = false
-            val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
-            if (lastAccount?.email != null) {
-                Toast.makeText(context, "Connected as ${lastAccount.email}", Toast.LENGTH_SHORT).show()
-                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken, lastAccount.displayName) {
-                    onComplete()
-                } ?: onComplete()
-            } else {
+            if (e.statusCode == CommonStatusCodes.CANCELED || e.statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
                 Toast.makeText(context, "Sign-in cancelled. You can set up cloud backup anytime in Settings.", Toast.LENGTH_SHORT).show()
+            } else {
+                val errMsg = e.localizedMessage ?: e.message ?: "Status ${e.statusCode}"
+                Toast.makeText(
+                    context,
+                    "Google Sign-In error (${e.statusCode}): $errMsg",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         } catch (e: Exception) {
             isSigningIn = false
-            val lastAccount = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
-            if (lastAccount?.email != null) {
-                Toast.makeText(context, "Connected as ${lastAccount.email}", Toast.LENGTH_SHORT).show()
-                viewModel?.onGoogleSignInSuccess(lastAccount.email!!, lastAccount.idToken, lastAccount.displayName) {
-                    onComplete()
-                } ?: onComplete()
-            } else {
-                Toast.makeText(context, "Sign-in cancelled. You can set up cloud backup anytime in Settings.", Toast.LENGTH_SHORT).show()
-            }
+            val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+            Toast.makeText(context, "Google Sign-In error: $errMsg", Toast.LENGTH_LONG).show()
         }
     }
 
-    androidx.compose.runtime.LaunchedEffect(launchFallbackWithoutIdToken) {
-        if (launchFallbackWithoutIdToken) {
-            launchFallbackWithoutIdToken = false
-            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                .requestEmail()
-                .requestProfile()
-                .build()
-            val googleSignInClient = GoogleSignIn.getClient(context, gso)
-            googleSignInClient.signOut().addOnCompleteListener {
-                googleSignInLauncher.launch(googleSignInClient.signInIntent)
-            }
+    fun launchLegacyGoogleSignIn(webClientId: String) {
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
+            .requestEmail()
+            .requestProfile()
+            .build()
+        val googleSignInClient = GoogleSignIn.getClient(context, gso)
+        googleSignInClient.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(googleSignInClient.signInIntent)
         }
     }
 
     fun launchGoogleSignIn() {
-        triedWithoutIdToken = false
-        isSigningIn = true
-        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestEmail()
-            .requestProfile()
-        val webClientIdRes = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-        if (webClientIdRes != 0) {
-            val webClientId = context.getString(webClientIdRes)
-            if (webClientId.isNotBlank()) {
-                gsoBuilder.requestIdToken(webClientId)
-            }
+        val webClientId = runCatching { context.getString(R.string.default_web_client_id) }
+            .getOrDefault("")
+            .trim()
+        if (webClientId.isBlank()) {
+            Toast.makeText(
+                context,
+                "Firebase configuration error: Missing default_web_client_id.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
         }
-        val googleSignInClient = GoogleSignIn.getClient(context, gsoBuilder.build())
-        googleSignInClient.signOut().addOnCompleteListener {
-            googleSignInLauncher.launch(googleSignInClient.signInIntent)
+        isSigningIn = true
+        coroutineScope.launch {
+            try {
+                val credentialManager = CredentialManager.create(context)
+                val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(signInWithGoogleOption)
+                    .build()
+                val result = credentialManager.getCredential(
+                    context = context,
+                    request = request
+                )
+                val credential = result.credential
+                if (credential is CustomCredential &&
+                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                ) {
+                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                    completeFirebaseSignIn(
+                        email = googleIdTokenCredential.id,
+                        idToken = googleIdTokenCredential.idToken,
+                        displayName = googleIdTokenCredential.displayName
+                    )
+                } else {
+                    launchLegacyGoogleSignIn(webClientId)
+                }
+            } catch (_: GetCredentialCancellationException) {
+                isSigningIn = false
+                Toast.makeText(context, "Sign-in cancelled. You can set up cloud backup anytime in Settings.", Toast.LENGTH_SHORT).show()
+            } catch (_: GetCredentialException) {
+                launchLegacyGoogleSignIn(webClientId)
+            } catch (e: Exception) {
+                isSigningIn = false
+                val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+                Toast.makeText(context, "Google Sign-In error: $errMsg", Toast.LENGTH_LONG).show()
+            }
         }
     }
 

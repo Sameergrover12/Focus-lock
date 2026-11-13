@@ -135,4 +135,17 @@ class ExampleRobolectricTest {
     assertEquals(1, (focusData["appGroups"] as List<*>).size)
     assertEquals(1, (focusData["screenTimeLimits"] as List<*>).size)
   }
+
+  @Test
+  fun `verify firebase initialization and default web client id`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val initialized = com.example.util.FirebaseInitializer.ensureInitialized(context)
+    org.junit.Assert.assertTrue(initialized)
+    val app = com.google.firebase.FirebaseApp.getInstance()
+    assertEquals("focus-lock-a0d19", app.options.projectId)
+    assertEquals("1:582909401822:android:f5c224c7be71cc455b804f", app.options.applicationId)
+    assertEquals("582909401822", app.options.gcmSenderId)
+    val webClientId = context.getString(R.string.default_web_client_id)
+    org.junit.Assert.assertTrue(webClientId.startsWith("582909401822-"))
+  }
 }

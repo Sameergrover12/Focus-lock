@@ -52,11 +52,54 @@ class FocusViewModel(
     val backupManager: com.example.data.backup.BackupManager = (application as FocusApplication).backupManager
 ) : AndroidViewModel(application) {
 
-    // Cloud Backup & Account State
-    val connectedGmailAccount: StateFlow<String?> = preferencesRepository.connectedGmailAccount.stateIn(
+    private val _firebaseCurrentUser = MutableStateFlow<com.google.firebase.auth.FirebaseUser?>(
+        runCatching {
+            com.example.util.FirebaseInitializer.ensureInitialized(application)
+            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+        }.getOrNull()
+    )
+
+    private val authStateListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { auth ->
+        _firebaseCurrentUser.value = auth.currentUser
+    }
+
+    init {
+        runCatching {
+            com.example.util.FirebaseInitializer.ensureInitialized(application)
+            com.google.firebase.auth.FirebaseAuth.getInstance().addAuthStateListener(authStateListener)
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        runCatching {
+            com.google.firebase.auth.FirebaseAuth.getInstance().removeAuthStateListener(authStateListener)
+        }
+    }
+
+    // Cloud Backup & Account State (Requirement 3: Only show user as signed in when FirebaseAuth.getInstance().currentUser != null)
+    val connectedGmailAccount: StateFlow<String?> = combine(
+        _firebaseCurrentUser,
+        preferencesRepository.connectedGmailAccount
+    ) { firebaseUser, savedEmail ->
+        if (firebaseUser != null && firebaseUser.uid.isNotBlank()) {
+            savedEmail?.takeIf { it.isNotBlank() } ?: firebaseUser.email?.trim()?.lowercase()
+        } else {
+            null
+        }
+    }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
-        initialValue = null
+        initialValue = runCatching {
+            com.example.util.FirebaseInitializer.ensureInitialized(application)
+            val user = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+            if (user != null && user.uid.isNotBlank()) {
+                preferencesRepository.getConnectedGmailAccountSync()?.takeIf { it.isNotBlank() }
+                    ?: user.email?.trim()?.lowercase()
+            } else {
+                null
+            }
+        }.getOrNull()
     )
 
     val lastCloudBackupTime: StateFlow<Long> = preferencesRepository.lastCloudBackupTime.stateIn(
@@ -671,35 +714,56 @@ class FocusViewModel(
         email: String,
         idToken: String?,
         displayName: String? = null,
+        onError: (String) -> Unit = {},
         onComplete: () -> Unit = {}
     ) {
-        val normalizedEmail = email.trim().lowercase()
         val appContext = getApplication<Application>()
-        runCatching {
-            val metaPrefs = appContext.getSharedPreferences(
-                com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS,
-                android.content.Context.MODE_PRIVATE
-            )
-            metaPrefs.edit()
-                .putString(com.example.data.backup.BackupManager.KEY_ACTIVE_GMAIL_EMAIL, normalizedEmail)
-                .apply {
-                    if (!displayName.isNullOrBlank()) {
-                        putString(com.example.data.backup.BackupManager.KEY_ACTIVE_DISPLAY_NAME, displayName)
-                    }
-                }
-                .commit()
-        }
-
-        // Update UI state immediately (0ms) so Sign-In finishes instantaneously without waiting on network
-        viewModelScope.launch {
-            preferencesRepository.setConnectedGmailAccount(normalizedEmail)
-        }
-        onComplete()
-
-        // Run cloud restore / initial backup silently in the background
         viewModelScope.launch(Dispatchers.IO) {
-            if (com.example.util.FirebaseInitializer.ensureInitialized(appContext)) {
-                val restoreResult = backupManager.connectGmailAccount(normalizedEmail, idToken, displayName)
+            try {
+                com.example.util.FirebaseInitializer.ensureInitialized(appContext)
+                if (idToken.isNullOrBlank()) {
+                    throw IllegalStateException("Google Sign-In did not return an ID token. Please verify Web Client ID and SHA-1 fingerprint.")
+                }
+
+                // Requirement 2: Extract idToken, convert with GoogleAuthProvider.getCredential(idToken, null),
+                // and strictly await() FirebaseAuth.getInstance().signInWithCredential(credential)
+                // BEFORE saving the session to SharedPreferences or triggering any Firestore backup/restore.
+                val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                val authResult = com.google.firebase.auth.FirebaseAuth.getInstance()
+                    .signInWithCredential(credential)
+                    .await()
+
+                val firebaseUser = authResult.user ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                    ?: throw IllegalStateException("FirebaseAuth.getInstance().currentUser is null after signInWithCredential.")
+
+                _firebaseCurrentUser.value = firebaseUser
+                val normalizedEmail = (firebaseUser.email?.takeIf { it.isNotBlank() } ?: email).trim().lowercase()
+                val resolvedName = displayName?.takeIf { it.isNotBlank() } ?: firebaseUser.displayName
+
+                // Save session to SharedPreferences ONLY after FirebaseAuth signInWithCredential succeeds
+                val metaPrefs = appContext.getSharedPreferences(
+                    com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS,
+                    android.content.Context.MODE_PRIVATE
+                )
+                metaPrefs.edit()
+                    .putString(com.example.data.backup.BackupManager.KEY_ACTIVE_GMAIL_EMAIL, normalizedEmail)
+                    .putString(com.example.data.backup.BackupManager.KEY_LAST_UID, firebaseUser.uid)
+                    .putString(com.example.data.backup.BackupManager.KEY_LAST_ACTIVE_GMAIL_UID, firebaseUser.uid)
+                    .apply {
+                        if (!resolvedName.isNullOrBlank()) {
+                            putString(com.example.data.backup.BackupManager.KEY_ACTIVE_DISPLAY_NAME, resolvedName)
+                        }
+                    }
+                    .commit()
+
+                preferencesRepository.setConnectedGmailAccount(normalizedEmail)
+
+                withContext(Dispatchers.Main) {
+                    onComplete()
+                }
+
+                // Trigger Firestore cloud restore / backup now that FirebaseAuth.currentUser.uid is guaranteed non-null
+                val restoreResult = backupManager.connectGmailAccount(normalizedEmail, idToken, resolvedName)
                 if (restoreResult.isSuccess) {
                     if (restoreResult.getOrNull() == true) {
                         _syncStatusMessage.value = "Settings restored from Google Cloud"
@@ -709,8 +773,20 @@ class FocusViewModel(
                 } else {
                     _syncStatusMessage.value = "Cloud sync notice: ${restoreResult.exceptionOrNull()?.message}"
                 }
-            } else {
-                _syncStatusMessage.value = "Connected to $normalizedEmail"
+            } catch (e: Exception) {
+                _firebaseCurrentUser.value = runCatching {
+                    com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
+                }.getOrNull()
+                val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+                _syncStatusMessage.value = "Sign-in failed: $errMsg"
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        appContext,
+                        "Firebase Auth error: $errMsg",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                    onError(errMsg)
+                }
             }
         }
     }
@@ -761,6 +837,7 @@ class FocusViewModel(
         viewModelScope.launch {
             _isSyncing.value = true
             backupManager.handleAccountSignOut()
+            _firebaseCurrentUser.value = null
             _syncStatusMessage.value = "Disconnected from Google Cloud"
             _isSyncing.value = false
         }

@@ -93,9 +93,20 @@ import com.example.ui.common.PendingLooseningAction
 import com.example.ui.common.StrictModeActivationDialog
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -106,6 +117,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
 
     val baseThemeMode by viewModel.baseThemeMode.collectAsStateWithLifecycle()
     val secondaryPalette by viewModel.secondaryPalette.collectAsStateWithLifecycle()
@@ -171,76 +183,109 @@ fun SettingsScreen(
         }
     }
 
-    var triedWithoutIdToken by remember { mutableStateOf(false) }
-    var launchFallbackWithoutIdToken by remember { mutableStateOf(false) }
-
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            val email = account?.email ?: "User"
+            val email = account?.email?.takeIf { it.isNotBlank() } ?: "User"
             val idToken = account?.idToken
             val displayName = account?.displayName
+            if (idToken.isNullOrBlank()) {
+                Toast.makeText(
+                    context,
+                    "Google Sign-In error: Missing ID token. Check SHA-1 & Web Client ID configuration.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@rememberLauncherForActivityResult
+            }
             viewModel.onGoogleSignInSuccess(email, idToken, displayName) {
                 Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
             }
         } catch (e: ApiException) {
-            if (!triedWithoutIdToken && (e.statusCode == 10 || e.statusCode == 12500)) {
-                triedWithoutIdToken = true
-                launchFallbackWithoutIdToken = true
-                return@rememberLauncherForActivityResult
-            }
-            val last = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
-            if (last?.email != null) {
-                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken, last.displayName) {
-                    Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
-                }
-            } else {
+            if (e.statusCode == CommonStatusCodes.CANCELED || e.statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
                 Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+            } else {
+                val errMsg = e.localizedMessage ?: e.message ?: "Status ${e.statusCode}"
+                Toast.makeText(
+                    context,
+                    "Google Sign-In error (${e.statusCode}): $errMsg",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         } catch (e: Exception) {
-            val last = runCatching { GoogleSignIn.getLastSignedInAccount(context) }.getOrNull()
-            if (last?.email != null) {
-                viewModel.onGoogleSignInSuccess(last.email!!, last.idToken, last.displayName) {
-                    Toast.makeText(context, "Connected to ${last.email}", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
-            }
+            val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+            Toast.makeText(context, "Google Sign-In error: $errMsg", Toast.LENGTH_LONG).show()
         }
     }
 
-    LaunchedEffect(launchFallbackWithoutIdToken) {
-        if (launchFallbackWithoutIdToken) {
-            launchFallbackWithoutIdToken = false
-            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                .requestEmail()
-                .requestProfile()
-                .build()
-            val googleSignInClient = GoogleSignIn.getClient(context, gso)
-            googleSignInClient.signOut().addOnCompleteListener {
-                googleSignInLauncher.launch(googleSignInClient.signInIntent)
-            }
+    fun launchLegacyGoogleSignIn(webClientId: String) {
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(webClientId)
+            .requestEmail()
+            .requestProfile()
+            .build()
+        val googleSignInClient = GoogleSignIn.getClient(context, gso)
+        googleSignInClient.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(googleSignInClient.signInIntent)
         }
     }
 
     fun launchGoogleSignIn() {
-        triedWithoutIdToken = false
-        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestEmail()
-            .requestProfile()
-        val webClientIdRes = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-        if (webClientIdRes != 0) {
-            val webClientId = context.getString(webClientIdRes)
-            if (webClientId.isNotBlank()) {
-                gsoBuilder.requestIdToken(webClientId)
-            }
+        val webClientId = runCatching { context.getString(R.string.default_web_client_id) }
+            .getOrDefault("")
+            .trim()
+        if (webClientId.isBlank()) {
+            Toast.makeText(
+                context,
+                "Firebase configuration error: Missing default_web_client_id.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
         }
-        val googleSignInClient = GoogleSignIn.getClient(context, gsoBuilder.build())
-        googleSignInClient.signOut().addOnCompleteListener {
-            googleSignInLauncher.launch(googleSignInClient.signInIntent)
+        coroutineScope.launch {
+            try {
+                val credentialManager = CredentialManager.create(context)
+                val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(webClientId).build()
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(signInWithGoogleOption)
+                    .build()
+                val result = credentialManager.getCredential(
+                    context = context,
+                    request = request
+                )
+                val credential = result.credential
+                if (credential is CustomCredential &&
+                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                ) {
+                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                    val email = googleIdTokenCredential.id
+                    val idToken = googleIdTokenCredential.idToken
+                    val displayName = googleIdTokenCredential.displayName
+                    if (idToken.isBlank()) {
+                        Toast.makeText(
+                            context,
+                            "Google Sign-In error: Returned empty ID token.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
+                    viewModel.onGoogleSignInSuccess(email, idToken, displayName) {
+                        Toast.makeText(context, "Connected to $email", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    launchLegacyGoogleSignIn(webClientId)
+                }
+            } catch (_: GetCredentialCancellationException) {
+                Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
+            } catch (_: GetCredentialException) {
+                // Fallback to GoogleSignInClient (still strictly requesting ID token)
+                launchLegacyGoogleSignIn(webClientId)
+            } catch (e: Exception) {
+                val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+                Toast.makeText(context, "Google Sign-In error: $errMsg", Toast.LENGTH_LONG).show()
+            }
         }
     }
 

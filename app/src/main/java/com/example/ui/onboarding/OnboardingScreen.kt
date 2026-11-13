@@ -83,7 +83,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.ui.common.CloudSignInDiagnosticCard
 import com.example.ui.common.restartMainActivityAfterRestore
 import com.example.ui.viewmodel.FocusViewModel
 import com.example.util.PermissionHelper
@@ -660,14 +659,6 @@ private fun CloudBackupScreen(
     val context = LocalContext.current
     var isSigningIn by remember { mutableStateOf(false) }
 
-    val vmDisplayName by (viewModel?.connectedDisplayName ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) }).collectAsStateWithLifecycle()
-    val vmEmail by (viewModel?.connectedGmailAccount ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) }).collectAsStateWithLifecycle()
-    val vmStatus by (viewModel?.signInDiagnosticStatus ?: remember { kotlinx.coroutines.flow.MutableStateFlow("Not signed in") }).collectAsStateWithLifecycle()
-
-    var localDisplayName by remember { mutableStateOf<String?>(null) }
-    var localEmail by remember { mutableStateOf<String?>(null) }
-    var localStatus by remember { mutableStateOf("Tap 'Sign in with Google' to choose a Gmail account") }
-
     val gso = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
@@ -686,15 +677,9 @@ private fun CloudBackupScreen(
             if (email.isBlank()) {
                 isSigningIn = false
                 val msg = "Google Sign-In did not return an email address."
-                localStatus = msg
-                viewModel?.recordSignInDiagnostic(msg, displayName)
                 Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 return@rememberLauncherForActivityResult
             }
-
-            localDisplayName = displayName
-            localEmail = email
-            localStatus = "Selected ${displayName ?: "No Name"} ($email)"
 
             if (viewModel == null) {
                 isSigningIn = false
@@ -707,17 +692,11 @@ private fun CloudBackupScreen(
                 email = email,
                 idToken = null,
                 displayName = displayName,
-                onError = { errMsg ->
+                onError = { _ ->
                     isSigningIn = false
-                    localStatus = "Selected ${displayName ?: email} | Error: $errMsg"
                 },
                 onComplete = { wasRestored ->
                     isSigningIn = false
-                    localStatus = if (wasRestored) {
-                        "Restored cloud backup for ${displayName ?: email} ($email)"
-                    } else {
-                        "Connected as ${displayName ?: email} ($email)"
-                    }
                     Toast.makeText(
                         context,
                         if (wasRestored) "Restored cloud backup for $email" else "Connected as $email",
@@ -733,28 +712,20 @@ private fun CloudBackupScreen(
         } catch (e: ApiException) {
             isSigningIn = false
             if (e.statusCode == CommonStatusCodes.CANCELED || e.statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
-                val msg = "Sign-in cancelled (code ${e.statusCode})"
-                localStatus = msg
-                viewModel?.recordSignInDiagnostic(msg)
                 Toast.makeText(context, "Sign-in cancelled. You can set up cloud backup anytime in Settings.", Toast.LENGTH_SHORT).show()
             } else {
                 val errMsg = "Google Sign-In error (${e.statusCode}): ${e.localizedMessage ?: e.message ?: "Unknown"}"
-                localStatus = errMsg
-                viewModel?.recordSignInDiagnostic(errMsg)
                 Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             isSigningIn = false
             val errMsg = "Google Sign-In error: ${e.localizedMessage ?: e.message ?: e.javaClass.simpleName}"
-            localStatus = errMsg
-            viewModel?.recordSignInDiagnostic(errMsg)
             Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
         }
     }
 
     fun launchGoogleSignIn() {
         isSigningIn = true
-        localStatus = "Opening Google account picker..."
         val googleSignInClient = GoogleSignIn.getClient(context, gso)
         googleSignInClient.signOut().addOnCompleteListener {
             googleSignInLauncher.launch(googleSignInClient.signInIntent)
@@ -891,18 +862,6 @@ private fun CloudBackupScreen(
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            CloudSignInDiagnosticCard(
-                displayName = localDisplayName ?: vmDisplayName,
-                email = localEmail ?: vmEmail,
-                statusMessage = if (localEmail != null || localStatus != "Tap 'Sign in with Google' to choose a Gmail account") {
-                    localStatus
-                } else {
-                    vmStatus
-                }
-            )
         }
 
         // Bottom-Right Anchored Skip Button

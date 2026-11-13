@@ -155,12 +155,8 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    val isClockTamperProtectionEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
-        if (syncPrefs.contains("clock_tamper_protection_enabled")) {
-            syncPrefs.getBoolean("clock_tamper_protection_enabled", true)
-        } else {
-            preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] ?: true
-        }
+    val isClockTamperProtectionEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { _, _ ->
+        true
     }
 
     val reclaimedCommitment: Flow<String> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
@@ -442,12 +438,12 @@ class UserPreferencesRepository(private val context: Context) {
         refreshTrigger.value += 1
     }
 
-    suspend fun setClockTamperProtectionEnabled(enabled: Boolean) {
-        syncPrefs.edit().putBoolean("clock_tamper_protection_enabled", enabled).commit()
+    suspend fun setClockTamperProtectionEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
+        syncPrefs.edit().putBoolean("clock_tamper_protection_enabled", true).commit()
         context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = enabled
+            preferences[PreferencesKeys.CLOCK_TAMPER_PROTECTION_ENABLED] = true
         }
-        TimeIntegrityManager.setProtectionEnabled(enabled)
+        TimeIntegrityManager.setProtectionEnabled(true)
         refreshTrigger.value += 1
     }
 
@@ -491,8 +487,9 @@ class UserPreferencesRepository(private val context: Context) {
 
         val started = com.example.util.EmergencyBreakManager.startTenMinuteBreak(context)
         if (started) {
+            val trueNow = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
             context.dataStore.edit { prefs ->
-                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = System.currentTimeMillis() + 10 * 60 * 1000L
+                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = trueNow + 10 * 60 * 1000L
                 prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
             }
             refreshTrigger.value += 1
@@ -503,8 +500,9 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun takeEmergencyBreak(): Boolean {
         val started = com.example.util.EmergencyBreakManager.startTenMinuteBreak(context)
         if (started) {
+            val trueNow = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
             context.dataStore.edit { prefs ->
-                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = System.currentTimeMillis() + 10 * 60 * 1000L
+                prefs[PreferencesKeys.ACTIVE_EMERGENCY_BREAK_UNTIL] = trueNow + 10 * 60 * 1000L
                 prefs[PreferencesKeys.EMERGENCY_BREAKS_REMAINING] = com.example.util.EmergencyBreakManager.getBreaksRemaining(context)
             }
             refreshTrigger.value += 1

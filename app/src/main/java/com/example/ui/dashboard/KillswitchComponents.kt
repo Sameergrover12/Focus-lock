@@ -84,11 +84,11 @@ fun KillswitchCard(
     var showSetupDialog by remember { mutableStateOf(false) }
     var showPledgeDialog by remember { mutableStateOf(false) }
 
-    var currentTimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var currentTimeMs by remember { mutableLongStateOf(com.example.util.TimeIntegrityManager.getTrueTimeMillis()) }
 
     LaunchedEffect(isKillswitchActive, isBreakActive) {
         while (isKillswitchActive) {
-            currentTimeMs = System.currentTimeMillis()
+            currentTimeMs = com.example.util.TimeIntegrityManager.getTrueTimeMillis()
             delay(500L)
         }
     }

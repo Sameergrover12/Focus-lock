@@ -89,7 +89,6 @@ import com.example.data.backup.BackupManager
 import com.example.data.preferences.ThemeMode
 import com.example.receiver.FocusDeviceAdminReceiver
 import com.example.ui.common.CheatProtectionAuthDialog
-import com.example.ui.common.CloudSignInDiagnosticCard
 import com.example.ui.common.PendingLooseningAction
 import com.example.ui.common.StrictModeActivationDialog
 import com.example.ui.common.restartMainActivityAfterRestore
@@ -116,7 +115,6 @@ fun SettingsScreen(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
     val isInvincibleModeEnabled by viewModel.isInvincibleModeEnabled.collectAsStateWithLifecycle()
-    val isClockTamperProtectionEnabled by viewModel.isClockTamperProtectionEnabled.collectAsStateWithLifecycle()
     val isClockTampered by viewModel.isClockTampered.collectAsStateWithLifecycle()
     val cognitivePassphrase by viewModel.cognitivePassphrase.collectAsStateWithLifecycle()
     val emergencyBreaksRemaining by viewModel.emergencyBreaksRemaining.collectAsStateWithLifecycle()
@@ -124,7 +122,6 @@ fun SettingsScreen(
 
     val connectedGmailAccount by viewModel.connectedGmailAccount.collectAsStateWithLifecycle()
     val connectedDisplayName by viewModel.connectedDisplayName.collectAsStateWithLifecycle()
-    val signInDiagnosticStatus by viewModel.signInDiagnosticStatus.collectAsStateWithLifecycle()
     val lastCloudBackupTime by viewModel.lastCloudBackupTime.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
 
@@ -194,11 +191,9 @@ fun SettingsScreen(
             val displayName = account?.displayName?.takeIf { it.isNotBlank() }
             if (email.isBlank()) {
                 val msg = "Google Sign-In did not return an email address."
-                viewModel.recordSignInDiagnostic(msg, displayName)
                 Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 return@rememberLauncherForActivityResult
             }
-            viewModel.recordSignInDiagnostic("Selected ${displayName ?: "No Name"} ($email)", displayName)
             viewModel.onGoogleSignInSuccess(
                 email = email,
                 idToken = null,
@@ -217,22 +212,18 @@ fun SettingsScreen(
             )
         } catch (e: ApiException) {
             if (e.statusCode == CommonStatusCodes.CANCELED || e.statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
-                viewModel.recordSignInDiagnostic("Sign-in cancelled (code ${e.statusCode})")
                 Toast.makeText(context, "Sign-in cancelled", Toast.LENGTH_SHORT).show()
             } else {
                 val errMsg = "Google Sign-In error (${e.statusCode}): ${e.localizedMessage ?: e.message ?: "Unknown"}"
-                viewModel.recordSignInDiagnostic(errMsg)
                 Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             val errMsg = "Google Sign-In error: ${e.localizedMessage ?: e.message ?: e.javaClass.simpleName}"
-            viewModel.recordSignInDiagnostic(errMsg)
             Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
         }
     }
 
     fun launchGoogleSignIn() {
-        viewModel.recordSignInDiagnostic("Opening Google account picker...")
         val googleSignInClient = GoogleSignIn.getClient(context, gso)
         googleSignInClient.signOut().addOnCompleteListener {
             googleSignInLauncher.launch(googleSignInClient.signInIntent)
@@ -244,6 +235,7 @@ fun SettingsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
                 hasAccessibility = PermissionHelper.isAccessibilityServiceEnabled(context)
                 hasUsageStats = PermissionHelper.isUsageStatsPermissionGranted(context)
                 hasOverlay = PermissionHelper.canDrawOverlays(context)
@@ -353,7 +345,6 @@ fun SettingsScreen(
         BackupRestoreDialog(
             connectedGmail = connectedGmailAccount,
             connectedDisplayName = connectedDisplayName,
-            diagnosticStatus = signInDiagnosticStatus,
             lastCloudBackupTime = lastCloudBackupTime,
             isSyncing = isSyncing,
             onSignInGoogle = { launchGoogleSignIn() },
@@ -843,7 +834,7 @@ fun SettingsScreen(
                 ),
                 border = BorderStroke(
                     1.dp,
-                    if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                    if (isClockTampered) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
@@ -860,13 +851,13 @@ fun SettingsScreen(
                             Surface(
                                 modifier = Modifier.size(40.dp),
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Security,
                                         contentDescription = null,
-                                        tint = if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -880,38 +871,12 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = if (isClockTamperProtectionEnabled) "Active • Monitored via hardware CPU uptime" else "Disabled • System clock untracked",
+                                    text = "Hardware Anti-Tamper Shield • Always Active",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (isClockTamperProtectionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
-
-                        Switch(
-                            checked = isClockTamperProtectionEnabled,
-                            onCheckedChange = { willEnable ->
-                                if (willEnable) {
-                                    viewModel.setClockTamperProtectionEnabled(true)
-                                } else {
-                                    if (isCheatProtectionEnabled) {
-                                        pendingCheatAction = PendingLooseningAction(
-                                            title = "Disable Clock Tamper Protection",
-                                            description = "Disabling clock tamper protection allows device time adjustments to affect schedules. Enter your verbatim passphrase to authorize.",
-                                            onAuthorized = { viewModel.setClockTamperProtectionEnabled(false) }
-                                        )
-                                    } else {
-                                        viewModel.setClockTamperProtectionEnabled(false)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.testTag("clock_tamper_protection_switch"),
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
-                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        )
                     }
 
                     if (isClockTampered) {
@@ -920,7 +885,9 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.errorContainer,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("clock_tamper_warning_banner")
                         ) {
                             Row(
                                 modifier = Modifier.padding(10.dp),
@@ -934,7 +901,7 @@ fun SettingsScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Clock drift detected! Rules are running on hardware True Time.",
+                                    text = "Clock tampering detected! Enforcing rules on hardware true time.",
                                     color = MaterialTheme.colorScheme.onErrorContainer,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium
@@ -1159,7 +1126,6 @@ private fun PermissionStatusRow(
 private fun BackupRestoreDialog(
     connectedGmail: String?,
     connectedDisplayName: String?,
-    diagnosticStatus: String,
     lastCloudBackupTime: Long,
     isSyncing: Boolean,
     onSignInGoogle: () -> Unit,
@@ -1297,14 +1263,6 @@ private fun BackupRestoreDialog(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            CloudSignInDiagnosticCard(
-                                displayName = displayName,
-                                email = connectedGmail,
-                                statusMessage = diagnosticStatus
-                            )
-
                             Spacer(modifier = Modifier.height(14.dp))
 
                             OutlinedButton(
@@ -1350,14 +1308,6 @@ private fun BackupRestoreDialog(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text("Sign in with Google", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            CloudSignInDiagnosticCard(
-                                displayName = displayName,
-                                email = connectedGmail,
-                                statusMessage = diagnosticStatus
-                            )
                         }
                     }
                 }

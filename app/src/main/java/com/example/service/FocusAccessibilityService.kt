@@ -2,9 +2,12 @@ package com.example.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Rect
+import androidx.core.content.ContextCompat
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -58,6 +61,7 @@ class FocusAccessibilityService : AccessibilityService() {
     private var serviceScope = CoroutineScope(serviceJob + Dispatchers.IO)
     private var periodicScanJob: Job? = null
     private val ruleCollectionJobs = mutableListOf<Job>()
+    private var timeChangeReceiver: BroadcastReceiver? = null
 
     private fun ensureActiveScope(): CoroutineScope {
         if (!serviceJob.isActive) {
@@ -159,8 +163,40 @@ class FocusAccessibilityService : AccessibilityService() {
         // Start lightweight periodic rescan backstop for feed-style apps and coalesced events
         startPeriodicContentScanner()
 
+        // Register dynamic time/timezone tamper broadcast receiver for sub-second detection
+        registerTimeChangeReceiver()
+
         // Also ensure foreground service is running
         FocusForegroundService.startService(applicationContext)
+    }
+
+    private fun registerTimeChangeReceiver() {
+        if (timeChangeReceiver != null) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val action = intent?.action ?: return
+                if (action == Intent.ACTION_TIME_CHANGED || action == Intent.ACTION_TIMEZONE_CHANGED) {
+                    val ctx = context ?: applicationContext
+                    TimeIntegrityManager.onTimeChanged(ctx)
+                    val activePkg = currentForegroundPackage
+                    if (!activePkg.isNullOrEmpty() && activePkg != packageName && !isSystemOverlay(activePkg)) {
+                        ensureActiveScope().launch(Dispatchers.Default) {
+                            checkForegroundPackage(activePkg)
+                        }
+                    }
+                }
+            }
+        }
+        timeChangeReceiver = receiver
+        try {
+            ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register timeChangeReceiver", e)
+        }
     }
 
     private fun configureServiceInfo() {
@@ -191,6 +227,12 @@ class FocusAccessibilityService : AccessibilityService() {
         currentForegroundPackage = null
         lastEvaluatedPackage = null
         FocusForegroundService.onForegroundPackageChanged(null)
+        try {
+            timeChangeReceiver?.let { unregisterReceiver(it) }
+            timeChangeReceiver = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unregister timeChangeReceiver", e)
+        }
         periodicScanJob?.cancel()
         synchronized(ruleCollectionJobs) {
             ruleCollectionJobs.forEach { it.cancel() }
@@ -365,9 +407,7 @@ class FocusAccessibilityService : AccessibilityService() {
                     isCheatProtectionEnabled = if (prefRepo.syncPrefs.contains("cheat_protection_enabled")) {
                         prefRepo.syncPrefs.getBoolean("cheat_protection_enabled", false)
                     } else false
-                    isClockTamperProtectionEnabled = if (prefRepo.syncPrefs.contains("clock_tamper_protection_enabled")) {
-                        prefRepo.syncPrefs.getBoolean("clock_tamper_protection_enabled", true)
-                    } else true
+                    isClockTamperProtectionEnabled = true
                     cachedReclaimedCommitment = prefRepo.syncPrefs.getString("reclaimed_commitment", "My Focus")
 
                     Log.d(TAG, "Preloaded ${syncPackages.size} blocked packages, ${syncLimits.size} limits, ${syncGroups.size} groups into memory")
@@ -478,10 +518,8 @@ class FocusAccessibilityService : AccessibilityService() {
                 prefRepo.isCheatProtectionEnabled.collect { isCheatProtectionEnabled = it }
             }
 
-            // Clock tamper protection
-            ruleCollectionJobs += scope.launch(Dispatchers.IO) {
-                prefRepo.isClockTamperProtectionEnabled.collect { isClockTamperProtectionEnabled = it }
-            }
+            // Clock tamper protection (always active, cannot be disabled)
+            isClockTamperProtectionEnabled = true
 
             // Emergency break
             ruleCollectionJobs += scope.launch(Dispatchers.IO) {
@@ -1144,14 +1182,10 @@ class FocusAccessibilityService : AccessibilityService() {
                 return false
             }
 
-            val isClockProtectionActive = isClockTamperProtectionEnabled ||
-                    isCheatProtectionEnabled ||
-                    com.example.util.KillswitchManager.isKillswitchActive(this)
-
             val signature = SettingsTamperDetector.matchTamperSignature(
                 texts = textList,
                 hasClickableSwitchOrCheckbox = hasClickableSwitchOrCheckbox,
-                isClockTamperProtectionEnabled = isClockProtectionActive,
+                isClockTamperProtectionEnabled = true,
                 appPackageName = packageName
             )
 
@@ -1319,6 +1353,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun handleEventInBackground(eventPkg: String?, eventType: Int) {
         val myPackageName = packageName
+        TimeIntegrityManager.getTrustedCurrentTimeMillis(this)
 
         // Invincible Mode Intercept: prevent hiding apps via Launchers/Security apps/Settings
         if (isInvincibleModeEnabled && ContentScanner.isHideAppsTargetPackage(eventPkg)) {

@@ -30,7 +30,7 @@ import java.util.Locale
 class FocusRepository(private val focusDao: FocusDao) {
 
     companion object {
-        fun getTodayDateString(): String = ScreenTimeHelper.getTodayDateString()
+        fun getTodayDateString(): String = com.example.util.TimeIntegrityManager.getTrueDateString()
     }
 
     private val _currentDateFlow = MutableStateFlow(getTodayDateString())

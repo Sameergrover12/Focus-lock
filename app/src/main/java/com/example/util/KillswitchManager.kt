@@ -85,7 +85,7 @@ object KillswitchManager {
         killswitchBreakEndTime = prefs.getLong(KEY_BREAK_END_TIME, 0L)
         killswitchBreakEndElapsed = prefs.getLong(KEY_BREAK_END_ELAPSED, 0L)
 
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
 
         val isSessionActive = (killswitchEndTime > now) &&
@@ -95,7 +95,7 @@ object KillswitchManager {
             val remainingSessionMs = minOf(
                 killswitchEndTime - now,
                 if (killswitchEndElapsed > 0L) killswitchEndElapsed - nowElapsed else Long.MAX_VALUE
-            )
+            ).coerceAtLeast(0L)
             mainHandler.removeCallbacks(sessionExpiredRunnable)
             mainHandler.postDelayed(sessionExpiredRunnable, remainingSessionMs)
             _isKillswitchActiveFlow.value = true
@@ -109,7 +109,7 @@ object KillswitchManager {
                 val remainingBreakMs = minOf(
                     killswitchBreakEndTime - now,
                     if (killswitchBreakEndElapsed > 0L) killswitchBreakEndElapsed - nowElapsed else Long.MAX_VALUE
-                )
+                ).coerceAtLeast(0L)
                 mainHandler.removeCallbacks(breakExpiredRunnable)
                 mainHandler.postDelayed(breakExpiredRunnable, remainingBreakMs)
                 _isEmergencyBreakActiveFlow.value = true
@@ -156,7 +156,7 @@ object KillswitchManager {
         val end = killswitchEndTime
         if (end <= 0L) return false
 
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
         val elapsedEnd = killswitchEndElapsed
 
@@ -171,14 +171,14 @@ object KillswitchManager {
     }
 
     /**
-     * Fast 0ms memory check for emergency break during an active Killswitch session.
+     * Fast check for emergency break during an active Killswitch session.
      */
     fun isEmergencyBreakActive(context: Context? = null): Boolean {
         if (!isKillswitchActive(context)) return false
         val breakEnd = killswitchBreakEndTime
         if (breakEnd <= 0L) return false
 
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
         val elapsedEnd = killswitchBreakEndElapsed
 
@@ -206,7 +206,7 @@ object KillswitchManager {
             init(context.applicationContext)
         }
         val durationMs = durationMinutes * 60_000L
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
 
         killswitchEndTime = now + durationMs
@@ -234,11 +234,11 @@ object KillswitchManager {
         mainHandler.removeCallbacks(sessionExpiredRunnable)
         mainHandler.postDelayed(sessionExpiredRunnable, durationMs)
 
-        // Schedule exact AlarmManager fallback
+        // Schedule exact ELAPSED_REALTIME_WAKEUP AlarmManager fallback
         scheduleAlarmFallback(
             context,
             KillswitchReceiver.ACTION_SESSION_EXPIRED,
-            killswitchEndTime,
+            killswitchEndElapsed,
             REQ_CODE_SESSION
         )
 
@@ -257,7 +257,7 @@ object KillswitchManager {
             return false
         }
 
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
 
         killswitchBreakUsed = true
@@ -279,11 +279,11 @@ object KillswitchManager {
         mainHandler.removeCallbacks(breakExpiredRunnable)
         mainHandler.postDelayed(breakExpiredRunnable, BREAK_DURATION_MS)
 
-        // Schedule exact AlarmManager fallback
+        // Schedule exact ELAPSED_REALTIME_WAKEUP AlarmManager fallback
         scheduleAlarmFallback(
             context,
             KillswitchReceiver.ACTION_BREAK_EXPIRED,
-            killswitchBreakEndTime,
+            killswitchBreakEndElapsed,
             REQ_CODE_BREAK
         )
 
@@ -434,7 +434,7 @@ object KillswitchManager {
     private fun scheduleAlarmFallback(
         context: Context,
         action: String,
-        triggerAtMillis: Long,
+        triggerAtElapsedRealtime: Long,
         requestCode: Int
     ) {
         try {
@@ -451,15 +451,15 @@ object KillswitchManager {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     if (am.canScheduleExactAlarms()) {
-                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                        am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
                     } else {
-                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
                     }
                 } else {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                    am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
                 }
             } else {
-                am.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not schedule alarm fallback for Killswitch action: $action", e)

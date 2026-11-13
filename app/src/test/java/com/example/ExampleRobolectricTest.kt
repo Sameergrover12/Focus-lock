@@ -155,4 +155,119 @@ class ExampleRobolectricTest {
     val sha1 = com.example.data.backup.BackupManager.getAppSigningSha1(context)
     org.junit.Assert.assertTrue(sha1.isNotBlank())
   }
+
+  @Test
+  fun `clock tamper protection is always enabled and zero false positives when auto time and tz are ON`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val originalTz = java.util.TimeZone.getDefault()
+    try {
+      var fakeWall = 1_750_000_000_000L
+      var fakeElapsed = 10_000L
+      com.example.util.TimeIntegrityManager.wallClockProvider = { fakeWall }
+      com.example.util.TimeIntegrityManager.elapsedClockProvider = { fakeElapsed }
+
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME_ZONE, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 10)
+
+      com.example.util.TimeIntegrityManager.init(context)
+      com.example.util.TimeIntegrityManager.setProtectionEnabled(false)
+      org.junit.Assert.assertTrue(com.example.util.TimeIntegrityManager.isProtectionEnabled())
+
+      // Even if wall clock shifts while AUTO_TIME=1 and AUTO_TIME_ZONE=1, never flag tamper
+      fakeWall += 3_600_000L
+      fakeElapsed += 5_000L
+      val trusted = com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
+      assertEquals(fakeWall, trusted)
+      org.junit.Assert.assertFalse(com.example.util.TimeIntegrityManager.isClockTampered(context))
+    } finally {
+      com.example.util.TimeIntegrityManager.wallClockProvider = { System.currentTimeMillis() }
+      com.example.util.TimeIntegrityManager.elapsedClockProvider = { android.os.SystemClock.elapsedRealtime() }
+      java.util.TimeZone.setDefault(originalTz)
+    }
+  }
+
+  @Test
+  fun `clock tamper blocks manual clock forward backward and timezone spoofing`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val originalTz = java.util.TimeZone.getDefault()
+    try {
+      java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Kolkata"))
+      var fakeWall = 1_750_000_000_000L
+      var fakeElapsed = 50_000L
+      com.example.util.TimeIntegrityManager.wallClockProvider = { fakeWall }
+      com.example.util.TimeIntegrityManager.elapsedClockProvider = { fakeElapsed }
+
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME_ZONE, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 20)
+      com.example.util.TimeIntegrityManager.init(context)
+      com.example.util.TimeIntegrityManager.resetTamperFlag(context)
+
+      // 1. User disables AUTO_TIME and sets clock backward by 3 hours
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME, 0)
+      fakeElapsed += 10_000L // true elapsed time is +10s
+      val expectedTrueTime = fakeWall + 10_000L
+      fakeWall -= 3 * 60 * 60 * 1000L // user moves clock back 3 hours
+      com.example.util.TimeIntegrityManager.onTimeChanged(context)
+
+      org.junit.Assert.assertTrue(com.example.util.TimeIntegrityManager.isClockTampered(context))
+      assertEquals(expectedTrueTime, com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(context))
+
+      // 2. User disables AUTO_TIME_ZONE and switches timezone (even if AUTO_TIME=1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME_ZONE, 0)
+      fakeWall = expectedTrueTime + 5_000L
+      fakeElapsed += 5_000L
+      java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Pacific/Honolulu"))
+      com.example.util.TimeIntegrityManager.onTimeChanged(context)
+
+      org.junit.Assert.assertTrue(com.example.util.TimeIntegrityManager.isClockTampered(context))
+      // Frozen timezone remains Asia/Kolkata!
+      assertEquals("Asia/Kolkata", com.example.util.TimeIntegrityManager.getTrueTimeZone(context).id)
+
+      // 3. Re-enabling AUTO_TIME & AUTO_TIME_ZONE clears tamper flag automatically
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME_ZONE, 1)
+      org.junit.Assert.assertFalse(com.example.util.TimeIntegrityManager.isClockTampered(context))
+      assertEquals("Pacific/Honolulu", com.example.util.TimeIntegrityManager.getTrueTimeZone(context).id)
+    } finally {
+      com.example.util.TimeIntegrityManager.wallClockProvider = { System.currentTimeMillis() }
+      com.example.util.TimeIntegrityManager.elapsedClockProvider = { android.os.SystemClock.elapsedRealtime() }
+      java.util.TimeZone.setDefault(originalTz)
+    }
+  }
+
+  @Test
+  fun `clock tamper blocks turn off auto time plus reboot backward loophole`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val originalTz = java.util.TimeZone.getDefault()
+    try {
+      java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"))
+      var fakeWall = 1_750_000_000_000L
+      var fakeElapsed = 100_000L
+      com.example.util.TimeIntegrityManager.wallClockProvider = { fakeWall }
+      com.example.util.TimeIntegrityManager.elapsedClockProvider = { fakeElapsed }
+
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME_ZONE, 1)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 30)
+      com.example.util.TimeIntegrityManager.init(context)
+      com.example.util.TimeIntegrityManager.resetTamperFlag(context)
+      val recordedHighWater = com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
+
+      // User turns OFF Auto-Time, sets clock back 1 day, and reboots phone (BOOT_COUNT increments, elapsed resets)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.AUTO_TIME, 0)
+      android.provider.Settings.Global.putInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 31)
+      fakeWall = recordedHighWater - 86_400_000L
+      fakeElapsed = 2_000L
+      com.example.util.TimeIntegrityManager.onBootCompleted(context)
+
+      org.junit.Assert.assertTrue(com.example.util.TimeIntegrityManager.isClockTampered(context))
+      assertEquals(recordedHighWater, com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(context))
+    } finally {
+      com.example.util.TimeIntegrityManager.wallClockProvider = { System.currentTimeMillis() }
+      com.example.util.TimeIntegrityManager.elapsedClockProvider = { android.os.SystemClock.elapsedRealtime() }
+      java.util.TimeZone.setDefault(originalTz)
+    }
+  }
 }

@@ -70,31 +70,6 @@ class FocusViewModel(
     )
     val connectedDisplayName: StateFlow<String?> = _connectedDisplayName.asStateFlow()
 
-    private val _signInDiagnosticStatus = MutableStateFlow(
-        runCatching {
-            val sp = application.getSharedPreferences(
-                com.example.data.backup.BackupManager.AUTH_SESSION_META_PREFS,
-                android.content.Context.MODE_PRIVATE
-            )
-            val savedEmail = preferencesRepository.getConnectedGmailAccountSync()
-                ?: sp.getString(com.example.data.backup.BackupManager.KEY_ACTIVE_GMAIL_EMAIL, null)
-            val savedName = sp.getString(com.example.data.backup.BackupManager.KEY_ACTIVE_DISPLAY_NAME, null)
-            if (!savedEmail.isNullOrBlank()) {
-                if (!savedName.isNullOrBlank()) "Signed in: $savedName ($savedEmail)" else "Signed in: $savedEmail"
-            } else {
-                "Not signed in"
-            }
-        }.getOrDefault("Not signed in")
-    )
-    val signInDiagnosticStatus: StateFlow<String> = _signInDiagnosticStatus.asStateFlow()
-
-    fun recordSignInDiagnostic(status: String, displayName: String? = null) {
-        if (!displayName.isNullOrBlank()) {
-            _connectedDisplayName.value = displayName
-        }
-        _signInDiagnosticStatus.value = status
-    }
-
     val lastCloudBackupTime: StateFlow<Long> = preferencesRepository.lastCloudBackupTime.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -160,18 +135,13 @@ class FocusViewModel(
         initialValue = false
     )
 
-    val isClockTamperProtectionEnabled: StateFlow<Boolean> = preferencesRepository.isClockTamperProtectionEnabled.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = true
-    )
+    val isClockTamperProtectionEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 
     val isClockTampered: StateFlow<Boolean> = com.example.util.TimeIntegrityManager.isClockTamperedFlow
 
     fun setClockTamperProtectionEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            preferencesRepository.setClockTamperProtectionEnabled(enabled)
-            triggerAutoBackup()
+            preferencesRepository.setClockTamperProtectionEnabled(true)
         }
     }
 
@@ -722,7 +692,6 @@ class FocusViewModel(
                 if (resolvedName != null) {
                     _connectedDisplayName.value = resolvedName
                 }
-                _signInDiagnosticStatus.value = "Selected ${resolvedName ?: normalizedEmail} — syncing focus_lock_cloud_backups..."
 
                 val restoreResult = backupManager.connectGmailAccount(
                     email = normalizedEmail,
@@ -731,11 +700,6 @@ class FocusViewModel(
                 )
                 if (restoreResult.isSuccess) {
                     val wasRestored = restoreResult.getOrNull() == true
-                    _signInDiagnosticStatus.value = if (wasRestored) {
-                        "Restored backup for ${resolvedName ?: normalizedEmail} ($normalizedEmail)"
-                    } else {
-                        "Connected ${resolvedName ?: normalizedEmail} ($normalizedEmail) — cloud backup active"
-                    }
                     _syncStatusMessage.value = if (wasRestored) {
                         "Settings restored from Google Cloud"
                     } else {
@@ -747,7 +711,6 @@ class FocusViewModel(
                 } else {
                     val err = restoreResult.exceptionOrNull()
                     val errMsg = err?.localizedMessage ?: err?.message ?: err?.javaClass?.simpleName ?: "Cloud sync error"
-                    _signInDiagnosticStatus.value = "Signed in (${resolvedName ?: normalizedEmail}) | Cloud error: $errMsg"
                     _syncStatusMessage.value = "Cloud sync notice: $errMsg"
                     withContext(Dispatchers.Main) {
                         onError(errMsg)
@@ -755,7 +718,6 @@ class FocusViewModel(
                 }
             } catch (e: Exception) {
                 val errMsg = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
-                _signInDiagnosticStatus.value = "Sign-in error: $errMsg"
                 _syncStatusMessage.value = "Sign-in failed: $errMsg"
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(
@@ -816,7 +778,6 @@ class FocusViewModel(
             _isSyncing.value = true
             backupManager.handleAccountSignOut()
             _connectedDisplayName.value = null
-            _signInDiagnosticStatus.value = "Signed out"
             _syncStatusMessage.value = "Disconnected from Google Cloud"
             _isSyncing.value = false
         }

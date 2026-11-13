@@ -66,7 +66,7 @@ object EmergencyBreakManager {
         endElapsedRealtime = prefs.getLong(KEY_END_ELAPSED, 0L)
         cycleStartTime = prefs.getLong(KEY_CYCLE_START, 0L)
 
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         if (cycleStartTime == 0L || now - cycleStartTime >= CYCLE_DURATION_MS) {
             cycleStartTime = now
             breaksRemaining = MAX_BREAKS
@@ -80,12 +80,12 @@ object EmergencyBreakManager {
 
         // Check if an existing break is running across process restarts
         val nowElapsed = SystemClock.elapsedRealtime()
-        val isActive = (endTimeMillis > now) && (endElapsedRealtime == 0L || endElapsedRealtime > nowElapsed)
+        val isActive = (endTimeMillis > now) && (endElapsedRealtime <= 0L || endElapsedRealtime > nowElapsed)
         if (isActive) {
             val remainingMs = minOf(
                 endTimeMillis - now,
                 if (endElapsedRealtime > 0L) endElapsedRealtime - nowElapsed else Long.MAX_VALUE
-            )
+            ).coerceAtLeast(0L)
             resumptionHandler.removeCallbacks(resumptionRunnable)
             resumptionHandler.postDelayed(resumptionRunnable, remainingMs)
             _isBreakActiveFlow.value = true
@@ -101,8 +101,8 @@ object EmergencyBreakManager {
         initialized = true
     }
 
-    private fun checkCycleReset(prefs: SharedPreferences) {
-        val now = System.currentTimeMillis()
+    private fun checkCycleReset(prefs: SharedPreferences, context: Context? = null) {
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         if (cycleStartTime == 0L || now - cycleStartTime >= CYCLE_DURATION_MS) {
             cycleStartTime = now
             breaksRemaining = MAX_BREAKS
@@ -115,7 +115,7 @@ object EmergencyBreakManager {
     }
 
     /**
-     * Fast check (0ms disk reads) to determine if a 10-minute break is currently active.
+     * Fast check to determine if a 10-minute break is currently active.
      */
     fun isBreakActive(context: Context? = null): Boolean {
         if (!initialized && context != null) {
@@ -124,7 +124,7 @@ object EmergencyBreakManager {
         val end = endTimeMillis
         if (end <= 0L) return false
 
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
         val elapsedEnd = endElapsedRealtime
 
@@ -146,7 +146,7 @@ object EmergencyBreakManager {
         if (ctx != null) {
             try {
                 val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                checkCycleReset(prefs)
+                checkCycleReset(prefs, ctx)
             } catch (_: Exception) {}
         }
         return breaksRemaining
@@ -154,22 +154,22 @@ object EmergencyBreakManager {
 
     /**
      * Starts a 10-minute emergency break.
-     * Decrements remaining breaks, records wall and elapsed end timestamps,
-     * schedules exact Handler & AlarmManager resumptions, and syncs to cloud.
+     * Decrements remaining breaks, records true wall and elapsed end timestamps,
+     * schedules exact Handler & ELAPSED_REALTIME_WAKEUP AlarmManager resumptions, and syncs to cloud.
      */
     fun startTenMinuteBreak(context: Context): Boolean {
         if (!initialized) {
             init(context.applicationContext)
         }
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        checkCycleReset(prefs)
+        checkCycleReset(prefs, context)
 
         if (isBreakActive(context) || breaksRemaining <= 0) {
             return false
         }
 
         breaksRemaining--
-        val now = System.currentTimeMillis()
+        val now = TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
         val nowElapsed = SystemClock.elapsedRealtime()
         endTimeMillis = now + BREAK_DURATION_MS
         endElapsedRealtime = nowElapsed + BREAK_DURATION_MS
@@ -187,8 +187,8 @@ object EmergencyBreakManager {
         resumptionHandler.removeCallbacks(resumptionRunnable)
         resumptionHandler.postDelayed(resumptionRunnable, BREAK_DURATION_MS)
 
-        // Schedule exact AlarmManager fallback
-        scheduleAlarmFallback(context, endTimeMillis)
+        // Schedule exact ELAPSED_REALTIME_WAKEUP AlarmManager fallback (immune to wall clock tampering)
+        scheduleAlarmFallback(context, endElapsedRealtime)
 
         // Trigger cloud backup async
         try {
@@ -239,7 +239,7 @@ object EmergencyBreakManager {
         }
     }
 
-    private fun scheduleAlarmFallback(context: Context, triggerAtMillis: Long) {
+    private fun scheduleAlarmFallback(context: Context, triggerAtElapsedRealtime: Long) {
         try {
             val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
             val intent = Intent(context, EmergencyBreakReceiver::class.java).apply {
@@ -254,15 +254,15 @@ object EmergencyBreakManager {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     if (am.canScheduleExactAlarms()) {
-                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                        am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
                     } else {
-                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
                     }
                 } else {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                    am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
                 }
             } else {
-                am.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+                am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsedRealtime, pi)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not schedule alarm fallback for emergency break", e)

@@ -99,7 +99,7 @@ class FocusForegroundService : Service() {
         startInForeground()
 
         val app = application as? FocusApplication
-        app?.repository?.setServiceStartTime(System.currentTimeMillis())
+        app?.repository?.setServiceStartTime(com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(this))
 
         // Register screen state and time tamper receiver
         val filter = IntentFilter().apply {
@@ -115,7 +115,8 @@ class FocusForegroundService : Service() {
                     Intent.ACTION_SCREEN_ON -> Log.d(TAG, "Screen turned ON")
                     Intent.ACTION_SCREEN_OFF -> Log.d(TAG, "Screen turned OFF")
                     Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED -> {
-                        Log.w(TAG, "Device time changed (possible tampering). Showing quick feedback.")
+                        Log.w(TAG, "Device time changed (possible tampering). Validating TimeIntegrityManager.")
+                        com.example.util.TimeIntegrityManager.onTimeChanged(context ?: applicationContext)
                         serviceScope.launch(Dispatchers.Main) {
                             try {
                                 android.widget.Toast.makeText(
@@ -273,7 +274,7 @@ class FocusForegroundService : Service() {
     private var lastFallbackBlockTime: Long = 0L
 
     private suspend fun checkFallbackEnforcement(pkgName: String) {
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.elapsedRealtime()
         if (pkgName == lastFallbackBlockPackage && now - lastFallbackBlockTime < 4000) {
             return
         }
@@ -644,7 +645,7 @@ class FocusForegroundService : Service() {
         cooldownEnd: Long,
         groupName: String? = null
     ) {
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.elapsedRealtime()
         if (pkgName == lastSessionBlockPackage && now - lastSessionBlockTime < 1500) {
             return
         }

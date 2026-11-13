@@ -91,6 +91,7 @@ fun DashboardScreen(
     val isMasterEnabled by viewModel.isMasterEnabled.collectAsStateWithLifecycle()
     val isBreakActive by viewModel.isEmergencyBreakActive.collectAsStateWithLifecycle()
     val isCheatProtectionEnabled by viewModel.isCheatProtectionEnabled.collectAsStateWithLifecycle()
+    val isClockTampered by viewModel.isClockTampered.collectAsStateWithLifecycle()
     val blockedApps by viewModel.blockedApps.collectAsStateWithLifecycle()
     val screenLimits by viewModel.screenTimeLimits.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
@@ -116,6 +117,7 @@ fun DashboardScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                com.example.util.TimeIntegrityManager.getTrustedCurrentTimeMillis(context)
                 isAccessibilityEnabled = PermissionHelper.isAccessibilityServiceEnabled(context)
                 viewModel.refreshDailyUsageStats()
                 if (PermissionHelper.isUsageStatsPermissionGranted(context)) {
@@ -221,6 +223,38 @@ fun DashboardScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            if (isClockTampered) {
+                item(key = "clock_tamper_warning") {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dashboard_clock_tamper_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Clock tampering detected! Enforcing rules on hardware true time.",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }

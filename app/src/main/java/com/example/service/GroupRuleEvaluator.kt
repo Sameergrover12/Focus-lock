@@ -4,7 +4,6 @@ import android.content.Context
 import com.example.data.local.entity.AppGroup
 import com.example.util.TimeIntegrityManager
 import java.util.Calendar
-import java.util.TimeZone
 
 object GroupRuleEvaluator {
 
@@ -17,14 +16,14 @@ object GroupRuleEvaluator {
      */
     fun isScheduleActive(
         group: AppGroup,
-        now: Calendar = TimeIntegrityManager.getTrueCalendar(TimeZone.getDefault()),
+        now: Calendar = TimeIntegrityManager.getTrueCalendar(),
         context: Context? = null
     ): Boolean {
         if (!group.scheduleEnabled) return false
         if (group.daysOfWeek.isEmpty()) return false
 
         val evalCal = if (context != null) {
-            TimeIntegrityManager.getTrueCalendar(TimeZone.getDefault(), context)
+            TimeIntegrityManager.getTrueCalendar(context = context)
         } else {
             now
         }
@@ -80,7 +79,7 @@ object GroupRuleEvaluator {
      */
     fun isGroupBlocked(
         group: AppGroup,
-        now: Calendar = TimeIntegrityManager.getTrueCalendar(TimeZone.getDefault()),
+        now: Calendar = TimeIntegrityManager.getTrueCalendar(),
         nowMillis: Long = TimeIntegrityManager.getTrustedCurrentTimeMillis()
     ): Boolean {
         val scheduleBlocked = isScheduleActive(group, now)

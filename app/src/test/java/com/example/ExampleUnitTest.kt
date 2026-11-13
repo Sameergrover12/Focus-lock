@@ -936,7 +936,7 @@ class ExampleUnitTest {
 
     @Test
     fun testOvernightAndSameDayScheduleEvaluation() {
-        assertEquals(180_000L, com.example.util.TimeIntegrityManager.MAX_ALLOWED_DRIFT_MS)
+        assertEquals(120_000L, com.example.util.TimeIntegrityManager.MAX_ALLOWED_DRIFT_MS)
 
         val overnightGroup = AppGroup(
             name = "Night Lockdown",

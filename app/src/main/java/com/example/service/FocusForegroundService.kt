@@ -663,23 +663,15 @@ class FocusForegroundService : Service() {
             "Session limit reached. Take a break before starting a new session."
         }
 
-        try {
-            val intent = Intent(this, BlockedActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                putExtra("BLOCKED_PACKAGE", pkgName)
-                putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
-                putExtra(BlockedActivity.EXTRA_TITLE, title)
-                putExtra(BlockedActivity.EXTRA_REASON, reason)
-                putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_SESSION_COOLDOWN)
-                putExtra(BlockedActivity.EXTRA_QUOTE, quote)
-                putExtra(BlockedActivity.EXTRA_COOLDOWN_END_TIME, cooldownEnd)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch BlockedActivity for session cooldown", e)
-        }
+        FocusAccessibilityService.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+        com.example.ui.overlay.OverlayManager.showOverlay(
+            context = this,
+            title = title,
+            reason = reason,
+            type = BlockedActivity.TYPE_SESSION_COOLDOWN,
+            quote = quote,
+            cooldownEndTime = cooldownEnd
+        )
     }
 
     private fun sendWarningNotification(pkgName: String, usedMinutes: Int, limitMinutes: Int) {

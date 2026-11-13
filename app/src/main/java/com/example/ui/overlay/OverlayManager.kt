@@ -24,16 +24,19 @@ import com.example.data.preferences.UserPreferencesRepository
 import com.example.focusapp.util.MotivationLibrary
 import com.example.ui.blocked.BlockedActivity
 import com.example.ui.blocked.BlockedScreen
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import com.example.ui.theme.BaseThemeMode
+import com.example.ui.theme.FocusLockTheme
+import com.example.ui.theme.SecondaryThemePalette
+import com.example.util.EmergencyBreakManager
 
 /**
  * OverlayManager manages drawing the full-screen intervention barrier via WindowManager
- * when SYSTEM_ALERT_WINDOW permission is granted.
+ * when SYSTEM_ALERT_WINDOW or AccessibilityService overlay is available.
  * Integrates the 4-second pattern interrupt, quote absorption, and auto-ejection to Home.
  */
 object OverlayManager {
     private const val TAG = "OverlayManager"
+    @Volatile
     private var overlayView: ComposeView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -69,7 +72,8 @@ object OverlayManager {
         type: String = BlockedActivity.TYPE_APP,
         quote: String = MotivationLibrary.getRandomFullScreenQuote(),
         nextWindow: String? = null,
-        isAccessibilityOverlay: Boolean = false
+        isAccessibilityOverlay: Boolean = false,
+        cooldownEndTime: Long = 0L
     ) {
         val activeAccessibilityService = com.example.service.FocusAccessibilityService.instance
         val useAccessibilityOverlay = isAccessibilityOverlay ||
@@ -78,7 +82,7 @@ object OverlayManager {
 
         if (!useAccessibilityOverlay && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
             // Cannot draw overlay directly; launch BlockedActivity as fallback
-            launchBlockedActivity(context, title, reason, type, quote, nextWindow)
+            launchBlockedActivity(context, title, reason, type, quote, nextWindow, cooldownEndTime)
             return
         }
 
@@ -88,105 +92,125 @@ object OverlayManager {
             activeAccessibilityService ?: context
         }
 
-        mainHandler.post {
+        val attachOverlay = {
             try {
-                removeOverlay(targetContext)
+                // Remove any previous overlay synchronously BEFORE adding the new view
+                removeOverlayImmediate(targetContext)
 
-                val windowManager = targetContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
-
-                val layoutType = if (useAccessibilityOverlay) {
-                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                val windowManager = targetContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                if (windowManager == null) {
+                    launchBlockedActivity(context, title, reason, type, quote, nextWindow, cooldownEndTime)
                 } else {
-                    @Suppress("DEPRECATION")
-                    WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
-                }
-
-                val params = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    layoutType,
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                            WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                    PixelFormat.TRANSLUCENT
-                ).apply {
-                    gravity = Gravity.CENTER
-                }
-
-                val lifecycleOwner = OverlayLifecycleOwner()
-                activeLifecycleOwner = lifecycleOwner
-
-                val app = context.applicationContext as? FocusApplication
-                val prefRepo = app?.preferencesRepository
-
-                val breaks = runBlocking {
-                    try {
-                        prefRepo?.emergencyBreaksRemaining?.first() ?: UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS
-                    } catch (e: Exception) {
-                        UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS
+                    val layoutType = if (useAccessibilityOverlay) {
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
                     }
-                }
 
-                val passphrase = runBlocking {
-                    try {
-                        prefRepo?.cognitivePassphrase?.first() ?: UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
-                    } catch (e: Exception) {
-                        UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
+                    val params = WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        layoutType,
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.CENTER
                     }
-                }
 
-                val composeView = ComposeView(context).apply {
-                    setViewTreeLifecycleOwner(lifecycleOwner)
-                    setViewTreeSavedStateRegistryOwner(lifecycleOwner)
-                    setContent {
-                        BlockedScreen(
-                            title = title,
-                            reason = reason,
-                            type = type,
-                            quote = quote,
-                            breaksRemaining = breaks,
-                            cognitivePassphrase = passphrase,
-                            nextWindow = nextWindow,
-                            onGoHome = {
-                                fireHomeIntent(context)
-                                removeOverlay(context)
-                            },
-                            onActivateEmergencyBreak = { phrase ->
-                                prefRepo?.triggerEmergencyBreak(phrase) ?: false
-                            },
-                            onEmergencyBreakActivated = {
-                                removeOverlay(context)
+                    val lifecycleOwner = OverlayLifecycleOwner()
+                    activeLifecycleOwner = lifecycleOwner
+
+                    val app = targetContext.applicationContext as? FocusApplication
+                    val prefRepo = app?.preferencesRepository
+
+                    // Read synchronously from SharedPreferences-backed caches (0ms, zero DataStore stall)
+                    val breaks = EmergencyBreakManager.getBreaksRemaining(targetContext)
+                    val passphrase = prefRepo?.getInitialCognitivePassphrase()
+                        ?: UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
+                    val baseThemeMode = prefRepo?.getInitialBaseThemeMode() ?: BaseThemeMode.DARK
+                    val secondaryPalette = prefRepo?.getInitialSecondaryPalette()
+                        ?: SecondaryThemePalette.FOCUS_EMERALD
+
+                    val composeView = ComposeView(targetContext).apply {
+                        setViewTreeLifecycleOwner(lifecycleOwner)
+                        setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+                        setContent {
+                            FocusLockTheme(
+                                baseThemeMode = baseThemeMode,
+                                secondaryPalette = secondaryPalette
+                            ) {
+                                BlockedScreen(
+                                    title = title,
+                                    reason = reason,
+                                    type = type,
+                                    quote = quote,
+                                    cooldownEndTime = cooldownEndTime,
+                                    breaksRemaining = breaks,
+                                    cognitivePassphrase = passphrase,
+                                    nextWindow = nextWindow,
+                                    onGoHome = {
+                                        fireHomeIntent(targetContext)
+                                        removeOverlayImmediate(targetContext)
+                                    },
+                                    onActivateEmergencyBreak = { phrase ->
+                                        prefRepo?.triggerEmergencyBreak(phrase) ?: false
+                                    },
+                                    onEmergencyBreakActivated = {
+                                        removeOverlayImmediate(targetContext)
+                                    }
+                                )
                             }
-                        )
+                        }
                     }
-                }
 
-                overlayView = composeView
-                windowManager.addView(composeView, params)
-                Log.d(TAG, "WindowManager overlay displayed successfully")
+                    overlayView = composeView
+                    windowManager.addView(composeView, params)
+                    Log.d(TAG, "WindowManager overlay displayed synchronously at 0ms")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to display WindowManager overlay; falling back to Activity", e)
-                launchBlockedActivity(context, title, reason, type, quote, nextWindow)
+                overlayView = null
+                activeLifecycleOwner?.destroy()
+                activeLifecycleOwner = null
+                launchBlockedActivity(context, title, reason, type, quote, nextWindow, cooldownEndTime)
             }
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            attachOverlay()
+        } else {
+            mainHandler.post { attachOverlay() }
+        }
+    }
+
+    private fun removeOverlayImmediate(context: Context? = null) {
+        try {
+            val view = overlayView
+            if (view != null) {
+                val wm = (context ?: view.context).getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                wm?.removeViewImmediate(view)
+                overlayView = null
+                activeLifecycleOwner?.destroy()
+                activeLifecycleOwner = null
+                Log.d(TAG, "WindowManager overlay removed")
+            }
+        } catch (e: Exception) {
+            overlayView = null
+            activeLifecycleOwner = null
+            Log.w(TAG, "Error removing WindowManager overlay", e)
         }
     }
 
     fun removeOverlay(context: Context? = null) {
-        mainHandler.post {
-            try {
-                if (overlayView != null) {
-                    val wm = (context ?: overlayView?.context)?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-                    wm?.removeViewImmediate(overlayView)
-                    overlayView = null
-                    activeLifecycleOwner?.destroy()
-                    activeLifecycleOwner = null
-                    Log.d(TAG, "WindowManager overlay removed")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error removing WindowManager overlay", e)
-            }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            removeOverlayImmediate(context)
+        } else {
+            mainHandler.post { removeOverlayImmediate(context) }
         }
     }
 
@@ -208,7 +232,8 @@ object OverlayManager {
         reason: String,
         type: String,
         quote: String,
-        nextWindow: String?
+        nextWindow: String?,
+        cooldownEndTime: Long = 0L
     ) {
         try {
             val intent = Intent(context, BlockedActivity::class.java).apply {
@@ -219,6 +244,9 @@ object OverlayManager {
                 putExtra(BlockedActivity.EXTRA_TYPE, type)
                 putExtra(BlockedActivity.EXTRA_QUOTE, quote)
                 putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
+                if (cooldownEndTime > 0L) {
+                    putExtra(BlockedActivity.EXTRA_COOLDOWN_END_TIME, cooldownEndTime)
+                }
             }
             context.startActivity(intent)
         } catch (e: Exception) {

@@ -93,8 +93,8 @@ class FocusAccessibilityService : AccessibilityService() {
     @Volatile private var compiledKeywords = listOf<Pair<BlockedKeyword, Regex>>()
     private val appNameCache = ConcurrentHashMap<String, String>()
 
-    private var lastBlockedTime = 0L
-    private var lastBlockedPackage: String? = null
+    @Volatile private var lastBlockedTime = 0L
+    @Volatile private var lastBlockedPackage: String? = null
     private var lastScanTime = 0L
     private var lastEvaluatedPackage: String? = null
     private var lastHideAppInterceptTime = 0L
@@ -237,6 +237,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
         serviceJob.cancel()
         mainHandler.removeCallbacksAndMessages(null)
+        OverlayManager.removeOverlay(this)
         Log.d(TAG, "FocusAccessibilityService destroyed")
     }
 
@@ -295,14 +296,10 @@ class FocusAccessibilityService : AccessibilityService() {
                     findBlockedPackageInVisibleWindows(currentForegroundPackage)
                 }
                 if (blockedInWindow != null) {
-                    withContext(Dispatchers.Main) {
+                    withContext(Dispatchers.Main.immediate) {
                         triggerBlockScreen(blockedInWindow)
                     }
                     continue
-                } else if (OverlayManager.isShowingOverlay()) {
-                    withContext(Dispatchers.Main) {
-                        OverlayManager.removeOverlay(this@FocusAccessibilityService)
-                    }
                 }
 
                 val currentPkg = currentForegroundPackage
@@ -1817,6 +1814,16 @@ class FocusAccessibilityService : AccessibilityService() {
         )
     }
 
+    private inline fun runOnMainImmediate(crossinline action: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action()
+        } else {
+            serviceScope.launch(Dispatchers.Main.immediate) {
+                action()
+            }
+        }
+    }
+
     private fun triggerBlockScreen(packageName: String) {
         if (packageName == "com.android.settings") return
 
@@ -1830,35 +1837,30 @@ class FocusAccessibilityService : AccessibilityService() {
         // Record intercept via InterceptTracker
         com.example.util.InterceptTracker.recordAppIntercept(this, packageName)
 
-        // Step 1: Force the OS to collapse/minimize floating or split-screen windows
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        performGlobalAction(GLOBAL_ACTION_HOME)
-
         val appTitle = getAppNameFromPackage(packageName)
+        val reason = "This app is in your blocked apps list."
         val quote = MotivationLibrary.getRandomFullScreenQuote()
 
-        // Step 2: After a tiny 100ms delay, launch BlockedActivity with FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP
-        Handler(Looper.getMainLooper()).postDelayed({
-            try {
-                val intent = Intent(this, BlockedActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                    putExtra("BLOCKED_PACKAGE", packageName)
-                    putExtra(BlockedActivity.EXTRA_PACKAGE, packageName)
-                    putExtra(BlockedActivity.EXTRA_TITLE, appTitle)
-                    putExtra(BlockedActivity.EXTRA_REASON, "This app is in your blocked apps list.")
-                    putExtra(BlockedActivity.EXTRA_TYPE, BlockedActivity.TYPE_APP)
-                    putExtra(BlockedActivity.EXTRA_QUOTE, quote)
-                }
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to launch BlockedActivity for $packageName", e)
-            }
-        }, 100L)
+        // 0ms Simultaneous Execution on Main Thread:
+        // Collapse/close restricted app and attach WindowManager overlay in the exact same synchronous step.
+        runOnMainImmediate {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            performGlobalAction(GLOBAL_ACTION_HOME)
 
-        // Step 3: 250ms Hard failsafe against persistent pinned floating windows that stay on top
-        scheduleFloatingWindowFailsafe(packageName, appTitle, "This app is in your blocked apps list.", BlockedActivity.TYPE_APP, quote)
+            if (!OverlayManager.isShowingOverlay()) {
+                OverlayManager.showOverlay(
+                    context = this,
+                    title = appTitle,
+                    reason = reason,
+                    type = BlockedActivity.TYPE_APP,
+                    quote = quote,
+                    isAccessibilityOverlay = true
+                )
+            }
+        }
+
+        // Failsafe against persistent pinned floating windows that resist the initial Home action
+        scheduleFloatingWindowFailsafe(packageName, appTitle, reason, BlockedActivity.TYPE_APP, quote)
     }
 
     private fun executeBlock(
@@ -1886,38 +1888,30 @@ class FocusAccessibilityService : AccessibilityService() {
             com.example.util.InterceptTracker.recordAppIntercept(this, pkgName)
         }
 
-        // Step 1: Force the OS to collapse/minimize floating or split-screen windows
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        performGlobalAction(GLOBAL_ACTION_HOME)
-
         val quote = MotivationLibrary.getRandomFullScreenQuote()
 
-        // Step 2: After a tiny 100ms delay, launch BlockedActivity with FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP
-        Handler(Looper.getMainLooper()).postDelayed({
-            try {
-                val intent = Intent(this, BlockedActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                    putExtra("BLOCKED_PACKAGE", pkgName)
-                    putExtra(BlockedActivity.EXTRA_PACKAGE, pkgName)
-                    putExtra(BlockedActivity.EXTRA_TITLE, title)
-                    putExtra(BlockedActivity.EXTRA_REASON, reason)
-                    putExtra(BlockedActivity.EXTRA_TYPE, type)
-                    putExtra(BlockedActivity.EXTRA_NEXT_WINDOW, nextWindow)
-                    putExtra(BlockedActivity.EXTRA_QUOTE, quote)
-                    if (cooldownEndTime > 0L) {
-                        putExtra(BlockedActivity.EXTRA_COOLDOWN_END_TIME, cooldownEndTime)
-                    }
-                }
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to launch BlockedActivity for $pkgName", e)
-            }
-        }, 100L)
+        // 0ms Simultaneous Execution on Main Thread:
+        // Close restricted app and attach WindowManager overlay in the exact same synchronous step.
+        runOnMainImmediate {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            performGlobalAction(GLOBAL_ACTION_HOME)
 
-        // Step 3: 250ms Hard failsafe against persistent pinned floating windows that stay on top
-        scheduleFloatingWindowFailsafe(pkgName, title, reason, type, quote, nextWindow)
+            if (!OverlayManager.isShowingOverlay()) {
+                OverlayManager.showOverlay(
+                    context = this,
+                    title = title,
+                    reason = reason,
+                    type = type,
+                    quote = quote,
+                    nextWindow = nextWindow,
+                    isAccessibilityOverlay = true,
+                    cooldownEndTime = cooldownEndTime
+                )
+            }
+        }
+
+        // Failsafe against persistent pinned floating windows that resist the initial Home action
+        scheduleFloatingWindowFailsafe(pkgName, title, reason, type, quote, nextWindow, cooldownEndTime)
     }
 
     private fun scheduleFloatingWindowFailsafe(
@@ -1926,27 +1920,31 @@ class FocusAccessibilityService : AccessibilityService() {
         reason: String,
         type: String,
         quote: String,
-        nextWindow: String? = null
+        nextWindow: String? = null,
+        cooldownEndTime: Long = 0L
     ) {
-        Handler(Looper.getMainLooper()).postDelayed({
+        mainHandler.postDelayed({
             val stillBlocked = findBlockedPackageInVisibleWindows(null)
             if (stillBlocked != null) {
-                Log.w(TAG, "Floating window ($stillBlocked) still on screen 250ms after block! Engaging persistent failsafe overlay.")
+                Log.w(TAG, "Floating window ($stillBlocked) still on screen 250ms after block! Re-enforcing Home ejection.")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 performGlobalAction(GLOBAL_ACTION_HOME)
 
-                OverlayManager.showOverlay(
-                    context = this,
-                    title = title,
-                    reason = reason,
-                    type = type,
-                    quote = quote,
-                    nextWindow = nextWindow,
-                    isAccessibilityOverlay = true
-                )
+                if (!OverlayManager.isShowingOverlay()) {
+                    OverlayManager.showOverlay(
+                        context = this,
+                        title = title,
+                        reason = reason,
+                        type = type,
+                        quote = quote,
+                        nextWindow = nextWindow,
+                        isAccessibilityOverlay = true,
+                        cooldownEndTime = cooldownEndTime
+                    )
+                }
 
                 // Re-check after another 250ms if user somehow kept pinned floating window alive
-                Handler(Looper.getMainLooper()).postDelayed({
+                mainHandler.postDelayed({
                     val persistentBlocked = findBlockedPackageInVisibleWindows(null)
                     if (persistentBlocked != null) {
                         performGlobalAction(GLOBAL_ACTION_BACK)

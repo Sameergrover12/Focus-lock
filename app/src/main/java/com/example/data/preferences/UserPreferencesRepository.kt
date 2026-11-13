@@ -95,6 +95,15 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    fun getInitialSecondaryPalette(): SecondaryThemePalette {
+        val saved = syncPrefs.getString("secondary_palette", null)
+        return SecondaryThemePalette.entries.find { it.name == saved } ?: SecondaryThemePalette.FOCUS_EMERALD
+    }
+
+    fun getInitialCognitivePassphrase(): String {
+        return syncPrefs.getString("cognitive_passphrase", null) ?: DEFAULT_COGNITIVE_PASSPHRASE
+    }
+
     val baseThemeMode: Flow<BaseThemeMode> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
         val saved = syncPrefs.getString("base_theme_mode", null)
             ?: preferences[PreferencesKeys.BASE_THEME_MODE]

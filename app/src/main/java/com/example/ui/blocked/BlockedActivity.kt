@@ -8,6 +8,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -57,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -133,15 +137,15 @@ class BlockedActivity : ComponentActivity() {
             ) ?: remember { mutableStateOf(BaseThemeMode.DARK) })
 
             val secondaryPalette by (prefRepo?.secondaryPalette?.collectAsStateWithLifecycle(
-                initialValue = SecondaryThemePalette.FOCUS_EMERALD
+                initialValue = prefRepo.getInitialSecondaryPalette()
             ) ?: remember { mutableStateOf(SecondaryThemePalette.FOCUS_EMERALD) })
 
             val breaksRemaining by (prefRepo?.emergencyBreaksRemaining?.collectAsStateWithLifecycle(
-                initialValue = UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS
+                initialValue = com.example.util.EmergencyBreakManager.getBreaksRemaining(this@BlockedActivity)
             ) ?: remember { mutableStateOf(UserPreferencesRepository.MAX_WEEKLY_EMERGENCY_BREAKS) })
 
             val cognitivePassphrase by (prefRepo?.cognitivePassphrase?.collectAsStateWithLifecycle(
-                initialValue = UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE
+                initialValue = prefRepo.getInitialCognitivePassphrase()
             ) ?: remember { mutableStateOf(UserPreferencesRepository.DEFAULT_COGNITIVE_PASSPHRASE) })
 
             FocusLockTheme(
@@ -266,9 +270,24 @@ fun BlockedScreen(
         else -> "FOCUS RESTRICTION ACTIVE"
     }
 
+    var isEntranceVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        isEntranceVisible = true
+    }
+    val entranceAlpha by animateFloatAsState(
+        targetValue = if (isEntranceVisible) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = 180,
+            delayMillis = 0,
+            easing = FastOutSlowInEasing
+        ),
+        label = "blocked_overlay_entrance_alpha"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer { alpha = entranceAlpha }
             .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding()
             .padding(horizontal = 28.dp, vertical = 24.dp)

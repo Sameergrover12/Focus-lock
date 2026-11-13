@@ -53,19 +53,140 @@ object SettingsTamperDetector {
     fun isSettingsAppPackage(pkgName: String?): Boolean {
         if (pkgName.isNullOrBlank()) return false
         val lower = pkgName.lowercase().trim()
-        return KNOWN_SETTINGS_PACKAGES.contains(lower) || lower.endsWith(".settings")
+        return lower.contains("settings") && !lower.contains("focuslock")
     }
 
-    fun isTamperConfirmationDialog(texts: List<String>, appPackageName: String): Boolean {
+    fun isAccessibilityServiceDetailFragment(eventClassName: String?): Boolean {
+        if (eventClassName.isNullOrBlank()) return false
+        val lower = eventClassName.lowercase()
+        return lower.contains("toggleaccessibilityservicepreferencefragment") ||
+            lower.contains("accessibilitydetailssettingsfragment") ||
+            lower.contains("installedservicesfragment")
+    }
+
+    fun isNonAccessibilityRootExitClass(eventClassName: String?): Boolean {
+        if (eventClassName.isNullOrBlank()) return false
+        val lower = eventClassName.lowercase()
+        return lower.contains("settingshomepageactivity") ||
+            lower.contains("toplevelsettings") ||
+            lower.contains("manageapplications") ||
+            lower.contains("appdashboardfragment") ||
+            lower.contains("applicationssettings")
+    }
+
+    fun hasAppOrFocusLockName(
+        textsLower: List<String>,
+        appPackageName: String,
+        appLabel: String = "Focus Lock"
+    ): Boolean {
+        val targetPkgLower = appPackageName.lowercase().trim()
+        val labelLower = appLabel.lowercase().trim()
+        return textsLower.any {
+            it.contains("focus lock") ||
+                (labelLower.isNotEmpty() && it.contains(labelLower)) ||
+                (targetPkgLower.isNotEmpty() && it.contains(targetPkgLower))
+        }
+    }
+
+    fun isNormalAppManagerScreen(textsLower: List<String>): Boolean {
+        return textsLower.any {
+            it == "all apps" ||
+            it == "app management" ||
+            it == "manage apps" ||
+            it == "see all apps" ||
+            it == "default apps" ||
+            it == "permission manager" ||
+            it.contains("apps installed") ||
+            it.contains("apps found") ||
+            it.contains("permission manager")
+        }
+    }
+
+    fun isFocusLockServiceDetailContent(textsLower: List<String>): Boolean {
+        val hasServiceDescription = textsLower.any {
+            it.contains("focus lock uses this service") ||
+            it.contains("detect foreground apps") ||
+            it.contains("monitor screen time limits")
+        }
+        if (hasServiceDescription) return true
+
+        val hasOemSubPageMarker = textsLower.any {
+            it.contains("about this function") ||
+            it.contains("auto-launch management")
+        }
+        if (hasOemSubPageMarker) return true
+
+        val hasShortcut = textsLower.any { it.contains("shortcut") }
+        val hasAppInfo = textsLower.any { it.contains("app info") }
+        if (hasShortcut && hasAppInfo) return true
+
+        val specificToggleIndicators = listOf(
+            "use focus lock",
+            "use service",
+            "focus lock shortcut",
+            "stop focus lock",
+            "turn off focus lock",
+            "allow focus lock"
+        )
+        return textsLower.any { text ->
+            specificToggleIndicators.any { ind -> text.contains(ind) }
+        }
+    }
+
+    fun isMainAccessibilityRootScreen(
+        eventClassName: String?,
+        texts: List<String>,
+        appPackageName: String,
+        appLabel: String = "Focus Lock"
+    ): Boolean {
+        if (isAccessibilityServiceDetailFragment(eventClassName)) return false
+
+        val textsLower = texts.map { it.lowercase().trim() }
+        if (isSafePermissionScreen(textsLower)) return false
+        if (isNormalAppManagerScreen(textsLower)) return false
+        if (isTamperConfirmationDialog(texts, appPackageName, appLabel)) return false
+
+        val hasApp = hasAppOrFocusLockName(textsLower, appPackageName, appLabel)
+        if (hasApp && isFocusLockServiceDetailContent(textsLower)) {
+            return false
+        }
+
+        val hasMainAccessibilityMenuItem = textsLower.any {
+            it.contains("press power button to end calls") ||
+            it.contains("accessibility menu") ||
+            it.contains("shortcut from lock screen") ||
+            it.contains("display size and text") ||
+            it.contains("color and motion") ||
+            it.contains("visibility enhancements") ||
+            it.contains("hearing enhancements") ||
+            it.contains("interaction controls") ||
+            it.contains("system controls") ||
+            it.contains("caption preferences")
+        }
+        if (hasMainAccessibilityMenuItem) return true
+
+        if (!eventClassName.isNullOrBlank() &&
+            eventClassName.contains("AccessibilitySettings", ignoreCase = true)
+        ) {
+            return true
+        }
+
+        val primaryTitle = textsLower.firstOrNull {
+            it.isNotEmpty() && it != "navigate up" && it != "back" && it != "search"
+        }
+        return primaryTitle == "accessibility"
+    }
+
+    fun isTamperConfirmationDialog(
+        texts: List<String>,
+        appPackageName: String,
+        appLabel: String = "Focus Lock"
+    ): Boolean {
         if (texts.isEmpty()) return false
         val textsLower = texts.map { it.lowercase().trim() }
         if (isSafePermissionScreen(textsLower)) return false
 
-        val targetPkgLower = appPackageName.lowercase().trim()
-        val hasFocusLockName = textsLower.any {
-            it.contains("focus lock") || (targetPkgLower.isNotEmpty() && it.contains(targetPkgLower))
-        }
-        if (!hasFocusLockName) return false
+        if (!hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) return false
 
         val hasStopOrTurnOff = textsLower.any {
             it.contains("turn off") ||
@@ -89,16 +210,10 @@ object SettingsTamperDetector {
     }
 
     fun isSafePermissionScreen(textsLower: List<String>): Boolean {
-        // If this screen contains Accessibility toggle markers, it's not a safe permission screen
-        val hasAccessibilityMarker = textsLower.any {
-            it.contains("accessibility") || it.contains("use service") || it.contains("downloaded apps") || it.contains("installed apps")
-        }
         return textsLower.any { text ->
             SAFE_PERMISSION_WHITELIST.any { safe ->
                 if (safe == "activate this device admin app") {
                     text.contains(safe) && !textsLower.any { it.contains("deactivate") }
-                } else if (safe == "auto-launch permission" || safe == "background auto-launch") {
-                    text.contains(safe)
                 } else {
                     text.contains(safe)
                 }
@@ -107,40 +222,36 @@ object SettingsTamperDetector {
     }
 
     /**
-     * Evaluates collected screen text and view state against exact tamper signatures.
-     *
-     * @param texts All visible text and content descriptions collected from the window.
-     * @param hasClickableSwitchOrCheckbox True if a clickable Switch or CheckBox is present.
-     * @param isClockTamperProtectionEnabled True if clock tamper protection / strict mode is active.
-     * @param appPackageName The package name of Focus Lock (e.g. context.packageName).
-     * @return TamperSignature matching one of Signatures A, B, C, D, or NONE.
+     * Evaluates collected screen text, fragment class name, and accessibility navigation anchor
+     * against exact tamper signatures.
      */
     fun matchTamperSignature(
         texts: List<String>,
         hasClickableSwitchOrCheckbox: Boolean,
         isClockTamperProtectionEnabled: Boolean,
-        appPackageName: String
+        appPackageName: String,
+        appLabel: String = "Focus Lock",
+        eventClassName: String? = null,
+        isRecentlyFromAccessibility: Boolean = false
     ): TamperSignature {
-        if (texts.isEmpty()) return TamperSignature.NONE
-
         val textsLower = texts.map { it.lowercase().trim() }
-        val targetPkgLower = appPackageName.lowercase().trim()
 
-        // -------------------------------------------------------------------------
         // Safe Whitelist: NEVER block or trigger anti-tamper on permission grant screens!
-        // Allows user to grant Usage Access, Display over other apps, Notification Access,
-        // Battery Optimization, or Activate Device Admin without being kicked out.
-        // -------------------------------------------------------------------------
         if (isSafePermissionScreen(textsLower)) {
             return TamperSignature.NONE
         }
 
-        // -------------------------------------------------------------------------
-        // Signature 4 (D) — System Date & Time Settings
-        // Trigger when isClockTamperProtectionEnabled / strict mode / killswitch is active.
-        // Screen contains "date & time" OR "set time" OR "automatic date & time".
-        // (Guards against the parent "System" settings menu which lists "Date & time" as a sub-item)
-        // -------------------------------------------------------------------------
+        // Language-independent service detail fragments (ToggleAccessibilityServicePreferenceFragment, etc.)
+        if (isAccessibilityServiceDetailFragment(eventClassName)) {
+            val isInstalledServicesList = eventClassName?.contains("InstalledServicesFragment", ignoreCase = true) == true
+            if (isInstalledServicesList || texts.isEmpty() || hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) {
+                return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
+            }
+        }
+
+        if (texts.isEmpty()) return TamperSignature.NONE
+
+        // Signature D — System Date & Time Settings
         if (isClockTamperProtectionEnabled) {
             val hasSetTimeOrAuto = textsLower.any {
                 it.contains("automatic date & time") ||
@@ -162,75 +273,19 @@ object SettingsTamperDetector {
             }
         }
 
-        // Check if Focus Lock is specifically referenced on this screen
-        val hasFocusLockName = textsLower.any {
-            it.contains("focus lock") || (targetPkgLower.isNotEmpty() && it.contains(targetPkgLower))
-        }
-
-        // Main Accessibility menu items (keeps Settings -> Accessibility accessible for general settings)
-        val hasMainAccessibilityMenuItem = textsLower.any {
-            it.contains("press power button to end calls") ||
-            it.contains("accessibility menu") ||
-            it.contains("shortcut from lock screen") ||
-            it.contains("display size and text") ||
-            it.contains("color and motion") ||
-            it.contains("visibility enhancements") ||
-            it.contains("hearing enhancements") ||
-            it.contains("interaction controls") ||
-            it.contains("system controls") ||
-            it.contains("caption preferences")
-        }
-
-        val isNormalAppManagerScreen = textsLower.any {
-            it == "all apps" ||
-            it == "app management" ||
-            it == "manage apps" ||
-            it == "see all apps" ||
-            it == "default apps" ||
-            it.contains("apps installed") ||
-            it.contains("apps found") ||
-            it.contains("permission manager")
-        }
-
-        // -------------------------------------------------------------------------
-        // Signature 1 (A) — Early Entry Trigger: "Downloaded apps" / "Installed services" /
-        // Accessibility "Installed apps" section (even if Focus Lock row is scrolled off-screen).
-        // Main Accessibility menu and normal App Manager lists remain unaffected.
-        // -------------------------------------------------------------------------
-        if (!hasMainAccessibilityMenuItem && !isNormalAppManagerScreen) {
-            val hasDownloadedAppsOrServicesScreen = textsLower.any {
-                it == "downloaded apps" ||
-                it == "downloaded services" ||
-                it == "installed services" ||
-                it.contains("downloaded apps") ||
-                it.contains("downloaded services") ||
-                it.contains("installed services") ||
-                it.contains("services downloaded")
-            }
-            val hasInstalledAppsAccessibilityScreen = textsLower.any {
-                it == "installed apps" || it.contains("installed apps")
-            } && textsLower.any {
-                it.contains("accessibility") ||
-                it.contains("focus lock") ||
-                it.contains("talkback") ||
-                it.contains("service") ||
-                it == "on" ||
-                it == "off"
-            }
-            if (hasDownloadedAppsOrServicesScreen || hasInstalledAppsAccessibilityScreen) {
-                return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
-            }
-        }
-
-        // Signatures 1 (Focus Lock detail), 2 (App Info), and 3 (Device Admin) require Focus Lock on screen
+        val hasFocusLockName = hasAppOrFocusLockName(textsLower, appPackageName, appLabel)
         if (!hasFocusLockName) {
             return TamperSignature.NONE
         }
 
-        // -------------------------------------------------------------------------
-        // Signature 2 (B) — Focus Lock App Info Page (Force Stop / Uninstall)
-        // hasFocusLock AND ("force stop" OR "uninstall")
-        // -------------------------------------------------------------------------
+        // Layer 1 Guard: Main Accessibility Root screen MUST stay accessible (Vision, Hearing, TalkBack, etc.)
+        if (isMainAccessibilityRootScreen(eventClassName, texts, appPackageName, appLabel)) {
+            return TamperSignature.NONE
+        }
+
+        val isNormalAppList = isNormalAppManagerScreen(textsLower) || isNonAccessibilityRootExitClass(eventClassName)
+
+        // Signature B — Focus Lock App Info Page (Force Stop / Uninstall)
         val hasForceStopOrUninstall = textsLower.any {
             it.contains("force stop") || it.contains("uninstall")
         }
@@ -242,10 +297,7 @@ object SettingsTamperDetector {
             return TamperSignature.SIGNATURE_B_APP_INFO
         }
 
-        // -------------------------------------------------------------------------
-        // Signature 3 (C) — Device Admin Deactivation Page for Focus Lock
-        // hasFocusLock AND ("deactivate" OR "device admin")
-        // -------------------------------------------------------------------------
+        // Signature C — Device Admin Deactivation Page for Focus Lock
         val hasDeviceAdminMarker = textsLower.any {
             it.contains("deactivate") || it.contains("device admin")
         }
@@ -253,63 +305,28 @@ object SettingsTamperDetector {
             return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
         }
 
-        // -------------------------------------------------------------------------
-        // Signature 1 (A) — Focus Lock Specific Accessibility Toggle Page or Dialog:
-        // hasFocusLock AND none of the main Accessibility menu items are present
-        // -------------------------------------------------------------------------
-        if (hasMainAccessibilityMenuItem) {
-            return TamperSignature.NONE
-        }
-
-        // 1. Service description markers
-        val hasServiceDescription = textsLower.any {
-            it.contains("focus lock uses this service") ||
-            it.contains("detect foreground apps") ||
-            it.contains("monitor screen time limits")
-        }
-        if (hasServiceDescription) {
+        // Layer 2 — Language- & OEM-Independent Sub-Menu Trap:
+        // Recently navigated from main Accessibility screen (< 8s), no longer on root Accessibility screen,
+        // not a normal app manager screen, and screen contains Focus Lock / app_name.
+        if (isRecentlyFromAccessibility && !isNormalAppList) {
             return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
         }
 
-        // 2. OEM sub-page markers (OneUI, Realme UI, ColorOS)
-        val hasOemSubPageMarker = textsLower.any {
-            it.contains("about this function") ||
-            it.contains("auto-launch management")
-        }
-        if (hasOemSubPageMarker) {
+        // Layer 3b — Direct Focus Lock Accessibility detail / confirmation dialog (including Recents reopen)
+        if (isFocusLockServiceDetailContent(textsLower) ||
+            isTamperConfirmationDialog(texts, appPackageName, appLabel)
+        ) {
             return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
         }
 
-        // 3. "shortcut" AND "app info" on same screen as "focus lock"
-        val hasShortcut = textsLower.any { it.contains("shortcut") }
-        val hasAppInfo = textsLower.any { it.contains("app info") }
-        if (hasShortcut && hasAppInfo) {
-            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
-        }
-
-        // 4. Specific toggle / dialog indicators
-        val specificToggleIndicators = listOf(
-            "use focus lock",
-            "use service",
-            "focus lock shortcut",
-            "stop focus lock",
-            "turn off focus lock",
-            "allow focus lock"
-        )
-        val hasSpecificToggleIndicator = textsLower.any { text ->
-            specificToggleIndicators.any { ind -> text.contains(ind) }
-        }
-        if (hasSpecificToggleIndicator || isTamperConfirmationDialog(texts, appPackageName)) {
-            return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
-        }
-
-        // 5. Accessibility toggle page when NOT a general app list
-        if (!isNormalAppManagerScreen) {
-            val hasAccessibilityWord = textsLower.any { it.contains("accessibility") }
+        if (!isNormalAppList) {
+            val hasAccessibilityOrShortcutWord = textsLower.any {
+                it.contains("accessibility") || it.contains("shortcut")
+            }
             val hasOnOffWord = textsLower.any {
                 it == "on" || it == "off" || it.contains(" turned on") || it.contains(" turned off")
             }
-            if (hasAccessibilityWord && (hasOnOffWord || hasClickableSwitchOrCheckbox)) {
+            if (hasAccessibilityOrShortcutWord && (hasOnOffWord || hasClickableSwitchOrCheckbox)) {
                 return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
             }
         }

@@ -755,42 +755,125 @@ class ExampleUnitTest {
             SettingsTamperDetector.TamperSignature.NONE,
             SettingsTamperDetector.matchTamperSignature(oneUiMainAccessibility, true, true, appPkg)
         )
+        // 9. Settings -> Apps -> Installed apps (outside Accessibility) MUST NOT trigger!
+        val settingsAppsInstalledApps = listOf(
+            "Installed apps",
+            "Chrome",
+            "Focus Lock",
+            "WhatsApp",
+            "25 apps installed"
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = settingsAppsInstalledApps,
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.android.settings.applications.ManageApplications",
+                isRecentlyFromAccessibility = false
+            )
+        )
+
+        // 10. Non-English main Accessibility root screen (e.g. Spanish/Hindi with AccessibilitySettings class) stays NONE
+        val spanishMainAccessibility = listOf("Accesibilidad", "TalkBack", "Focus Lock", "Desactivado")
+        assertTrue(
+            SettingsTamperDetector.isMainAccessibilityRootScreen(
+                eventClassName = "com.android.settings.accessibility.AccessibilitySettings",
+                texts = spanishMainAccessibility,
+                appPackageName = appPkg
+            )
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = spanishMainAccessibility,
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.android.settings.accessibility.AccessibilitySettings",
+                isRecentlyFromAccessibility = true
+            )
+        )
     }
 
     @Test
     fun testSettingsTamperDetectorCatchesExactFocusLockTamperPages() {
         val appPkg = "com.example.focuslock"
 
-        // Signature A (Early Entry Trigger): Entering "Downloaded apps" / "Installed services" / "Installed apps"
-        val downloadedAppsList = listOf(
-            "Downloaded apps",
-            "Focus Lock",
-            "Off",
-            "TalkBack",
-            "On",
-            "2 services downloaded"
-        )
+        // Layer 2: Language- & OEM-independent sub-menu trap (within 8s of leaving main Accessibility screen)
+        val downloadedAppsList = listOf("Downloaded apps", "Focus Lock", "Off", "TalkBack", "On")
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
-            SettingsTamperDetector.matchTamperSignature(downloadedAppsList, true, true, appPkg)
-        )
-
-        val downloadedAppsScrolledNoFocusText = listOf("Downloaded apps", "TalkBack", "On", "Select to Speak", "Off")
-        assertEquals(
-            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
-            SettingsTamperDetector.matchTamperSignature(downloadedAppsScrolledNoFocusText, false, true, appPkg)
+            SettingsTamperDetector.matchTamperSignature(
+                texts = downloadedAppsList,
+                hasClickableSwitchOrCheckbox = true,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.android.settings.SubSettings",
+                isRecentlyFromAccessibility = true
+            )
         )
 
-        val oneUiInstalledApps = listOf("Installed apps", "Accessibility", "Focus Lock", "On")
+        val hindiSubMenu = listOf("डाउनलोड किए गए ऐप्स", "Focus Lock", "बंद है")
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
-            SettingsTamperDetector.matchTamperSignature(oneUiInstalledApps, true, true, appPkg)
+            SettingsTamperDetector.matchTamperSignature(
+                texts = hindiSubMenu,
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.oplus.settings.OplusSubSettings",
+                isRecentlyFromAccessibility = true
+            )
         )
 
-        val oemInstalledServices = listOf("Installed services", "Focus Lock", "On")
+        val oneUiInstalledApps = listOf("Installed apps", "Focus Lock", "On")
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
-            SettingsTamperDetector.matchTamperSignature(oemInstalledServices, false, true, appPkg)
+            SettingsTamperDetector.matchTamperSignature(
+                texts = oneUiInstalledApps,
+                hasClickableSwitchOrCheckbox = true,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.samsung.android.settings.SubSettings",
+                isRecentlyFromAccessibility = true
+            )
+        )
+
+        // Layer 3b: Language-independent service detail fragments (even when reopened from Recents without recent root)
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = listOf("Focus Lock", "Activar servicio"),
+                hasClickableSwitchOrCheckbox = true,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment",
+                isRecentlyFromAccessibility = false
+            )
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = listOf("Installed services"),
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.android.settings.accessibility.InstalledServicesFragment",
+                isRecentlyFromAccessibility = false
+            )
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = emptyList(),
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.android.settings.accessibility.AccessibilityDetailsSettingsFragment",
+                isRecentlyFromAccessibility = false
+            )
         )
 
         // Signature A: Focus Lock Accessibility toggle page
@@ -920,8 +1003,10 @@ class ExampleUnitTest {
         assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.coloros.settings"))
         assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.oplus.settings"))
         assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.google.android.settings"))
+        assertTrue(SettingsTamperDetector.isSettingsAppPackage("com.motorola.settings"))
         assertFalse(SettingsTamperDetector.isSettingsAppPackage("com.whatsapp"))
         assertFalse(SettingsTamperDetector.isSettingsAppPackage("com.android.systemui"))
+        assertFalse(SettingsTamperDetector.isSettingsAppPackage("com.aistudio.focuslock.fclk"))
         assertFalse(SettingsTamperDetector.isSettingsAppPackage(null))
 
         // Confirmation dialogs for disabling Focus Lock must be caught immediately

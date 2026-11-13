@@ -738,9 +738,9 @@ class FocusAccessibilityService : AccessibilityService() {
 
         // -------------------------------------------------------------------------
         // 1. SURGICAL SETTINGS ANTI-TAMPER PROTECTION (24/7 Active, Independent of Breaks):
-        // Protects Accessibility toggle, App Info, Device Admin, and Date & Time.
-        // Tapping "Focus Lock" inside Downloaded apps fires instant 0ms ejection on TYPE_VIEW_CLICKED.
-        // Never blocks Accessibility menu, Downloaded apps for other apps, or normal Settings.
+        // Layer 1: Anchors to main Accessibility root screen via lastAccessibilityRootTimestamp (never blocks Vision/Hearing/TalkBack).
+        // Layer 2: Language- & OEM-independent sub-menu trap within 8s of leaving Accessibility root.
+        // Layer 3: Direct "Focus Lock" row click, internal detail fragments, and Cancel confirmation fail-safe.
         // -------------------------------------------------------------------------
         val isSettingsEvent = SettingsTamperDetector.isSettingsAppPackage(eventPkg) || eventPkg == "android"
         if (isSettingsEvent) {
@@ -767,7 +767,7 @@ class FocusAccessibilityService : AccessibilityService() {
                     eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
                     eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
                 ) {
-                    if (checkAndInterceptSettingsTamper(eventPkg)) {
+                    if (checkAndInterceptSettingsTamper(eventPkg, className, eventType)) {
                         return
                     }
                 }
@@ -839,6 +839,18 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private val isAntiTamperEjecting = AtomicBoolean(false)
+    @Volatile
+    private var lastAccessibilityRootTimestamp = 0L
+    @Volatile
+    private var isCurrentlyOnAccessibilityRoot = false
+
+    private val cachedAppLabel: String by lazy {
+        try {
+            getString(com.example.R.string.app_name)
+        } catch (_: Exception) {
+            "Focus Lock"
+        }
+    }
 
     private fun dismissTamperConfirmationDialog(root: AccessibilityNodeInfo?) {
         if (root == null) return
@@ -973,25 +985,13 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private fun isSettingsTamperClick(event: AccessibilityEvent): Boolean {
         val myPkg = packageName.lowercase()
+        val appLabelLower = cachedAppLabel.lowercase().trim()
         fun matchesTarget(cs: CharSequence?): Boolean {
             if (cs == null) return false
             val s = cs.toString().lowercase()
-            return s.contains("focus lock") || s.contains(myPkg)
-        }
-        fun matchesDownloadedAppsEntry(cs: CharSequence?): Boolean {
-            if (cs == null) return false
-            val s = cs.toString().lowercase().trim()
-            return s == "downloaded apps" ||
-                    s == "downloaded services" ||
-                    s == "installed services" ||
-                    s.contains("downloaded apps") ||
-                    s.contains("downloaded services") ||
-                    s.contains("installed services")
-        }
-        fun matchesInstalledAppsEntry(cs: CharSequence?): Boolean {
-            if (cs == null) return false
-            val s = cs.toString().lowercase().trim()
-            return s == "installed apps" || s.contains("installed apps")
+            return s.contains("focus lock") ||
+                (appLabelLower.isNotEmpty() && s.contains(appLabelLower)) ||
+                s.contains(myPkg)
         }
         fun isDangerousAction(cs: CharSequence?): Boolean {
             if (cs == null) return false
@@ -1000,21 +1000,15 @@ class FocusAccessibilityService : AccessibilityService() {
                    s.contains("force stop") || s.contains("turn off focus lock") || s.contains("stop focus lock")
         }
 
-        // 1. Check if the clicked target row/button is Downloaded apps entry, Focus Lock, or a dangerous action
+        // 1. Check if the clicked target row/button contains Focus Lock / app_name or a dangerous action
         var clickedFocusLock = false
-        var clickedDownloadedAppsEntry = false
-        var clickedInstalledAppsEntry = false
         var clickedDangerousAction = false
 
         for (t in event.text) {
             if (matchesTarget(t)) clickedFocusLock = true
-            if (matchesDownloadedAppsEntry(t)) clickedDownloadedAppsEntry = true
-            if (matchesInstalledAppsEntry(t)) clickedInstalledAppsEntry = true
             if (isDangerousAction(t)) clickedDangerousAction = true
         }
         if (matchesTarget(event.contentDescription)) clickedFocusLock = true
-        if (matchesDownloadedAppsEntry(event.contentDescription)) clickedDownloadedAppsEntry = true
-        if (matchesInstalledAppsEntry(event.contentDescription)) clickedInstalledAppsEntry = true
         if (isDangerousAction(event.contentDescription)) clickedDangerousAction = true
 
         fun inspectSubtreeForClick(node: AccessibilityNodeInfo?, depth: Int, visited: IntArray) {
@@ -1024,16 +1018,10 @@ class FocusAccessibilityService : AccessibilityService() {
             if (matchesTarget(node.text) || matchesTarget(node.contentDescription)) {
                 clickedFocusLock = true
             }
-            if (matchesDownloadedAppsEntry(node.text) || matchesDownloadedAppsEntry(node.contentDescription)) {
-                clickedDownloadedAppsEntry = true
-            }
-            if (matchesInstalledAppsEntry(node.text) || matchesInstalledAppsEntry(node.contentDescription)) {
-                clickedInstalledAppsEntry = true
-            }
             if (isDangerousAction(node.text) || isDangerousAction(node.contentDescription)) {
                 clickedDangerousAction = true
             }
-            if (clickedDownloadedAppsEntry || (clickedFocusLock && clickedDangerousAction)) return
+            if (clickedFocusLock && clickedDangerousAction) return
             val count = try { node.childCount } catch (_: Exception) { 0 }
             for (i in 0 until minOf(count, 10)) {
                 val child = try { node.getChild(i) } catch (_: Exception) { null }
@@ -1054,11 +1042,11 @@ class FocusAccessibilityService : AccessibilityService() {
                 if (!isScrollContainerNode(source)) {
                     inspectSubtreeForClick(source, 0, intArrayOf(0))
 
-                    // If user tapped a leaf label/icon inside the row (e.g. "2 services" or "Off"), inspect up to 2 non-scroll ancestors
-                    if (!clickedDownloadedAppsEntry && !clickedInstalledAppsEntry && !clickedFocusLock && !clickedDangerousAction) {
+                    // If user tapped a leaf label/icon inside the row (e.g. "Off"), inspect up to 2 non-scroll ancestors
+                    if (!clickedFocusLock && !clickedDangerousAction) {
                         var current: AccessibilityNodeInfo? = source
                         var steps = 0
-                        while (steps < 2 && !clickedDownloadedAppsEntry && !clickedInstalledAppsEntry && !clickedFocusLock && !clickedDangerousAction) {
+                        while (steps < 2 && !clickedFocusLock && !clickedDangerousAction) {
                             val parent = try { current?.parent } catch (_: Exception) { null }
                             if (current !== source) {
                                 try { current?.recycle() } catch (_: Exception) {}
@@ -1085,11 +1073,11 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        if (!clickedDownloadedAppsEntry && !clickedInstalledAppsEntry && !clickedFocusLock && !clickedDangerousAction) {
+        if (!clickedFocusLock && !clickedDangerousAction) {
             return false
         }
 
-        // 2. Inspect rootInActiveWindow for Safe Whitelist & Screen context
+        // 2. Inspect rootInActiveWindow for Safe Whitelist
         val root = try { rootInActiveWindow } catch (_: Exception) { null }
         val screenTexts = try {
             collectWindowTexts(root).map { it.lowercase().trim() }
@@ -1103,48 +1091,28 @@ class FocusAccessibilityService : AccessibilityService() {
             return false
         }
 
-        // Pre-emptive click trigger: user tapped "Downloaded apps" / "Installed services" / Accessibility "Installed apps"
-        if (clickedDownloadedAppsEntry) {
+        // Pre-emptive row click (covers Pixel/Motorola/Nothing OS where Focus Lock is on main Accessibility screen,
+        // as well as Downloaded apps / Installed services / App Info across all OEMs)
+        if (clickedFocusLock) {
             return true
         }
-        if (clickedInstalledAppsEntry) {
-            val isAccessibilityContext = screenTexts.isEmpty() || screenTexts.any {
-                it.contains("accessibility") || it.contains("talkback") || it.contains("focus lock")
-            }
-            if (isAccessibilityContext) {
-                return true
-            }
+
+        // Direct dangerous destructive action on a Focus Lock screen/dialog
+        return screenTexts.any {
+            it.contains("focus lock") ||
+                (appLabelLower.isNotEmpty() && it.contains(appLabelLower)) ||
+                it.contains(myPkg)
         }
-
-        // If clicking a direct dangerous destructive action on a tamper screen/dialog, always trigger
-        if (clickedDangerousAction) {
-            val hasFocusLockContext = clickedFocusLock || screenTexts.any {
-                it.contains("focus lock") || it.contains(myPkg)
-            }
-            if (hasFocusLockContext) {
-                return true
-            }
-        }
-
-        // If clicking Focus Lock row: ONLY fire if confirmed to be Downloaded apps / Installed services / Accessibility list!
-        val isAccessibilityList = screenTexts.any {
-            it == "downloaded apps" ||
-            it == "installed apps" ||
-            it == "installed services" ||
-            it == "downloaded services" ||
-            it.contains("downloaded apps") ||
-            it.contains("installed apps") ||
-            it.contains("installed services") ||
-            it.contains("downloaded services")
-        } || (screenTexts.any { it.contains("accessibility") } && screenTexts.any { it.contains("talkback") || it.contains("services") })
-
-        return isAccessibilityList
     }
 
     private fun triggerInstantAntiTamperEjection(root: AccessibilityNodeInfo? = null) {
         if (!isAntiTamperEjecting.compareAndSet(false, true)) return
 
         Log.w(TAG, "Instant Anti-Tamper Ejection triggered! Auto-clicking Cancel and firing synchronous 5x BACK burst in 0ms.")
+
+        // Reset root anchor on ejection so navigating back into Settings later starts clean
+        isCurrentlyOnAccessibilityRoot = false
+        lastAccessibilityRootTimestamp = 0L
 
         // 0ms: Auto-click "Cancel" on any open confirmation dialog
         dismissTamperConfirmationAcrossWindows(root)
@@ -1161,7 +1129,11 @@ class FocusAccessibilityService : AccessibilityService() {
         }, 300L)
     }
 
-    private fun checkAndInterceptSettingsTamper(eventPkg: String? = null): Boolean {
+    private fun checkAndInterceptSettingsTamper(
+        eventPkg: String? = null,
+        eventClassName: String? = null,
+        eventType: Int = 0
+    ): Boolean {
         val isProtectionActive = isMasterEnabled ||
                 com.example.util.KillswitchManager.isKillswitchActive(this) ||
                 isCheatProtectionEnabled ||
@@ -1179,6 +1151,18 @@ class FocusAccessibilityService : AccessibilityService() {
         if (!isSettingsWindow) {
             try { root?.recycle() } catch (_: Exception) {}
             return false
+        }
+
+        // Explicitly exited Accessibility back to top-level Settings or App Manager
+        if (SettingsTamperDetector.isNonAccessibilityRootExitClass(eventClassName)) {
+            isCurrentlyOnAccessibilityRoot = false
+            lastAccessibilityRootTimestamp = 0L
+        }
+
+        // Layer 3b fast check before node traversal if className itself is an internal detail/installed-services fragment
+        if (SettingsTamperDetector.isAccessibilityServiceDetailFragment(eventClassName) && root == null) {
+            triggerInstantAntiTamperEjection(null)
+            return true
         }
 
         if (root == null) return isAntiTamperEjecting.get()
@@ -1224,13 +1208,18 @@ class FocusAccessibilityService : AccessibilityService() {
 
             val textsLower = textList.map { it.lowercase().trim() }
             if (SettingsTamperDetector.isSafePermissionScreen(textsLower)) {
+                isCurrentlyOnAccessibilityRoot = false
                 return false
             }
 
-            // Last-line defense: if a confirmation popup is detected, ALWAYS auto-click Cancel immediately
-            // even if an ejection sequence is already in flight.
-            if (SettingsTamperDetector.isTamperConfirmationDialog(textList, packageName)) {
-                Log.w(TAG, "Tamper confirmation dialog detected! Auto-clicking Cancel and ejecting.")
+            if (SettingsTamperDetector.isNormalAppManagerScreen(textsLower)) {
+                isCurrentlyOnAccessibilityRoot = false
+                lastAccessibilityRootTimestamp = 0L
+            }
+
+            // Layer 3c: Last-line defense — if a confirmation popup is detected, ALWAYS auto-click Cancel immediately
+            if (SettingsTamperDetector.isTamperConfirmationDialog(textList, packageName, cachedAppLabel)) {
+                Log.w(TAG, "Tamper confirmation dialog detected! Auto-clicking Cancel and firing 5x BACK burst.")
                 dismissTamperConfirmationAcrossWindows(root)
                 triggerInstantAntiTamperEjection(root)
                 return true
@@ -1238,15 +1227,69 @@ class FocusAccessibilityService : AccessibilityService() {
 
             if (isAntiTamperEjecting.get()) return true
 
+            val now = SystemClock.elapsedRealtime()
+            val isExplicitRoot = SettingsTamperDetector.isMainAccessibilityRootScreen(
+                eventClassName = eventClassName,
+                texts = textList,
+                appPackageName = packageName,
+                appLabel = cachedAppLabel
+            )
+
+            // Layer 1: Anchor to main Accessibility root screen without ejecting
+            val isServiceDetailClass = SettingsTamperDetector.isAccessibilityServiceDetailFragment(eventClassName)
+            val isSubMenuTitleOnly = textsLower.any {
+                it == "downloaded apps" || it == "downloaded services" || it == "installed services"
+            } && !textsLower.any {
+                it.contains("accessibility menu") ||
+                it.contains("press power button to end calls") ||
+                it.contains("visibility enhancements") ||
+                it.contains("hearing enhancements") ||
+                it.contains("display size and text")
+            }
+
+            if (isExplicitRoot && !isServiceDetailClass && !isSubMenuTitleOnly) {
+                isCurrentlyOnAccessibilityRoot = true
+                lastAccessibilityRootTimestamp = now
+                return false
+            }
+
+            val isScrollOrLayoutContentEvent = eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                eventType == 0 ||
+                eventClassName.isNullOrBlank() ||
+                eventClassName.contains("RecyclerView", ignoreCase = true) ||
+                eventClassName.contains("ListView", ignoreCase = true) ||
+                eventClassName.contains("Layout", ignoreCase = true) ||
+                eventClassName.contains("ViewGroup", ignoreCase = true)
+
+            if (isCurrentlyOnAccessibilityRoot &&
+                isScrollOrLayoutContentEvent &&
+                !isServiceDetailClass &&
+                !isSubMenuTitleOnly &&
+                !SettingsTamperDetector.isNormalAppManagerScreen(textsLower) &&
+                !SettingsTamperDetector.isFocusLockServiceDetailContent(textsLower)
+            ) {
+                // Still scrolling inside the main Accessibility root screen (e.g. non-English Pixel/Motorola)
+                lastAccessibilityRootTimestamp = now
+                return false
+            }
+
+            // We have left the main Accessibility root screen (or entered a sub-menu / detail fragment)
+            isCurrentlyOnAccessibilityRoot = false
+            val isRecentlyFromAccessibility = (lastAccessibilityRootTimestamp > 0L) &&
+                (now - lastAccessibilityRootTimestamp < 8_000L)
+
             val signature = SettingsTamperDetector.matchTamperSignature(
                 texts = textList,
                 hasClickableSwitchOrCheckbox = hasClickableSwitchOrCheckbox,
                 isClockTamperProtectionEnabled = true,
-                appPackageName = packageName
+                appPackageName = packageName,
+                appLabel = cachedAppLabel,
+                eventClassName = eventClassName,
+                isRecentlyFromAccessibility = isRecentlyFromAccessibility
             )
 
             if (signature != SettingsTamperDetector.TamperSignature.NONE) {
-                Log.w(TAG, "Surgical tamper protection triggered: $signature")
+                Log.w(TAG, "Context-aware anti-tamper triggered: $signature (fromAccessibilityRecent=$isRecentlyFromAccessibility, class=$eventClassName)")
                 triggerInstantAntiTamperEjection(root)
                 return true
             }

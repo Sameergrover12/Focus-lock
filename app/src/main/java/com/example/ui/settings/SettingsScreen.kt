@@ -129,6 +129,11 @@ fun SettingsScreen(
     var hasUsageStats by remember { mutableStateOf(PermissionHelper.isUsageStatsPermissionGranted(context)) }
     var hasOverlay by remember { mutableStateOf(PermissionHelper.canDrawOverlays(context)) }
     var hasBattery by remember { mutableStateOf(PermissionHelper.isBatteryOptimizationIgnored(context)) }
+    var isOsDeviceAdminActive by remember {
+        val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+        mutableStateOf(dpm?.isAdminActive(adminComponent) == true)
+    }
 
     var showThemesSheet by remember { mutableStateOf(false) }
     var showBackupRestoreModal by remember { mutableStateOf(false) }
@@ -232,6 +237,16 @@ fun SettingsScreen(
 
     val isBreakActive by viewModel.isEmergencyBreakActive.collectAsStateWithLifecycle()
 
+    LaunchedEffect(isInvincibleModeEnabled) {
+        val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+        val realAdminActive = dpm?.isAdminActive(adminComponent) == true
+        isOsDeviceAdminActive = realAdminActive
+        if (!realAdminActive && isInvincibleModeEnabled) {
+            viewModel.setInvincibleModeEnabled(false)
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -241,12 +256,17 @@ fun SettingsScreen(
                 hasOverlay = PermissionHelper.canDrawOverlays(context)
                 hasBattery = PermissionHelper.isBatteryOptimizationIgnored(context)
                 
-                // If returning from Device Admin screen and user wanted to enable invincible
+                // Always sync Strict Mode (Device Administrator) with real Android OS state
                 val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                 val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
-                if (dpm.isAdminActive(adminComponent) && !isInvincibleModeEnabled && showInvincibleConfirmDialog) {
-                    // Do nothing, dialog will show
-                } else if (!dpm.isAdminActive(adminComponent)) {
+                val realAdminActive = dpm.isAdminActive(adminComponent)
+                isOsDeviceAdminActive = realAdminActive
+                if (realAdminActive && !isInvincibleModeEnabled && showInvincibleConfirmDialog) {
+                    // User granted Device Admin in OS settings; keep confirmation dialog open
+                } else if (!realAdminActive) {
+                    if (isInvincibleModeEnabled) {
+                        viewModel.setInvincibleModeEnabled(false)
+                    }
                     showInvincibleConfirmDialog = false
                 }
             }
@@ -769,6 +789,7 @@ fun SettingsScreen(
                         androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
                         Spacer(modifier = Modifier.height(16.dp))
                         
+                        val effectiveDeviceAdminActive = isInvincibleModeEnabled && isOsDeviceAdminActive
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -782,18 +803,20 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = if (isInvincibleModeEnabled) "Active • Device Admin active (anti-uninstall barrier)" else "Disabled • Device Admin privileges inactive",
+                                    text = if (effectiveDeviceAdminActive) "Active • Device Admin active (anti-uninstall barrier)" else "Disabled • Device Admin privileges inactive",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Switch(
-                                checked = isInvincibleModeEnabled,
+                                checked = effectiveDeviceAdminActive,
                                 onCheckedChange = { willEnable ->
-                                    if (willEnable) {
-                                        val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-                                        val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
-                                        if (dpm.isAdminActive(adminComponent)) {
+                                    val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                                    val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+                                    val realAdmin = dpm.isAdminActive(adminComponent)
+                                    isOsDeviceAdminActive = realAdmin
+                                    if (willEnable || !realAdmin) {
+                                        if (realAdmin) {
                                             showInvincibleConfirmDialog = true
                                         } else {
                                             val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
@@ -807,7 +830,15 @@ fun SettingsScreen(
                                         pendingCheatAction = PendingLooseningAction(
                                             title = "Disable Invincible Mode",
                                             description = "Disabling Invincible Mode will allow uninstalling the app and changing system settings.",
-                                            onAuthorized = { viewModel.setInvincibleModeEnabled(false) }
+                                            onAuthorized = {
+                                                viewModel.setInvincibleModeEnabled(false)
+                                                try {
+                                                    if (dpm.isAdminActive(adminComponent)) {
+                                                        dpm.removeActiveAdmin(adminComponent)
+                                                    }
+                                                    isOsDeviceAdminActive = false
+                                                } catch (_: Exception) {}
+                                            }
                                         )
                                     }
                                 },

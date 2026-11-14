@@ -25,6 +25,12 @@ class FocusDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
+        try {
+            val app = context.applicationContext as? com.example.FocusApplication
+            val prefRepo = app?.preferencesRepository
+            prefRepo?.syncPrefs?.edit()?.putBoolean("invincible_mode_enabled", false)?.commit()
+            prefRepo?.notifyPreferencesReloaded()
+        } catch (_: Exception) {}
     }
 }
 

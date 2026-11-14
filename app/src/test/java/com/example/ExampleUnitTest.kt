@@ -1183,6 +1183,101 @@ class ExampleUnitTest {
         assertEquals("last_uid", com.example.data.backup.BackupManager.KEY_LAST_UID)
         assertEquals("last_active_gmail_uid", com.example.data.backup.BackupManager.KEY_LAST_ACTIVE_GMAIL_UID)
     }
+
+    @Test
+    fun testSettingsSearchScreenNeverEjectsOnSuggestionChipsUnlessClicked() {
+        val appPkg = "com.aistudio.focuslock.fclk"
+
+        // 1. Realme UI / ColorOS Settings Search screen with "Suggestions" and "Downloaded apps" chip
+        val searchSuggestionScreen = listOf("Search settings", "Suggestions", "Downloaded apps", "Dark mode", "Wi-Fi")
+        assertTrue(
+            SettingsTamperDetector.isSettingsSearchScreen(
+                eventPackageName = "com.android.settings",
+                eventClassName = "com.oplus.settings.OplusSettingsActivity",
+                texts = searchSuggestionScreen,
+                hasFocusedEditText = false
+            )
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = searchSuggestionScreen,
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.oplus.settings.OplusSettingsActivity",
+                eventPackageName = "com.android.settings"
+            )
+        )
+
+        // 2. Settings Search screen via com.android.settings.intelligence package or Search class
+        assertTrue(
+            SettingsTamperDetector.isSettingsSearchScreen(
+                eventPackageName = "com.android.settings.intelligence",
+                eventClassName = "android.widget.FrameLayout",
+                texts = listOf("Downloaded apps"),
+                hasFocusedEditText = false
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.isSettingsSearchScreen(
+                eventPackageName = "com.android.settings",
+                eventClassName = "com.android.settings.intelligence.search.SearchActivity",
+                texts = listOf("Downloaded apps"),
+                hasFocusedEditText = false
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.isSettingsSearchScreen(
+                eventPackageName = "com.android.settings",
+                eventClassName = "android.widget.LinearLayout",
+                texts = listOf("Downloaded apps"),
+                hasFocusedEditText = true
+            )
+        )
+
+        // 3. Non-click window/content event on Settings Search with "Downloaded apps" chip MUST NOT trigger
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Downloaded apps"),
+                eventClassName = "com.android.settings.intelligence.search.SearchActivity",
+                appPackageName = appPkg,
+                isClickEvent = false,
+                eventPackageName = "com.android.settings.intelligence"
+            )
+        )
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Suggestions", "Downloaded apps"),
+                eventClassName = "android.widget.LinearLayout",
+                appPackageName = appPkg,
+                isClickEvent = false,
+                eventPackageName = "com.android.settings"
+            )
+        )
+
+        // 4. Physical click (TYPE_VIEW_CLICKED, isClickEvent = true) on "Downloaded apps" or "Focus Lock"
+        // inside Settings Search MUST immediately trigger at 0.1ms!
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Downloaded apps"),
+                eventClassName = "com.google.android.material.chip.Chip",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                eventPackageName = "com.android.settings.intelligence"
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Focus Lock"),
+                eventClassName = "android.widget.LinearLayout",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                eventPackageName = "com.android.settings.intelligence"
+            )
+        )
+    }
 }
+
 
 

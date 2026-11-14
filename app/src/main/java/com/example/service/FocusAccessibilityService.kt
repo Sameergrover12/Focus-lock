@@ -248,7 +248,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
                 if (isProtectionActive && isSettings && !isUnwindingSettings.get()) {
                     withContext(Dispatchers.Main) {
-                        checkAndInterceptSettingsTamper(fgPkg)
+                        checkAndInterceptSettingsTamper(event = null, eventPkg = fgPkg)
                     }
                     continue
                 }
@@ -379,7 +379,12 @@ class FocusAccessibilityService : AccessibilityService() {
                     isMasterEnabled = if (prefRepo.syncPrefs.contains("master_enabled")) {
                         prefRepo.syncPrefs.getBoolean("master_enabled", true)
                     } else true
-                    isInvincibleModeEnabled = if (prefRepo.syncPrefs.contains("invincible_mode_enabled")) {
+                    isInvincibleModeEnabled = if (!prefRepo.isDeviceAdminActiveOnOS()) {
+                        if (prefRepo.syncPrefs.getBoolean("invincible_mode_enabled", false)) {
+                            prefRepo.syncPrefs.edit().putBoolean("invincible_mode_enabled", false).apply()
+                        }
+                        false
+                    } else if (prefRepo.syncPrefs.contains("invincible_mode_enabled")) {
                         prefRepo.syncPrefs.getBoolean("invincible_mode_enabled", false)
                     } else false
                     isCheatProtectionEnabled = if (prefRepo.syncPrefs.contains("cheat_protection_enabled")) {
@@ -781,7 +786,7 @@ class FocusAccessibilityService : AccessibilityService() {
                     eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
                     eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
                 ) {
-                    if (checkAndInterceptSettingsTamper(eventPkg, className)) {
+                    if (checkAndInterceptSettingsTamper(event, eventPkg, className)) {
                         return
                     }
                 }
@@ -998,12 +1003,18 @@ class FocusAccessibilityService : AccessibilityService() {
         }
         event.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { eventTexts.add(it) }
 
+        val isClickEvent = (eventType == AccessibilityEvent.TYPE_VIEW_CLICKED)
+        var isEditTextClick = eventClassName.contains("EditText", ignoreCase = true)
+
         // On TYPE_VIEW_CLICKED, inspect event.source?.text (and immediate row children if text is empty) without traversing full window tree
-        if (eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+        if (isClickEvent) {
             val source = try { event.source } catch (_: Exception) { null }
             if (source != null) {
                 try {
-                    if (!isScrollContainerNode(source)) {
+                    val sourceClass = source.className?.toString() ?: ""
+                    if (sourceClass.contains("EditText", ignoreCase = true)) {
+                        isEditTextClick = true
+                    } else if (!isScrollContainerNode(source)) {
                         source.text?.toString()?.takeIf { it.isNotBlank() }?.let { eventTexts.add(it) }
                         source.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { eventTexts.add(it) }
                         if (eventTexts.isEmpty()) {
@@ -1028,7 +1039,12 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
+        if (isClickEvent && isEditTextClick) {
+            return false
+        }
+
         val eventTextsLower = eventTexts.map { it.lowercase().trim() }
+        val eventPackageNameStr = event.packageName?.toString()
 
         // Step C fast check if confirmation dialog text is in the event itself
         val hasTurnOffOrStop = eventTextsLower.any {
@@ -1052,11 +1068,13 @@ class FocusAccessibilityService : AccessibilityService() {
                 eventTexts = eventTexts,
                 eventClassName = eventClassName,
                 appPackageName = packageName,
-                appLabel = cachedAppLabel
+                appLabel = cachedAppLabel,
+                isClickEvent = isClickEvent,
+                eventPackageName = eventPackageNameStr
             )
         ) {
             // Do not accidentally block Focus Lock if user is on a whitelisted permission screen
-            if (eventType == AccessibilityEvent.TYPE_VIEW_CLICKED &&
+            if (isClickEvent &&
                 SettingsTamperDetector.hasAppOrFocusLockName(eventTextsLower, packageName, cachedAppLabel)
             ) {
                 // Only peek at root window if needed to ensure safe permission screens (e.g. Display over other apps list) stay open
@@ -1155,7 +1173,59 @@ class FocusAccessibilityService : AccessibilityService() {
         }, 220L)
     }
 
+    private fun hasFocusedEditText(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        val focused = try { root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) } catch (_: Exception) { null }
+        if (focused != null) {
+            try {
+                val cls = focused.className?.toString() ?: ""
+                if (cls.contains("EditText", ignoreCase = true) || focused.isEditable) {
+                    return true
+                }
+            } finally {
+                try { focused.recycle() } catch (_: Exception) {}
+            }
+        }
+        return false
+    }
+
+    /**
+     * Detects whether the user is currently inside the Android Settings Search screen
+     * (e.g. com.android.settings.intelligence, SearchActivity, or a screen with
+     * "Search history", "Suggestions", "Recent searches", or a focused EditText search input bar).
+     */
+    private fun isSettingsSearchScreen(
+        event: AccessibilityEvent?,
+        root: AccessibilityNodeInfo?
+    ): Boolean {
+        val eventPkg = event?.packageName?.toString()
+        val rootPkg = root?.packageName?.toString()
+        if (eventPkg?.contains("settings.intelligence", ignoreCase = true) == true ||
+            rootPkg?.contains("settings.intelligence", ignoreCase = true) == true ||
+            currentForegroundPackage?.contains("settings.intelligence", ignoreCase = true) == true
+        ) {
+            return true
+        }
+
+        val eventClass = event?.className?.toString()
+        if (eventClass?.contains("Search", ignoreCase = true) == true) {
+            return true
+        }
+
+        if (root != null) {
+            if (hasIndexedTextMatch(root, "Search history", "Suggestions", "Recent searches")) {
+                return true
+            }
+            if (hasFocusedEditText(root)) {
+                return true
+            }
+        }
+
+        return false
+    }
+
     private fun checkAndInterceptSettingsTamper(
+        event: AccessibilityEvent? = null,
         eventPkg: String? = null,
         eventClassName: String? = null
     ): Boolean {
@@ -1178,11 +1248,22 @@ class FocusAccessibilityService : AccessibilityService() {
             return false
         }
 
+        // Ignore Settings Search Screen on window state / content changes so suggestion chips
+        // (like "Downloaded apps" on Realme UI / ColorOS) never cause a false ejection.
+        if (isSettingsSearchScreen(event, root)) {
+            try { root?.recycle() } catch (_: Exception) {}
+            return false
+        }
+
+        // a) Accessibility detail/sub-menu fragment class check ("ToggleAccessibilityServicePreferenceFragment",
+        // "AccessibilityDetailsSettingsFragment", "InstalledServicesFragment")
+        if (SettingsTamperDetector.isAccessibilityServiceDetailFragment(eventClassName)) {
+            try { root?.recycle() } catch (_: Exception) {}
+            triggerRapidSettingsExitUnwind()
+            return true
+        }
+
         if (root == null) {
-            if (SettingsTamperDetector.isAccessibilityServiceDetailFragment(eventClassName)) {
-                triggerRapidSettingsExitUnwind()
-                return true
-            }
             return isUnwindingSettings.get()
         }
 
@@ -1194,7 +1275,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Step C: Instant "Cancel" click on confirmation dialog ("Turn off" / "Stop" + "Focus Lock")
             val hasFocusLockNode = hasIndexedTextMatch(root, cachedAppLabel, "Focus Lock")
-            if (hasFocusLockNode && hasIndexedTextMatch(root, "Turn off", "Stop", "Deactivate")) {
+            if (hasFocusLockNode && hasIndexedTextMatch(root, "Turn off", "Stop", "Stop Focus Lock", "Deactivate")) {
                 Log.w(TAG, "Step C Confirmation dialog detected! Clicking Cancel and unwinding Settings.")
                 dismissTamperConfirmationAcrossWindows(root)
                 triggerRapidSettingsExitUnwind()
@@ -1223,7 +1304,9 @@ class FocusAccessibilityService : AccessibilityService() {
                 "Interaction controls"
             )
 
-            // Step B — Fast Shallow Window Fallback (For Reopening From Recents & OEM Skins):
+            // b) User has actually opened the Downloaded apps / Installed apps Accessibility screen
+            // (verified by "Downloaded apps" / "Installed apps" appearing while NOT on the main Accessibility
+            // root screen and NOT on Settings -> Apps app manager and NOT on isSettingsSearchScreen)
             val hasDownloadedAppsOrServices = hasIndexedTextMatch(
                 root,
                 "Downloaded apps",
@@ -1235,8 +1318,11 @@ class FocusAccessibilityService : AccessibilityService() {
                 root,
                 "Accessibility",
                 "Use Focus Lock",
+                "Focus Lock shortcut",
                 "Use service",
                 "Shortcut",
+                "Off",
+                "On",
                 "Focus Lock uses this service",
                 "About this function",
                 "Auto-launch management"
@@ -1250,10 +1336,23 @@ class FocusAccessibilityService : AccessibilityService() {
                 return true
             }
 
-            // Focus Lock inside Accessibility toggle/detail, App Info (Force stop/Uninstall), or Device Admin
+            // c) User is on the Focus Lock Accessibility Service toggle screen
+            // (verified by "Focus Lock" appearing alongside "Use Focus Lock", "Focus Lock shortcut",
+            // "Off", "On", or "Stop Focus Lock" / "Turn off" dialog — plus App Info / Device Admin)
             val hasFocusLockDetailOrDangerousAction = hasFocusLockNode && (
                 (!isMainAccessibilityScreen && hasAccessibilityOrToggleContext) ||
-                    hasIndexedTextMatch(root, "Use Focus Lock", "Use service", "Focus Lock uses this service", "About this function") ||
+                    hasIndexedTextMatch(
+                        root,
+                        "Use Focus Lock",
+                        "Focus Lock shortcut",
+                        "Use service",
+                        "Off",
+                        "On",
+                        "Stop Focus Lock",
+                        "Turn off",
+                        "Focus Lock uses this service",
+                        "About this function"
+                    ) ||
                     hasIndexedTextMatch(root, "Force stop", "Uninstall", "Deactivate")
             )
             if (hasFocusLockDetailOrDangerousAction) {

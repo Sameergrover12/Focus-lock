@@ -133,11 +133,36 @@ object SettingsTamperDetector {
         }
     }
 
+    fun isSettingsSearchScreen(
+        eventPackageName: String? = null,
+        eventClassName: String? = null,
+        texts: List<String> = emptyList(),
+        hasFocusedEditText: Boolean = false
+    ): Boolean {
+        if (eventPackageName?.contains("settings.intelligence", ignoreCase = true) == true) {
+            return true
+        }
+        if (eventClassName?.contains("Search", ignoreCase = true) == true) {
+            return true
+        }
+        if (hasFocusedEditText) {
+            return true
+        }
+        val textsLower = texts.map { it.lowercase().trim() }
+        return textsLower.any {
+            it.contains("search history") ||
+                it == "suggestions" ||
+                it.contains("recent searches")
+        }
+    }
+
     fun matchesInstantStepAEventTrigger(
         eventTexts: List<String>,
         eventClassName: String?,
         appPackageName: String,
-        appLabel: String = "Focus Lock"
+        appLabel: String = "Focus Lock",
+        isClickEvent: Boolean = true,
+        eventPackageName: String? = null
     ): Boolean {
         if (isNonAccessibilityRootExitClass(eventClassName)) return false
 
@@ -145,8 +170,17 @@ object SettingsTamperDetector {
         if (isSafePermissionScreen(textsLower)) return false
         if (isNormalAppManagerScreen(textsLower)) return false
 
+        if (!isClickEvent && isSettingsSearchScreen(eventPackageName, eventClassName, eventTexts)) {
+            return false
+        }
+
         if (isAccessibilityServiceDetailFragment(eventClassName)) return true
         if (textsLower.isEmpty()) return false
+
+        // On non-click window/content events, require either a confirmation dialog or let Step B verify the window
+        if (!isClickEvent) {
+            return isTamperConfirmationDialog(eventTexts, appPackageName, appLabel)
+        }
 
         if (hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) return true
 
@@ -255,12 +289,25 @@ object SettingsTamperDetector {
         isClockTamperProtectionEnabled: Boolean,
         appPackageName: String,
         appLabel: String = "Focus Lock",
-        eventClassName: String? = null
+        eventClassName: String? = null,
+        eventPackageName: String? = null,
+        hasFocusedEditText: Boolean = false
     ): TamperSignature {
         val textsLower = texts.map { it.lowercase().trim() }
 
         // Safe Whitelist: NEVER block or trigger anti-tamper on permission grant screens!
         if (isSafePermissionScreen(textsLower)) {
+            return TamperSignature.NONE
+        }
+
+        // Ignore Settings Search Screen (suggestion chips / recent searches / search input bar)
+        if (isSettingsSearchScreen(
+                eventPackageName = eventPackageName,
+                eventClassName = eventClassName,
+                texts = texts,
+                hasFocusedEditText = hasFocusedEditText
+            )
+        ) {
             return TamperSignature.NONE
         }
 
@@ -361,12 +408,12 @@ object SettingsTamperDetector {
 
         if (!isNormalAppList) {
             val hasAccessibilityOrShortcutWord = textsLower.any {
-                it.contains("accessibility") || it.contains("shortcut")
+                it.contains("accessibility") || it.contains("shortcut") || it.contains("focus lock shortcut")
             }
             val hasOnOffWord = textsLower.any {
                 it == "on" || it == "off" || it.contains(" turned on") || it.contains(" turned off")
             }
-            if (hasAccessibilityOrShortcutWord && (hasOnOffWord || hasClickableSwitchOrCheckbox)) {
+            if (hasAccessibilityOrShortcutWord || hasOnOffWord || hasClickableSwitchOrCheckbox) {
                 return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
             }
         }

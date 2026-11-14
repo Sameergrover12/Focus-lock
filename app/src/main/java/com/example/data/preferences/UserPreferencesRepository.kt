@@ -156,8 +156,24 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    fun isDeviceAdminActiveOnOS(): Boolean {
+        return try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+            val adminComponent = android.content.ComponentName(context, com.example.receiver.FocusDeviceAdminReceiver::class.java)
+            dpm?.isAdminActive(adminComponent) == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     val isInvincibleModeEnabled: Flow<Boolean> = combine(context.dataStore.data, refreshTrigger) { preferences, _ ->
-        if (syncPrefs.contains("invincible_mode_enabled")) {
+        val osAdminActive = isDeviceAdminActiveOnOS()
+        if (!osAdminActive) {
+            if (syncPrefs.getBoolean("invincible_mode_enabled", false)) {
+                syncPrefs.edit().putBoolean("invincible_mode_enabled", false).apply()
+            }
+            false
+        } else if (syncPrefs.contains("invincible_mode_enabled")) {
             syncPrefs.getBoolean("invincible_mode_enabled", false)
         } else {
             preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] ?: false
@@ -304,7 +320,11 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences.remove(PreferencesKeys.CHEAT_PROTECTION_SALT)
             }
 
-            if (syncPrefs.contains("invincible_mode_enabled")) {
+            val osAdminActive = isDeviceAdminActiveOnOS()
+            if (!osAdminActive) {
+                syncPrefs.edit().putBoolean("invincible_mode_enabled", false).commit()
+                preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = false
+            } else if (syncPrefs.contains("invincible_mode_enabled")) {
                 preferences[PreferencesKeys.INVINCIBLE_MODE_ENABLED] = syncPrefs.getBoolean("invincible_mode_enabled", false)
             } else {
                 preferences.remove(PreferencesKeys.INVINCIBLE_MODE_ENABLED)
@@ -402,7 +422,10 @@ class UserPreferencesRepository(private val context: Context) {
                 editor.remove("cheat_protection_salt")
             }
         }
-        if (prefs.has("invincible_mode_enabled")) {
+        val osAdminActive = isDeviceAdminActiveOnOS()
+        if (!osAdminActive) {
+            editor.putBoolean("invincible_mode_enabled", false)
+        } else if (prefs.has("invincible_mode_enabled")) {
             editor.putBoolean("invincible_mode_enabled", prefs.getBoolean("invincible_mode_enabled"))
         }
         if (prefs.has("clock_tamper_protection_enabled")) {

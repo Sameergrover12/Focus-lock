@@ -721,6 +721,9 @@ class BackupManager(
                         }
                     }
                 }
+                if (!preferencesRepository.isDeviceAdminActiveOnOS()) {
+                    editor.putBoolean("invincible_mode_enabled", false)
+                }
                 editor.commit()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to restore SharedPreferences file $prefName", e)

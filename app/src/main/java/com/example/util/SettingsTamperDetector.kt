@@ -72,6 +72,12 @@ object SettingsTamperDetector {
         return (nowElapsedMs - ts) < DEVICE_ADMIN_LAUNCH_WINDOW_MS
     }
 
+    fun isDeviceAdminDeactivationClass(eventClassName: String?): Boolean {
+        if (eventClassName.isNullOrBlank()) return false
+        val lower = eventClassName.lowercase()
+        return lower.contains("deviceadminadd") || lower.contains("deviceadminsettings")
+    }
+
     fun isDeviceAdminScreen(
         eventClassName: String?,
         texts: List<String>
@@ -85,7 +91,26 @@ object SettingsTamperDetector {
                 it.contains("activate this device admin") ||
                 it.contains("device admin") ||
                 it.contains("verification code") ||
-                it.contains("deactivate this device admin")
+                it.contains("deactivate this device admin") ||
+                it.contains("remove active admin")
+        }
+    }
+
+    fun isTargetScreenCDeviceAdminDeactivation(
+        eventClassName: String?,
+        textsLower: List<String>,
+        appPackageName: String,
+        appLabel: String = "Focus Lock"
+    ): Boolean {
+        if (isDeviceAdminDeactivationClass(eventClassName)) {
+            return true
+        }
+        val hasFocusLock = hasAppOrFocusLockName(textsLower, appPackageName, appLabel)
+        if (!hasFocusLock) return false
+        return textsLower.any {
+            it.contains("deactivate this device admin") ||
+                it.contains("remove active admin") ||
+                it.contains("deactivate")
         }
     }
 
@@ -127,12 +152,23 @@ object SettingsTamperDetector {
         return lower.contains("settings") && !lower.contains("focuslock")
     }
 
-    fun isAccessibilityServiceDetailFragment(eventClassName: String?): Boolean {
+    fun isDownloadedServicesListFragment(eventClassName: String?): Boolean {
+        if (eventClassName.isNullOrBlank()) return false
+        val lower = eventClassName.lowercase()
+        return lower.contains("installedservicesfragment") ||
+            lower.contains("downloadedservicesfragment")
+    }
+
+    fun isFocusLockAccessibilityDetailFragment(eventClassName: String?): Boolean {
         if (eventClassName.isNullOrBlank()) return false
         val lower = eventClassName.lowercase()
         return lower.contains("toggleaccessibilityservicepreferencefragment") ||
-            lower.contains("accessibilitydetailssettingsfragment") ||
-            lower.contains("installedservicesfragment")
+            lower.contains("accessibilitydetailssettingsfragment")
+    }
+
+    fun isAccessibilityServiceDetailFragment(eventClassName: String?): Boolean {
+        return isDownloadedServicesListFragment(eventClassName) ||
+            isFocusLockAccessibilityDetailFragment(eventClassName)
     }
 
     fun isNonAccessibilityRootExitClass(eventClassName: String?): Boolean {
@@ -197,6 +233,7 @@ object SettingsTamperDetector {
             "focus lock shortcut",
             "stop focus lock",
             "turn off focus lock",
+            "turn off",
             "allow focus lock"
         )
         return textsLower.any { text ->
@@ -204,16 +241,26 @@ object SettingsTamperDetector {
         }
     }
 
+    /**
+     * Rule 1 — Absolute Settings Search Immunity:
+     * Returns true when any Settings Search indicator is active in the event or window.
+     */
     fun isSettingsSearchScreen(
         eventPackageName: String? = null,
         eventClassName: String? = null,
         texts: List<String> = emptyList(),
-        hasFocusedEditText: Boolean = false
+        hasFocusedEditText: Boolean = false,
+        sourceClassName: String? = null
     ): Boolean {
         if (eventPackageName?.contains("settings.intelligence", ignoreCase = true) == true) {
             return true
         }
-        if (eventClassName?.contains("Search", ignoreCase = true) == true) {
+        if (eventClassName?.contains("Search", ignoreCase = true) == true ||
+            eventClassName?.contains("EditText", ignoreCase = true) == true
+        ) {
+            return true
+        }
+        if (sourceClassName?.contains("EditText", ignoreCase = true) == true) {
             return true
         }
         if (hasFocusedEditText) {
@@ -221,12 +268,18 @@ object SettingsTamperDetector {
         }
         val textsLower = texts.map { it.lowercase().trim() }
         return textsLower.any {
-            it.contains("search history") ||
+            it.contains("search settings") ||
+                it == "search" ||
+                it.startsWith("search ") ||
+                it.contains("search history") ||
                 it == "suggestions" ||
                 it.contains("recent searches")
         }
     }
 
+    /**
+     * Rule 2 & 3 — Instant Step A check (with Rule 1 Search Immunity at the very top).
+     */
     fun matchesInstantStepAEventTrigger(
         eventTexts: List<String>,
         eventClassName: String?,
@@ -235,14 +288,29 @@ object SettingsTamperDetector {
         isClickEvent: Boolean = true,
         eventPackageName: String? = null,
         isDeviceAdminActive: Boolean = false,
-        isWithinDeviceAdminLaunchWindow: Boolean = false
+        isWithinDeviceAdminLaunchWindow: Boolean = false,
+        sourceClassName: String? = null,
+        isInAccessibilityContext: Boolean = true,
+        isInSecurityOrDeviceAdminContext: Boolean = true,
+        isInSafeNonTamperSubSettings: Boolean = false
     ): Boolean {
+        // Rule 1: Absolute Settings Search Immunity at the very top (for ALL event types, including clicks!)
+        if (isSettingsSearchScreen(
+                eventPackageName = eventPackageName,
+                eventClassName = eventClassName,
+                texts = eventTexts,
+                hasFocusedEditText = false,
+                sourceClassName = sourceClassName
+            )
+        ) {
+            return false
+        }
+
         if (isNonAccessibilityRootExitClass(eventClassName)) return false
 
         val textsLower = eventTexts.map { it.lowercase().trim() }.filter { it.isNotEmpty() }
 
-        // Smart Device Admin Rule:
-        // Case A: Device Admin is NOT active yet -> never kick out on Device Admin screens or during activation window
+        // Smart Device Admin Activation Immunity when isDeviceAdminActive == false
         val onDeviceAdminScreen = isDeviceAdminScreen(eventClassName, eventTexts)
         val isAccessibilityTamperEvent = isAccessibilityServiceDetailFragment(eventClassName) ||
             textsLower.any {
@@ -255,34 +323,61 @@ object SettingsTamperDetector {
         if (!isDeviceAdminActive) {
             if (onDeviceAdminScreen) return false
             if (isWithinDeviceAdminLaunchWindow && !isAccessibilityTamperEvent) return false
-        } else {
-            // Case B: Device Admin IS active -> immediately kick out on Device Admin screen!
-            if (onDeviceAdminScreen) return true
         }
 
         if (isSafePermissionScreen(textsLower, isDeviceAdminActive)) return false
         if (isNormalAppManagerScreen(textsLower)) return false
 
-        if (!isClickEvent && isSettingsSearchScreen(eventPackageName, eventClassName, eventTexts)) {
+        if (isAccessibilityServiceDetailFragment(eventClassName)) return true
+
+        // Rule 2: Strict TYPE_VIEW_CLICKED Check (Inspect ONLY the clicked row)
+        if (isClickEvent) {
+            // a) User tapped "Downloaded apps", "Installed apps", "Installed services", or "Downloaded services"
+            // while on the main Accessibility screen
+            val clickedDownloadedOrInstalledServices = textsLower.any {
+                it.contains("downloaded apps") ||
+                    it.contains("installed services") ||
+                    it.contains("downloaded services") ||
+                    (isInAccessibilityContext && it.contains("installed apps"))
+            }
+            if (clickedDownloadedOrInstalledServices) return true
+
+            // b) User tapped "Focus Lock" accessibility service row inside Accessibility / Downloaded apps
+            // (do NOT trigger if "Focus Lock" is tapped inside normal Battery, Data usage, or Notifications settings)
+            val clickedFocusLock = hasAppOrFocusLockName(textsLower, appPackageName, appLabel)
+            if (clickedFocusLock && !isInSafeNonTamperSubSettings && isInAccessibilityContext) {
+                return true
+            }
+
+            // c) isDeviceAdminCurrentlyActive() == true AND user tapped "Device admin apps" or "Focus Lock"
+            // inside Security / Device admin settings
+            if (isDeviceAdminActive) {
+                val clickedDeviceAdminApps = textsLower.any {
+                    it.contains("device admin apps") ||
+                        it.contains("deactivate this device admin") ||
+                        it.contains("remove active admin")
+                }
+                if (clickedDeviceAdminApps) return true
+                if (clickedFocusLock && isInSecurityOrDeviceAdminContext && !isInSafeNonTamperSubSettings) {
+                    return true
+                }
+            }
+
             return false
         }
 
+        // Rule 3: For non-click events (TYPE_WINDOW_STATE_CHANGED / TYPE_WINDOW_CONTENT_CHANGED / TYPE_WINDOWS_CHANGED):
+        // Target Screen A or B fragment classes:
         if (isAccessibilityServiceDetailFragment(eventClassName)) return true
+
+        // Target Screen C fragment classes or deactivation text (ONLY when isDeviceAdminActive == true):
+        if (isDeviceAdminActive && isTargetScreenCDeviceAdminDeactivation(eventClassName, textsLower, appPackageName, appLabel)) {
+            return true
+        }
+
         if (textsLower.isEmpty()) return false
 
-        // On non-click window/content events, require either a confirmation dialog or let Step B verify the window
-        if (!isClickEvent) {
-            return isTamperConfirmationDialog(eventTexts, appPackageName, appLabel, isDeviceAdminActive)
-        }
-
-        if (hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) return true
-
-        return textsLower.any {
-            it.contains("downloaded apps") ||
-                it.contains("installed apps") ||
-                it.contains("installed services") ||
-                it.contains("downloaded services")
-        }
+        return isTamperConfirmationDialog(eventTexts, appPackageName, appLabel, isDeviceAdminActive)
     }
 
     fun isMainAccessibilityRootScreen(
@@ -351,7 +446,7 @@ object SettingsTamperDetector {
                 it == "stop" ||
                 it.contains("stop?") ||
                 it.contains("will stop") ||
-                it.contains("deactivate") ||
+                (isDeviceAdminActive && it.contains("deactivate")) ||
                 it.contains("force stop")
         }
         val hasCancelAction = textsLower.any {
@@ -360,7 +455,7 @@ object SettingsTamperDetector {
         val hasDirectConfirmationPhrase = textsLower.any {
             it.contains("turn off focus lock") ||
                 it.contains("stop focus lock") ||
-                it.contains("deactivate this device admin app")
+                (isDeviceAdminActive && it.contains("deactivate this device admin app"))
         }
 
         return hasDirectConfirmationPhrase || (hasStopOrTurnOff && hasCancelAction)
@@ -382,7 +477,7 @@ object SettingsTamperDetector {
     }
 
     /**
-     * Evaluates collected screen text and fragment class name against exact tamper signatures.
+     * Rule 1 + Rule 3: Evaluates collected screen text and fragment class name against exact target screens.
      */
     fun matchTamperSignature(
         texts: List<String>,
@@ -396,6 +491,17 @@ object SettingsTamperDetector {
         isDeviceAdminActive: Boolean = false,
         isWithinDeviceAdminLaunchWindow: Boolean = false
     ): TamperSignature {
+        // Rule 1: Absolute Settings Search Immunity at the VERY TOP (before ALL anti-tamper checks!)
+        if (isSettingsSearchScreen(
+                eventPackageName = eventPackageName,
+                eventClassName = eventClassName,
+                texts = texts,
+                hasFocusedEditText = hasFocusedEditText
+            )
+        ) {
+            return TamperSignature.NONE
+        }
+
         val textsLower = texts.map { it.lowercase().trim() }
 
         // Safe Whitelist: NEVER block or trigger anti-tamper on permission grant screens!
@@ -404,8 +510,7 @@ object SettingsTamperDetector {
         }
 
         // Smart Device Admin Rule:
-        // Case A: When Device Admin is NOT active yet, allow Device Admin activation screens & Realme verification code popup.
-        // Case B: When Device Admin IS active, immediately block Device Admin screen / "Device admin apps" to prevent deactivation.
+        // When Device Admin is NOT active yet, allow Device Admin activation screens & Realme verification code popup.
         val onDeviceAdminScreen = isDeviceAdminScreen(eventClassName, texts)
         val isAccessibilityTamperScreen = isAccessibilityServiceDetailFragment(eventClassName) ||
             textsLower.any {
@@ -417,7 +522,9 @@ object SettingsTamperDetector {
             }
         if (onDeviceAdminScreen) {
             val hasDeactivatePhrase = textsLower.any {
-                it.contains("deactivate this device admin") || it.contains("deactivate")
+                it.contains("deactivate this device admin") ||
+                    it.contains("remove active admin") ||
+                    it.contains("deactivate")
             }
             val hasActivateOnlyPhrase = textsLower.any {
                 it.contains("activate device admin") ||
@@ -428,7 +535,10 @@ object SettingsTamperDetector {
             if (!isDeviceAdminActive && (hasActivateOnlyPhrase || !hasDeactivatePhrase)) {
                 return TamperSignature.NONE
             }
-            if (isDeviceAdminActive || hasDeactivatePhrase) {
+            if (isDeviceAdminActive && isTargetScreenCDeviceAdminDeactivation(eventClassName, textsLower, appPackageName, appLabel)) {
+                return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
+            }
+            if (hasDeactivatePhrase && hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) {
                 return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
             }
         }
@@ -436,23 +546,17 @@ object SettingsTamperDetector {
             return TamperSignature.NONE
         }
 
-        // Ignore Settings Search Screen (suggestion chips / recent searches / search input bar)
-        if (isSettingsSearchScreen(
-                eventPackageName = eventPackageName,
-                eventClassName = eventClassName,
-                texts = texts,
-                hasFocusedEditText = hasFocusedEditText
-            )
-        ) {
-            return TamperSignature.NONE
-        }
-
-        // Language-independent service detail fragments (ToggleAccessibilityServicePreferenceFragment, etc.)
+        // Target Screen A or B fragment classes:
         if (isAccessibilityServiceDetailFragment(eventClassName)) {
-            val isInstalledServicesList = eventClassName?.contains("InstalledServicesFragment", ignoreCase = true) == true
+            val isInstalledServicesList = isDownloadedServicesListFragment(eventClassName)
             if (isInstalledServicesList || texts.isEmpty() || hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) {
                 return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
             }
+        }
+
+        // Target Screen C fragment classes when isDeviceAdminActive == true:
+        if (isDeviceAdminActive && isDeviceAdminDeactivationClass(eventClassName)) {
+            return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
         }
 
         if (texts.isEmpty()) return TamperSignature.NONE
@@ -482,26 +586,25 @@ object SettingsTamperDetector {
         val isNormalAppList = isNormalAppManagerScreen(textsLower) || isNonAccessibilityRootExitClass(eventClassName)
         val isMainAccRoot = isMainAccessibilityRootScreen(eventClassName, texts, appPackageName, appLabel)
 
-        // Step B Fallback: "Downloaded apps" / "Installed services" / Accessibility "Installed apps"
-        // when NOT on the main Accessibility root menu and NOT on the main Settings -> Apps manager.
+        // Target Screen A — Accessibility Downloaded/Installed Apps List
         if (!isMainAccRoot && !isNormalAppList) {
-            val hasDownloadedAppsOrServicesScreen = textsLower.any {
+            val hasDownloadedOrInstalledHeader = textsLower.any {
                 it.contains("downloaded apps") ||
                     it.contains("downloaded services") ||
                     it.contains("installed services") ||
-                    it.contains("services downloaded")
+                    it.contains("services downloaded") ||
+                    it.contains("installed apps")
             }
-            val hasInstalledAppsInAccessibility = textsLower.any {
-                it.contains("installed apps")
-            } && textsLower.any {
-                it.contains("accessibility") ||
-                    it.contains("focus lock") ||
+            val hasAccessibilityServicesListing = textsLower.any {
+                it.contains("focus lock") ||
+                    it.contains("guided vision") ||
                     it.contains("talkback") ||
-                    it.contains("service") ||
+                    it.contains("tap here to enable") ||
+                    it.contains("accessibility") ||
                     it == "on" ||
                     it == "off"
             }
-            if (hasDownloadedAppsOrServicesScreen || hasInstalledAppsInAccessibility) {
+            if (hasDownloadedOrInstalledHeader && hasAccessibilityServicesListing) {
                 return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
             }
         }
@@ -527,19 +630,12 @@ object SettingsTamperDetector {
             return TamperSignature.SIGNATURE_B_APP_INFO
         }
 
-        // Signature C — Device Admin Deactivation Page for Focus Lock
-        val hasDeviceAdminMarker = textsLower.any {
-            it.contains("deactivate") || it.contains("device admin")
-        }
-        if (hasDeviceAdminMarker) {
-            return if (isDeviceAdminActive || textsLower.any { it.contains("deactivate") }) {
-                TamperSignature.SIGNATURE_C_DEVICE_ADMIN
-            } else {
-                TamperSignature.NONE
-            }
+        // Target Screen C — Device Admin Deactivation Page for Focus Lock
+        if (isTargetScreenCDeviceAdminDeactivation(eventClassName, textsLower, appPackageName, appLabel)) {
+            return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
         }
 
-        // Direct Focus Lock Accessibility detail / confirmation dialog
+        // Target Screen B — Focus Lock Accessibility Detail / Toggle Page or Turn-Off Dialog
         if (isFocusLockServiceDetailContent(textsLower) ||
             isTamperConfirmationDialog(texts, appPackageName, appLabel, isDeviceAdminActive)
         ) {
@@ -553,7 +649,7 @@ object SettingsTamperDetector {
             val hasOnOffWord = textsLower.any {
                 it == "on" || it == "off" || it.contains(" turned on") || it.contains(" turned off")
             }
-            if (hasAccessibilityOrShortcutWord || hasOnOffWord || hasClickableSwitchOrCheckbox) {
+            if (hasAccessibilityOrShortcutWord && (hasOnOffWord || hasClickableSwitchOrCheckbox)) {
                 return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
             }
         }

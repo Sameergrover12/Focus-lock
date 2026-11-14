@@ -1188,8 +1188,14 @@ class ExampleUnitTest {
     fun testSettingsSearchScreenNeverEjectsOnSuggestionChipsUnlessClicked() {
         val appPkg = "com.aistudio.focuslock.fclk"
 
-        // 1. Realme UI / ColorOS Settings Search screen with "Suggestions" and "Downloaded apps" chip
-        val searchSuggestionScreen = listOf("Search settings", "Suggestions", "Downloaded apps", "Dark mode", "Wi-Fi")
+        // 1. Realme UI / ColorOS Settings Search screen with "Suggestions", "Downloaded apps", and "Device admin apps" chips
+        val searchSuggestionScreen = listOf(
+            "Search settings",
+            "Suggestions",
+            "Downloaded apps",
+            "Device admin apps",
+            "Focus Lock"
+        )
         assertTrue(
             SettingsTamperDetector.isSettingsSearchScreen(
                 eventPackageName = "com.android.settings",
@@ -1206,11 +1212,12 @@ class ExampleUnitTest {
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
                 eventClassName = "com.oplus.settings.OplusSettingsActivity",
-                eventPackageName = "com.android.settings"
+                eventPackageName = "com.android.settings",
+                isDeviceAdminActive = true
             )
         )
 
-        // 2. Settings Search screen via com.android.settings.intelligence package or Search class
+        // 2. Settings Search screen via com.android.settings.intelligence package, Search class, or EditText
         assertTrue(
             SettingsTamperDetector.isSettingsSearchScreen(
                 eventPackageName = "com.android.settings.intelligence",
@@ -1236,7 +1243,7 @@ class ExampleUnitTest {
             )
         )
 
-        // 3. Non-click window/content event on Settings Search with "Downloaded apps" chip MUST NOT trigger
+        // 3. Rule 1: Absolute Settings Search Immunity for ALL event types (including clicks & window events)
         assertFalse(
             SettingsTamperDetector.matchesInstantStepAEventTrigger(
                 eventTexts = listOf("Downloaded apps"),
@@ -1255,10 +1262,7 @@ class ExampleUnitTest {
                 eventPackageName = "com.android.settings"
             )
         )
-
-        // 4. Physical click (TYPE_VIEW_CLICKED, isClickEvent = true) on "Downloaded apps" or "Focus Lock"
-        // inside Settings Search MUST immediately trigger at 0.1ms!
-        assertTrue(
+        assertFalse(
             SettingsTamperDetector.matchesInstantStepAEventTrigger(
                 eventTexts = listOf("Downloaded apps"),
                 eventClassName = "com.google.android.material.chip.Chip",
@@ -1267,13 +1271,49 @@ class ExampleUnitTest {
                 eventPackageName = "com.android.settings.intelligence"
             )
         )
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Search settings"),
+                eventClassName = "android.widget.TextView",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                eventPackageName = "com.android.settings"
+            )
+        )
+
+        // 4. Rule 2: Outside Settings Search, clicking "Downloaded apps" or "Focus Lock" in Accessibility DOES trigger!
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Downloaded apps"),
+                eventClassName = "android.widget.LinearLayout",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                eventPackageName = "com.android.settings",
+                isInAccessibilityContext = true
+            )
+        )
         assertTrue(
             SettingsTamperDetector.matchesInstantStepAEventTrigger(
                 eventTexts = listOf("Focus Lock"),
                 eventClassName = "android.widget.LinearLayout",
                 appPackageName = appPkg,
                 isClickEvent = true,
-                eventPackageName = "com.android.settings.intelligence"
+                eventPackageName = "com.android.settings",
+                isInAccessibilityContext = true,
+                isInSafeNonTamperSubSettings = false
+            )
+        )
+        // Clicking "Focus Lock" in normal Battery / Data usage / Notifications MUST NOT trigger!
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Focus Lock"),
+                eventClassName = "android.widget.LinearLayout",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                eventPackageName = "com.android.settings",
+                isInAccessibilityContext = false,
+                isInSecurityOrDeviceAdminContext = false,
+                isInSafeNonTamperSubSettings = true
             )
         )
     }
@@ -1345,8 +1385,8 @@ class ExampleUnitTest {
             )
         )
 
-        // Case B: Once Device Admin IS active (isDeviceAdminActive = true), opening Device Admin screen
-        // or "Device admin apps" immediately triggers at 0ms!
+        // Case B: Once Device Admin IS active (isDeviceAdminActive = true), Target Screen C
+        // (DeviceAdminAdd / DeviceAdminSettings or "Focus Lock" + "Deactivate") triggers at 0ms!
         assertTrue(
             SettingsTamperDetector.matchesInstantStepAEventTrigger(
                 eventTexts = listOf("Focus Lock", "Deactivate this device admin app"),
@@ -1368,10 +1408,11 @@ class ExampleUnitTest {
         assertEquals(
             SettingsTamperDetector.TamperSignature.SIGNATURE_C_DEVICE_ADMIN,
             SettingsTamperDetector.matchTamperSignature(
-                texts = listOf("Device admin apps", "Focus Lock"),
+                texts = listOf("Focus Lock", "Deactivate this device admin app"),
                 hasClickableSwitchOrCheckbox = true,
                 isClockTamperProtectionEnabled = true,
                 appPackageName = appPkg,
+                eventClassName = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminAdd",
                 isDeviceAdminActive = true
             )
         )
@@ -1384,6 +1425,7 @@ class ExampleUnitTest {
         assertFalse(SettingsTamperDetector.isWithinDeviceAdminLaunchWindow(context = null, nowElapsedMs = 25_000L))
     }
 }
+
 
 
 

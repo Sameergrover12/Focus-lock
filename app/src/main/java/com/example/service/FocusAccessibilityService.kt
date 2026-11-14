@@ -2,11 +2,14 @@ package com.example.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Rect
+import com.example.receiver.FocusDeviceAdminReceiver
 import androidx.core.content.ContextCompat
 import android.os.Handler
 import android.os.Looper
@@ -1046,16 +1049,60 @@ class FocusAccessibilityService : AccessibilityService() {
         val eventTextsLower = eventTexts.map { it.lowercase().trim() }
         val eventPackageNameStr = event.packageName?.toString()
 
+        val adminActive = isDeviceAdminCurrentlyActive()
+        val withinAdminLaunchWindow = if (adminActive) {
+            SettingsTamperDetector.clearDeviceAdminLaunchTimestamp(this)
+            false
+        } else {
+            SettingsTamperDetector.isWithinDeviceAdminLaunchWindow(this)
+        }
+
+        val isAccTamperEvent = SettingsTamperDetector.isAccessibilityServiceDetailFragment(eventClassName) ||
+            eventTextsLower.any {
+                it.contains("downloaded apps") ||
+                    it.contains("installed services") ||
+                    it.contains("downloaded services") ||
+                    it.contains("use focus lock") ||
+                    it.contains("focus lock uses this service")
+            }
+
+        // Smart Device Admin Rule in Step A (0.1ms):
+        // Case A: Device Admin is NOT active yet (!adminActive) -> never kick out during Device Admin activation
+        if (!adminActive) {
+            if (SettingsTamperDetector.isDeviceAdminScreen(eventClassName, eventTexts) ||
+                (withinAdminLaunchWindow && !isAccTamperEvent)
+            ) {
+                return false
+            }
+        } else {
+            // Case B: Device Admin IS active (adminActive == true) -> immediately kick out on Device Admin screen
+            if (SettingsTamperDetector.isDeviceAdminScreen(eventClassName, eventTexts)) {
+                val activeRoot = try { rootInActiveWindow } catch (_: Exception) { null }
+                try {
+                    dismissTamperConfirmationAcrossWindows(activeRoot)
+                } finally {
+                    try { activeRoot?.recycle() } catch (_: Exception) {}
+                }
+                triggerRapidSettingsExitUnwind()
+                return true
+            }
+        }
+
         // Step C fast check if confirmation dialog text is in the event itself
         val hasTurnOffOrStop = eventTextsLower.any {
-            it.contains("turn off") || it.contains("stop") || it.contains("deactivate") || it.contains("force stop")
+            it.contains("turn off") || it.contains("stop") ||
+                (adminActive && it.contains("deactivate")) ||
+                it.contains("force stop")
         }
         if (hasTurnOffOrStop &&
             SettingsTamperDetector.hasAppOrFocusLockName(eventTextsLower, packageName, cachedAppLabel) &&
-            !SettingsTamperDetector.isSafePermissionScreen(eventTextsLower)
+            !SettingsTamperDetector.isSafePermissionScreen(eventTextsLower, adminActive)
         ) {
             val activeRoot = try { rootInActiveWindow } catch (_: Exception) { null }
             try {
+                if (!adminActive && isDeviceAdminScreen(event, activeRoot)) {
+                    return false
+                }
                 dismissTamperConfirmationAcrossWindows(activeRoot)
             } finally {
                 try { activeRoot?.recycle() } catch (_: Exception) {}
@@ -1070,18 +1117,22 @@ class FocusAccessibilityService : AccessibilityService() {
                 appPackageName = packageName,
                 appLabel = cachedAppLabel,
                 isClickEvent = isClickEvent,
-                eventPackageName = eventPackageNameStr
+                eventPackageName = eventPackageNameStr,
+                isDeviceAdminActive = adminActive,
+                isWithinDeviceAdminLaunchWindow = withinAdminLaunchWindow
             )
         ) {
-            // Do not accidentally block Focus Lock if user is on a whitelisted permission screen
-            if (isClickEvent &&
-                SettingsTamperDetector.hasAppOrFocusLockName(eventTextsLower, packageName, cachedAppLabel)
-            ) {
-                // Only peek at root window if needed to ensure safe permission screens (e.g. Display over other apps list) stay open
+            // Do not accidentally block Focus Lock if user is on a whitelisted permission screen or activating Device Admin
+            if (SettingsTamperDetector.hasAppOrFocusLockName(eventTextsLower, packageName, cachedAppLabel)) {
                 val quickRoot = try { rootInActiveWindow } catch (_: Exception) { null }
                 try {
-                    if (quickRoot != null && isSafePermissionWindowIndexed(quickRoot)) {
-                        return false
+                    if (quickRoot != null) {
+                        if (!adminActive && isDeviceAdminScreen(event, quickRoot)) {
+                            return false
+                        }
+                        if (isSafePermissionWindowIndexed(quickRoot)) {
+                            return false
+                        }
                     }
                 } finally {
                     try { quickRoot?.recycle() } catch (_: Exception) {}
@@ -1135,11 +1186,6 @@ class FocusAccessibilityService : AccessibilityService() {
                 "Ignore battery optimizations",
                 "Auto-launch permission"
             )
-        ) {
-            return true
-        }
-        if (hasIndexedTextMatch(root, "Activate this device admin app") &&
-            !hasIndexedTextMatch(root, "Deactivate")
         ) {
             return true
         }
@@ -1224,6 +1270,49 @@ class FocusAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun isDeviceAdminCurrentlyActive(): Boolean {
+        return try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val adminComponent = ComponentName(this, FocusDeviceAdminReceiver::class.java)
+            dpm.isAdminActive(adminComponent)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun isDeviceAdminScreen(
+        event: AccessibilityEvent?,
+        root: AccessibilityNodeInfo?
+    ): Boolean {
+        if (event?.className?.toString()?.contains("DeviceAdmin", ignoreCase = true) == true) {
+            return true
+        }
+        if (event != null) {
+            val eventTexts = ArrayList<String>(4)
+            for (t in event.text) {
+                t?.toString()?.takeIf { it.isNotBlank() }?.let { eventTexts.add(it) }
+            }
+            event.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { eventTexts.add(it) }
+            if (SettingsTamperDetector.isDeviceAdminScreen(event.className?.toString(), eventTexts)) {
+                return true
+            }
+        }
+        if (root != null) {
+            if (hasIndexedTextMatch(
+                    root,
+                    "Activate device admin",
+                    "Activate this device admin",
+                    "Device admin",
+                    "Verification code",
+                    "Deactivate this device admin"
+                )
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
     private fun checkAndInterceptSettingsTamper(
         event: AccessibilityEvent? = null,
         eventPkg: String? = null,
@@ -1248,19 +1337,56 @@ class FocusAccessibilityService : AccessibilityService() {
             return false
         }
 
-        // Ignore Settings Search Screen on window state / content changes so suggestion chips
-        // (like "Downloaded apps" on Realme UI / ColorOS) never cause a false ejection.
-        if (isSettingsSearchScreen(event, root)) {
-            try { root?.recycle() } catch (_: Exception) {}
-            return false
-        }
-
         // a) Accessibility detail/sub-menu fragment class check ("ToggleAccessibilityServicePreferenceFragment",
         // "AccessibilityDetailsSettingsFragment", "InstalledServicesFragment")
         if (SettingsTamperDetector.isAccessibilityServiceDetailFragment(eventClassName)) {
             try { root?.recycle() } catch (_: Exception) {}
             triggerRapidSettingsExitUnwind()
             return true
+        }
+
+        val adminActive = isDeviceAdminCurrentlyActive()
+        val withinAdminLaunchWindow = if (adminActive) {
+            SettingsTamperDetector.clearDeviceAdminLaunchTimestamp(this)
+            false
+        } else {
+            SettingsTamperDetector.isWithinDeviceAdminLaunchWindow(this)
+        }
+        val onDeviceAdminScreen = isDeviceAdminScreen(event, root)
+        val isAccTamperWindow = hasIndexedTextMatch(
+            root,
+            "Downloaded apps",
+            "Downloaded services",
+            "Installed services",
+            "Use Focus Lock",
+            "Focus Lock uses this service"
+        )
+
+        // Smart Device Admin Rule:
+        // Case A: Device Admin is NOT active yet (!adminActive) -> allow Device Admin activation & verification CAPTCHA
+        if (!adminActive) {
+            if (onDeviceAdminScreen || (withinAdminLaunchWindow && !isAccTamperWindow)) {
+                try { root?.recycle() } catch (_: Exception) {}
+                return false
+            }
+        } else {
+            // Case B: Device Admin IS active (adminActive == true) -> immediately unwind Settings on Device Admin screen
+            if (onDeviceAdminScreen) {
+                try {
+                    dismissTamperConfirmationAcrossWindows(root)
+                } finally {
+                    try { root?.recycle() } catch (_: Exception) {}
+                }
+                triggerRapidSettingsExitUnwind()
+                return true
+            }
+        }
+
+        // Ignore Settings Search Screen on window state / content changes so suggestion chips
+        // (like "Downloaded apps" on Realme UI / ColorOS) never cause a false ejection.
+        if (isSettingsSearchScreen(event, root)) {
+            try { root?.recycle() } catch (_: Exception) {}
+            return false
         }
 
         if (root == null) {
@@ -1275,7 +1401,10 @@ class FocusAccessibilityService : AccessibilityService() {
 
             // Step C: Instant "Cancel" click on confirmation dialog ("Turn off" / "Stop" + "Focus Lock")
             val hasFocusLockNode = hasIndexedTextMatch(root, cachedAppLabel, "Focus Lock")
-            if (hasFocusLockNode && hasIndexedTextMatch(root, "Turn off", "Stop", "Stop Focus Lock", "Deactivate")) {
+            if (hasFocusLockNode &&
+                (hasIndexedTextMatch(root, "Turn off", "Stop", "Stop Focus Lock") ||
+                    (adminActive && hasIndexedTextMatch(root, "Deactivate")))
+            ) {
                 Log.w(TAG, "Step C Confirmation dialog detected! Clicking Cancel and unwinding Settings.")
                 dismissTamperConfirmationAcrossWindows(root)
                 triggerRapidSettingsExitUnwind()
@@ -1353,7 +1482,8 @@ class FocusAccessibilityService : AccessibilityService() {
                         "Focus Lock uses this service",
                         "About this function"
                     ) ||
-                    hasIndexedTextMatch(root, "Force stop", "Uninstall", "Deactivate")
+                    hasIndexedTextMatch(root, "Force stop", "Uninstall") ||
+                    (adminActive && hasIndexedTextMatch(root, "Deactivate"))
             )
             if (hasFocusLockDetailOrDangerousAction) {
                 Log.w(TAG, "Step B shallow fallback triggered on Focus Lock tamper screen")

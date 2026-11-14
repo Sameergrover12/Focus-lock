@@ -11,6 +11,13 @@ import com.example.focusapp.util.MotivationLibrary
 class FocusDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
+        try {
+            com.example.util.SettingsTamperDetector.clearDeviceAdminLaunchTimestamp(context)
+            val app = context.applicationContext as? com.example.FocusApplication
+            val prefRepo = app?.preferencesRepository
+            prefRepo?.syncPrefs?.edit()?.putBoolean("invincible_mode_enabled", true)?.commit()
+            prefRepo?.notifyPreferencesReloaded()
+        } catch (_: Exception) {}
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {

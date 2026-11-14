@@ -1277,7 +1277,114 @@ class ExampleUnitTest {
             )
         )
     }
+
+    @Test
+    fun testDeviceAdminSmartActivationVsDeactivationRule() {
+        val appPkg = "com.aistudio.focuslock.fclk"
+
+        // 1. Realme UI / ColorOS verification code popup during Device Admin activation
+        val realmeVerificationTexts = listOf(
+            "Activate device admin apps?",
+            "Please enter verification code to activate Focus Lock",
+            "Verification code",
+            "Cancel",
+            "Activate"
+        )
+        assertTrue(
+            SettingsTamperDetector.isDeviceAdminScreen(
+                eventClassName = "com.coui.appcompat.dialog.app.COUIAlertDialog",
+                texts = realmeVerificationTexts
+            )
+        )
+
+        // Case A: When Device Admin is NOT active yet (isDeviceAdminActive = false), NEVER kick out!
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = realmeVerificationTexts,
+                eventClassName = "com.coui.appcompat.dialog.app.COUIAlertDialog",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                isDeviceAdminActive = false,
+                isWithinDeviceAdminLaunchWindow = true
+            )
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.NONE,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = realmeVerificationTexts,
+                hasClickableSwitchOrCheckbox = false,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                eventClassName = "com.coui.appcompat.dialog.app.COUIAlertDialog",
+                isDeviceAdminActive = false,
+                isWithinDeviceAdminLaunchWindow = true
+            )
+        )
+
+        // DeviceAdminAdd class with "Focus Lock" when isDeviceAdminActive = false -> NEVER kick out
+        assertFalse(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Focus Lock", "Activate"),
+                eventClassName = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminAdd",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                isDeviceAdminActive = false,
+                isWithinDeviceAdminLaunchWindow = true
+            )
+        )
+
+        // Even during the 45s launch window, Accessibility -> Downloaded apps is STILL blocked!
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Downloaded apps"),
+                eventClassName = "com.oplus.settings.OplusSubSettings",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                isDeviceAdminActive = false,
+                isWithinDeviceAdminLaunchWindow = true
+            )
+        )
+
+        // Case B: Once Device Admin IS active (isDeviceAdminActive = true), opening Device Admin screen
+        // or "Device admin apps" immediately triggers at 0ms!
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Focus Lock", "Deactivate this device admin app"),
+                eventClassName = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminAdd",
+                appPackageName = appPkg,
+                isClickEvent = false,
+                isDeviceAdminActive = true
+            )
+        )
+        assertTrue(
+            SettingsTamperDetector.matchesInstantStepAEventTrigger(
+                eventTexts = listOf("Device admin apps"),
+                eventClassName = "android.widget.LinearLayout",
+                appPackageName = appPkg,
+                isClickEvent = true,
+                isDeviceAdminActive = true
+            )
+        )
+        assertEquals(
+            SettingsTamperDetector.TamperSignature.SIGNATURE_C_DEVICE_ADMIN,
+            SettingsTamperDetector.matchTamperSignature(
+                texts = listOf("Device admin apps", "Focus Lock"),
+                hasClickableSwitchOrCheckbox = true,
+                isClockTamperProtectionEnabled = true,
+                appPackageName = appPkg,
+                isDeviceAdminActive = true
+            )
+        )
+
+        // Timestamp window helper verification
+        SettingsTamperDetector.recordDeviceAdminLaunch(context = null, nowElapsedMs = 10_000L)
+        assertTrue(SettingsTamperDetector.isWithinDeviceAdminLaunchWindow(context = null, nowElapsedMs = 25_000L))
+        assertFalse(SettingsTamperDetector.isWithinDeviceAdminLaunchWindow(context = null, nowElapsedMs = 60_000L))
+        SettingsTamperDetector.clearDeviceAdminLaunchTimestamp(context = null)
+        assertFalse(SettingsTamperDetector.isWithinDeviceAdminLaunchWindow(context = null, nowElapsedMs = 25_000L))
+    }
 }
+
 
 
 

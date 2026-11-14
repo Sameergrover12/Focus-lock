@@ -261,13 +261,16 @@ fun SettingsScreen(
                 val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
                 val realAdminActive = dpm.isAdminActive(adminComponent)
                 isOsDeviceAdminActive = realAdminActive
-                if (realAdminActive && !isInvincibleModeEnabled && showInvincibleConfirmDialog) {
-                    // User granted Device Admin in OS settings; keep confirmation dialog open
-                } else if (!realAdminActive) {
+                if (realAdminActive) {
+                    com.example.util.SettingsTamperDetector.clearDeviceAdminLaunchTimestamp(context)
+                    if (!isInvincibleModeEnabled) {
+                        viewModel.setInvincibleModeEnabled(true)
+                    }
+                    showInvincibleConfirmDialog = false
+                } else {
                     if (isInvincibleModeEnabled) {
                         viewModel.setInvincibleModeEnabled(false)
                     }
-                    showInvincibleConfirmDialog = false
                 }
             }
         }
@@ -298,7 +301,21 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         showInvincibleConfirmDialog = false
-                        viewModel.setInvincibleModeEnabled(true)
+                        val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+                        val realAdmin = dpm.isAdminActive(adminComponent)
+                        isOsDeviceAdminActive = realAdmin
+                        if (realAdmin) {
+                            com.example.util.SettingsTamperDetector.clearDeviceAdminLaunchTimestamp(context)
+                            viewModel.setInvincibleModeEnabled(true)
+                        } else {
+                            com.example.util.SettingsTamperDetector.recordDeviceAdminLaunch(context)
+                            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+                                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required for Invincible Mode to prevent uninstallation.")
+                            }
+                            context.startActivity(intent)
+                        }
                     },
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -816,16 +833,8 @@ fun SettingsScreen(
                                     val realAdmin = dpm.isAdminActive(adminComponent)
                                     isOsDeviceAdminActive = realAdmin
                                     if (willEnable || !realAdmin) {
-                                        if (realAdmin) {
-                                            showInvincibleConfirmDialog = true
-                                        } else {
-                                            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                                                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                                                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required for Invincible Mode to prevent uninstallation.")
-                                            }
-                                            context.startActivity(intent)
-                                            showInvincibleConfirmDialog = true
-                                        }
+                                        com.example.util.SettingsTamperDetector.recordDeviceAdminLaunch(context)
+                                        showInvincibleConfirmDialog = true
                                     } else {
                                         pendingCheatAction = PendingLooseningAction(
                                             title = "Disable Invincible Mode",

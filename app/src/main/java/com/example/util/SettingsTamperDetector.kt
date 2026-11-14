@@ -18,6 +18,77 @@ object SettingsTamperDetector {
         SIGNATURE_D_DATE_TIME
     }
 
+    @Volatile
+    var lastDeviceAdminLaunchTimestamp: Long = 0L
+
+    const val DEVICE_ADMIN_LAUNCH_WINDOW_MS = 45_000L
+    const val KEY_LAST_DEVICE_ADMIN_LAUNCH_TS = "last_device_admin_launch_timestamp"
+
+    fun recordDeviceAdminLaunch(
+        context: android.content.Context? = null,
+        nowElapsedMs: Long = try { android.os.SystemClock.elapsedRealtime() } catch (_: Throwable) { System.currentTimeMillis() }
+    ) {
+        val ts = if (nowElapsedMs > 0L) nowElapsedMs else 1L
+        lastDeviceAdminLaunchTimestamp = ts
+        if (context != null) {
+            try {
+                context.getSharedPreferences("user_preferences_sync", android.content.Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong(KEY_LAST_DEVICE_ADMIN_LAUNCH_TS, ts)
+                    .apply()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun clearDeviceAdminLaunchTimestamp(context: android.content.Context? = null) {
+        lastDeviceAdminLaunchTimestamp = 0L
+        if (context != null) {
+            try {
+                context.getSharedPreferences("user_preferences_sync", android.content.Context.MODE_PRIVATE)
+                    .edit()
+                    .remove(KEY_LAST_DEVICE_ADMIN_LAUNCH_TS)
+                    .apply()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun isWithinDeviceAdminLaunchWindow(
+        context: android.content.Context? = null,
+        nowElapsedMs: Long = try { android.os.SystemClock.elapsedRealtime() } catch (_: Throwable) { System.currentTimeMillis() }
+    ): Boolean {
+        var ts = lastDeviceAdminLaunchTimestamp
+        if (ts <= 0L && context != null) {
+            ts = try {
+                context.getSharedPreferences("user_preferences_sync", android.content.Context.MODE_PRIVATE)
+                    .getLong(KEY_LAST_DEVICE_ADMIN_LAUNCH_TS, 0L)
+            } catch (_: Exception) {
+                0L
+            }
+            if (ts > 0L) {
+                lastDeviceAdminLaunchTimestamp = ts
+            }
+        }
+        if (ts <= 0L || nowElapsedMs < ts) return false
+        return (nowElapsedMs - ts) < DEVICE_ADMIN_LAUNCH_WINDOW_MS
+    }
+
+    fun isDeviceAdminScreen(
+        eventClassName: String?,
+        texts: List<String>
+    ): Boolean {
+        if (eventClassName?.contains("DeviceAdmin", ignoreCase = true) == true) {
+            return true
+        }
+        val textsLower = texts.map { it.lowercase().trim() }
+        return textsLower.any {
+            it.contains("activate device admin") ||
+                it.contains("activate this device admin") ||
+                it.contains("device admin") ||
+                it.contains("verification code") ||
+                it.contains("deactivate this device admin")
+        }
+    }
+
     val SAFE_PERMISSION_WHITELIST = listOf(
         "display over other apps",
         "appear on top",
@@ -162,12 +233,34 @@ object SettingsTamperDetector {
         appPackageName: String,
         appLabel: String = "Focus Lock",
         isClickEvent: Boolean = true,
-        eventPackageName: String? = null
+        eventPackageName: String? = null,
+        isDeviceAdminActive: Boolean = false,
+        isWithinDeviceAdminLaunchWindow: Boolean = false
     ): Boolean {
         if (isNonAccessibilityRootExitClass(eventClassName)) return false
 
         val textsLower = eventTexts.map { it.lowercase().trim() }.filter { it.isNotEmpty() }
-        if (isSafePermissionScreen(textsLower)) return false
+
+        // Smart Device Admin Rule:
+        // Case A: Device Admin is NOT active yet -> never kick out on Device Admin screens or during activation window
+        val onDeviceAdminScreen = isDeviceAdminScreen(eventClassName, eventTexts)
+        val isAccessibilityTamperEvent = isAccessibilityServiceDetailFragment(eventClassName) ||
+            textsLower.any {
+                it.contains("downloaded apps") ||
+                    it.contains("installed services") ||
+                    it.contains("downloaded services") ||
+                    it.contains("use focus lock") ||
+                    it.contains("focus lock uses this service")
+            }
+        if (!isDeviceAdminActive) {
+            if (onDeviceAdminScreen) return false
+            if (isWithinDeviceAdminLaunchWindow && !isAccessibilityTamperEvent) return false
+        } else {
+            // Case B: Device Admin IS active -> immediately kick out on Device Admin screen!
+            if (onDeviceAdminScreen) return true
+        }
+
+        if (isSafePermissionScreen(textsLower, isDeviceAdminActive)) return false
         if (isNormalAppManagerScreen(textsLower)) return false
 
         if (!isClickEvent && isSettingsSearchScreen(eventPackageName, eventClassName, eventTexts)) {
@@ -179,7 +272,7 @@ object SettingsTamperDetector {
 
         // On non-click window/content events, require either a confirmation dialog or let Step B verify the window
         if (!isClickEvent) {
-            return isTamperConfirmationDialog(eventTexts, appPackageName, appLabel)
+            return isTamperConfirmationDialog(eventTexts, appPackageName, appLabel, isDeviceAdminActive)
         }
 
         if (hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) return true
@@ -239,11 +332,16 @@ object SettingsTamperDetector {
     fun isTamperConfirmationDialog(
         texts: List<String>,
         appPackageName: String,
-        appLabel: String = "Focus Lock"
+        appLabel: String = "Focus Lock",
+        isDeviceAdminActive: Boolean = true
     ): Boolean {
         if (texts.isEmpty()) return false
         val textsLower = texts.map { it.lowercase().trim() }
-        if (isSafePermissionScreen(textsLower)) return false
+        if (isSafePermissionScreen(textsLower, isDeviceAdminActive)) return false
+
+        if (!isDeviceAdminActive && isDeviceAdminScreen(null, texts)) {
+            return false
+        }
 
         if (!hasAppOrFocusLockName(textsLower, appPackageName, appLabel)) return false
 
@@ -268,11 +366,14 @@ object SettingsTamperDetector {
         return hasDirectConfirmationPhrase || (hasStopOrTurnOff && hasCancelAction)
     }
 
-    fun isSafePermissionScreen(textsLower: List<String>): Boolean {
+    fun isSafePermissionScreen(
+        textsLower: List<String>,
+        isDeviceAdminActive: Boolean = false
+    ): Boolean {
         return textsLower.any { text ->
             SAFE_PERMISSION_WHITELIST.any { safe ->
                 if (safe == "activate this device admin app") {
-                    text.contains(safe) && !textsLower.any { it.contains("deactivate") }
+                    !isDeviceAdminActive && text.contains(safe) && !textsLower.any { it.contains("deactivate") }
                 } else {
                     text.contains(safe)
                 }
@@ -291,12 +392,47 @@ object SettingsTamperDetector {
         appLabel: String = "Focus Lock",
         eventClassName: String? = null,
         eventPackageName: String? = null,
-        hasFocusedEditText: Boolean = false
+        hasFocusedEditText: Boolean = false,
+        isDeviceAdminActive: Boolean = false,
+        isWithinDeviceAdminLaunchWindow: Boolean = false
     ): TamperSignature {
         val textsLower = texts.map { it.lowercase().trim() }
 
         // Safe Whitelist: NEVER block or trigger anti-tamper on permission grant screens!
-        if (isSafePermissionScreen(textsLower)) {
+        if (isSafePermissionScreen(textsLower, isDeviceAdminActive)) {
+            return TamperSignature.NONE
+        }
+
+        // Smart Device Admin Rule:
+        // Case A: When Device Admin is NOT active yet, allow Device Admin activation screens & Realme verification code popup.
+        // Case B: When Device Admin IS active, immediately block Device Admin screen / "Device admin apps" to prevent deactivation.
+        val onDeviceAdminScreen = isDeviceAdminScreen(eventClassName, texts)
+        val isAccessibilityTamperScreen = isAccessibilityServiceDetailFragment(eventClassName) ||
+            textsLower.any {
+                it.contains("downloaded apps") ||
+                    it.contains("installed services") ||
+                    it.contains("downloaded services") ||
+                    it.contains("use focus lock") ||
+                    it.contains("focus lock uses this service")
+            }
+        if (onDeviceAdminScreen) {
+            val hasDeactivatePhrase = textsLower.any {
+                it.contains("deactivate this device admin") || it.contains("deactivate")
+            }
+            val hasActivateOnlyPhrase = textsLower.any {
+                it.contains("activate device admin") ||
+                    it.contains("activate this device admin") ||
+                    it.contains("verification code")
+            } && !hasDeactivatePhrase
+
+            if (!isDeviceAdminActive && (hasActivateOnlyPhrase || !hasDeactivatePhrase)) {
+                return TamperSignature.NONE
+            }
+            if (isDeviceAdminActive || hasDeactivatePhrase) {
+                return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
+            }
+        }
+        if (!isDeviceAdminActive && isWithinDeviceAdminLaunchWindow && !isAccessibilityTamperScreen) {
             return TamperSignature.NONE
         }
 
@@ -396,12 +532,16 @@ object SettingsTamperDetector {
             it.contains("deactivate") || it.contains("device admin")
         }
         if (hasDeviceAdminMarker) {
-            return TamperSignature.SIGNATURE_C_DEVICE_ADMIN
+            return if (isDeviceAdminActive || textsLower.any { it.contains("deactivate") }) {
+                TamperSignature.SIGNATURE_C_DEVICE_ADMIN
+            } else {
+                TamperSignature.NONE
+            }
         }
 
         // Direct Focus Lock Accessibility detail / confirmation dialog
         if (isFocusLockServiceDetailContent(textsLower) ||
-            isTamperConfirmationDialog(texts, appPackageName, appLabel)
+            isTamperConfirmationDialog(texts, appPackageName, appLabel, isDeviceAdminActive)
         ) {
             return TamperSignature.SIGNATURE_A_ACCESSIBILITY_TOGGLE
         }

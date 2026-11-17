@@ -6,16 +6,30 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
@@ -27,10 +41,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -43,12 +55,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -304,46 +319,125 @@ fun MainFocusApp(viewModel: FocusViewModel) {
                 )
             }
         },
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            val navOutlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
             val view = androidx.compose.ui.platform.LocalView.current
-            NavigationBar(
+            val outerCapsuleBg = MaterialTheme.colorScheme.primary
+                .copy(alpha = 0.06f)
+                .compositeOver(Color(0xFF0E0E14))
+            val outerCapsuleBorder = MaterialTheme.colorScheme.primary.copy(alpha = 0.50f)
+
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .drawBehind {
-                        // Subtle 1dp top border using palette outline for physical separation
-                        drawLine(
-                            color = navOutlineColor,
-                            start = Offset(0f, 0f),
-                            end = Offset(size.width, 0f),
-                            strokeWidth = 1.dp.toPx()
-                        )
-                    },
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp
+                    .background(Color.Transparent)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
             ) {
-                tabs.forEach { tab ->
-                    NavigationBarItem(
-                        icon = { Icon(tab.icon, contentDescription = tab.title) },
-                        label = { Text(tab.title, style = MaterialTheme.typography.labelSmall) },
-                        alwaysShowLabel = false,
-                        selected = !isViewingAnalytics && currentTabIndex == tab.routeIndex,
-                        onClick = {
-                            com.example.util.FocusHaptics.tick(view)
-                            isViewingAnalytics = false
-                            currentTabIndex = tab.routeIndex
-                        },
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(78.dp)
+                        .testTag("bottom_navigation_bar"),
+                    shape = RoundedCornerShape(percent = 50),
+                    color = outerCapsuleBg,
+                    border = BorderStroke(width = 1.2.dp, color = outerCapsuleBorder),
+                    shadowElevation = 12.dp,
+                    tonalElevation = 0.dp
+                ) {
+                    Row(
                         modifier = Modifier
-                            .testTag(tab.testTag)
-                            .padding(vertical = 4.dp),
-                        colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    )
+                            .fillMaxSize()
+                            .padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        tabs.forEach { tab ->
+                            val isSelected = !isViewingAnalytics && currentTabIndex == tab.routeIndex
+                            val selectedInnerPillBg = MaterialTheme.colorScheme.primary
+                                .copy(alpha = 0.20f)
+                                .compositeOver(Color(0xFF1C1D26))
+
+                            val pillBgColor by animateColorAsState(
+                                targetValue = if (isSelected) selectedInnerPillBg else Color.Transparent,
+                                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                label = "tab_pill_bg_${tab.routeIndex}"
+                            )
+                            val pillBorderColor by animateColorAsState(
+                                targetValue = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                                } else {
+                                    Color.Transparent
+                                },
+                                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                label = "tab_pill_border_${tab.routeIndex}"
+                            )
+                            val iconTint by animateColorAsState(
+                                targetValue = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    Color.White.copy(alpha = 0.50f)
+                                },
+                                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                label = "tab_icon_tint_${tab.routeIndex}"
+                            )
+                            val labelColor by animateColorAsState(
+                                targetValue = if (isSelected) {
+                                    Color.White
+                                } else {
+                                    Color.White.copy(alpha = 0.50f)
+                                },
+                                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                label = "tab_label_color_${tab.routeIndex}"
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .testTag(tab.testTag)
+                                    .clip(RoundedCornerShape(percent = 50))
+                                    .background(
+                                        color = pillBgColor,
+                                        shape = RoundedCornerShape(percent = 50)
+                                    )
+                                    .border(
+                                        border = BorderStroke(width = 1.dp, color = pillBorderColor),
+                                        shape = RoundedCornerShape(percent = 50)
+                                    )
+                                    .clickable {
+                                        com.example.util.FocusHaptics.tick(view)
+                                        isViewingAnalytics = false
+                                        currentTabIndex = tab.routeIndex
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = tab.title,
+                                        tint = iconTint,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = tab.title,
+                                        color = labelColor,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -351,7 +445,7 @@ fun MainFocusApp(viewModel: FocusViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(top = innerPadding.calculateTopPadding())
                 .background(MaterialTheme.colorScheme.background)
         ) {
             if (isViewingAnalytics) {

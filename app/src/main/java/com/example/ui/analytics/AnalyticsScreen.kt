@@ -148,7 +148,7 @@ fun AnalyticsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .testTag("analytics_screen"),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // 1. Hero Focus Drain Header with 30-day Comparison Metric

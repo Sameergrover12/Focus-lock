@@ -268,7 +268,7 @@ fun WebKeywordsScreen(
                     LazyColumn(
                         state = websitesListState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 104.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         item(key = "add_website_card") {
@@ -369,7 +369,7 @@ fun WebKeywordsScreen(
                     LazyColumn(
                         state = keywordsListState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 104.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         item(key = "add_keyword_card") {

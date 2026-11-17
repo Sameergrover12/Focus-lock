@@ -155,7 +155,9 @@ fun GroupsScreen(
                 },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.testTag("create_group_fab")
+                modifier = Modifier
+                    .padding(bottom = 90.dp)
+                    .testTag("create_group_fab")
             ) {
                 Icon(imageVector = Icons.Default.Add, contentDescription = "Create Group")
             }
@@ -300,7 +302,7 @@ fun GroupsScreen(
                         LazyColumn(
                             state = scheduleListState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(16.dp),
+                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 104.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             item(key = "header_schedule_groups") {
@@ -368,7 +370,7 @@ fun GroupsScreen(
                         LazyColumn(
                             state = sessionGroupListState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(16.dp),
+                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 104.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             item(key = "header_session_groups") {

@@ -403,7 +403,7 @@ fun AppsScreen(
                     LazyColumn(
                         state = hardBlockListState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 104.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (sortedHardBlockApps.isEmpty()) {
@@ -443,7 +443,7 @@ fun AppsScreen(
                     LazyColumn(
                         state = screenTimeListState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 104.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (sortedDailyLimitApps.isEmpty()) {
@@ -478,7 +478,7 @@ fun AppsScreen(
                     LazyColumn(
                         state = sessionListState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 104.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (sortedSessionLimitApps.isEmpty()) {
